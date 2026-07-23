@@ -38,6 +38,15 @@ fun googleProvider(
         apiKeyEnvNames = listOf("GEMINI_API_KEY"),
     )
 
+fun googleVertexProvider(
+    models: List<Model> = builtInModels("google-vertex"),
+): GoogleVertexProvider =
+    GoogleVertexProvider(
+        id = "google-vertex",
+        name = "Google Vertex AI",
+        models = models,
+    )
+
 fun anthropicProvider(
     models: List<Model> =
         builtInModels("anthropic").filter { it.api == "anthropic-messages" },

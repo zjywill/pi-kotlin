@@ -132,6 +132,13 @@ private class CatalogProvider(
                             apiKeyEnvNames = apiKeyEnvNames,
                         )
 
+                    "google-vertex" ->
+                        GoogleVertexProvider(
+                            id = id,
+                            name = name,
+                            models = apiModels,
+                        )
+
                     "mistral-conversations" ->
                         MistralProvider(
                             id = id,
@@ -225,6 +232,7 @@ private val SUPPORTED_APIS =
         "anthropic-messages",
         "azure-openai-responses",
         "google-generative-ai",
+        "google-vertex",
         "mistral-conversations",
         "openai-completions",
         "openai-responses",
@@ -244,6 +252,7 @@ private val PROVIDER_NAMES =
         "deepseek" to "DeepSeek",
         "fireworks" to "Fireworks",
         "google" to "Google",
+        "google-vertex" to "Google Vertex AI",
         "groq" to "Groq",
         "huggingface" to "Hugging Face",
         "kimi-coding" to "Kimi For Coding",
@@ -280,6 +289,7 @@ private val PROVIDER_API_KEY_ENV_NAMES =
         "deepseek" to listOf("DEEPSEEK_API_KEY"),
         "fireworks" to listOf("FIREWORKS_API_KEY"),
         "google" to listOf("GEMINI_API_KEY"),
+        "google-vertex" to listOf("GOOGLE_CLOUD_API_KEY"),
         "groq" to listOf("GROQ_API_KEY"),
         "huggingface" to listOf("HF_TOKEN"),
         "kimi-coding" to listOf("KIMI_API_KEY"),

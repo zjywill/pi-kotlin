@@ -85,6 +85,14 @@ fun main() {
                 ),
             )
             put(
+                "google-vertex",
+                buildGoogleVertexParams(
+                    fixtureModel("google-vertex", provider = "google-vertex"),
+                    context,
+                    options,
+                ),
+            )
+            put(
                 "mistral-conversations",
                 buildMistralRequestBody(
                     fixtureModel("mistral-conversations", provider = "mistral"),
@@ -152,6 +160,37 @@ fun main() {
                     ),
                     context,
                     options.copy(temperature = null, reasoning = ThinkingLevel.MEDIUM),
+                ),
+            )
+            put(
+                "google-vertex-reasoning",
+                buildGoogleVertexParams(
+                    fixtureModel("google-vertex", provider = "google-vertex").copy(
+                        id = "gemini-3.1-pro-preview",
+                        reasoning = true,
+                        thinkingLevelMap =
+                            mapOf(
+                                ModelThinkingLevel.OFF to null,
+                                ModelThinkingLevel.MINIMAL to null,
+                                ModelThinkingLevel.LOW to "LOW",
+                                ModelThinkingLevel.MEDIUM to null,
+                                ModelThinkingLevel.HIGH to "HIGH",
+                            ),
+                    ),
+                    context,
+                    options.copy(temperature = null, reasoning = ThinkingLevel.HIGH),
+                ),
+            )
+            put(
+                "google-vertex-thinking-disabled",
+                buildGoogleVertexParams(
+                    fixtureModel("google-vertex", provider = "google-vertex").copy(
+                        id = "gemini-3-flash-preview",
+                        reasoning = true,
+                        thinkingLevelMap = mapOf(ModelThinkingLevel.OFF to null),
+                    ),
+                    context,
+                    options.copy(temperature = null),
                 ),
             )
             put(

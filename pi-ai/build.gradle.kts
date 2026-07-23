@@ -11,6 +11,7 @@ kotlin {
 }
 
 dependencies {
+    implementation("com.google.auth:google-auth-library-oauth2-http:1.30.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
 

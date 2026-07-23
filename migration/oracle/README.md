@@ -37,13 +37,17 @@ timing.
 
 Provider payload and stream comparisons cover OpenAI Chat Completions, OpenAI
 Responses, Azure OpenAI Responses, Anthropic Messages, Google Generative AI,
-and Mistral Conversations. Cloudflare Workers AI and AI Gateway reuse those
-protocol fixtures while independently exercising provider auth resolution,
-account/gateway URL materialization, Bearer versus `cf-aig-authorization`,
-upstream BYOK header preservation, and session-affinity headers. Azure reuses
-the OpenAI Responses stream fixture while independently exercising its
-deployment-name payload contract plus the actual request URL, API-version
-query, API-key header, and absence of Bearer authorization.
+Google Vertex AI, and Mistral Conversations. Vertex independently compares SDK
+parameters, public stream events, the collection-scoped request URL, and
+`x-goog-api-key`; Kotlin unit fixtures additionally cover ADC bearer tokens and
+regional endpoint resolution. Cloudflare Workers AI and AI Gateway reuse the
+shared protocol fixtures while independently exercising provider auth
+resolution, account/gateway URL materialization, Bearer versus
+`cf-aig-authorization`, upstream BYOK header preservation, and
+session-affinity headers. Azure reuses the OpenAI Responses stream fixture
+while independently exercising its deployment-name payload contract plus the
+actual request URL, API-version query, API-key header, and absence of Bearer
+authorization.
 
 Mistral Conversations adds independent payload cases for reasoning effort,
 prompt mode, and prompt caching. Its stream fixture also compares the actual

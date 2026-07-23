@@ -60,6 +60,17 @@ fun main(args: Array<String>) =
                 put("azure-openai-responses", azure.events)
                 put("azure-openai-responses-request", azure.request)
                 put("google-generative-ai", captureEvents("google-generative-ai", fixtureDir).events)
+                val vertex = captureEvents("google-vertex", fixtureDir)
+                put("google-vertex", vertex.events)
+                put(
+                    "google-vertex-request",
+                    buildJsonObject {
+                        put("url", vertex.request.getValue("url"))
+                        put("authorization", vertex.request.getValue("authorization"))
+                        putNullableString("xGoogApiKey", vertex.xGoogApiKey)
+                        put("body", vertex.requestBody)
+                    },
+                )
                 val mistral = captureEvents("mistral-conversations", fixtureDir)
                 put("mistral-conversations", mistral.events)
                 put("mistral-conversations-request", mistral.request)
@@ -273,7 +284,12 @@ private suspend fun captureEvents(
     api: String,
     fixtureDir: Path,
 ): StreamCapture {
-    val fixture = if (api == "azure-openai-responses") "openai-responses" else api
+    val fixture =
+        when (api) {
+            "azure-openai-responses" -> "openai-responses"
+            "google-vertex" -> "google-generative-ai"
+            else -> api
+        }
     val response = Files.readString(fixtureDir.resolve("$fixture.sse")) + "\n"
     return fixtureServer(response).use { fixture ->
         val model = fixtureModel(api, fixture.baseUrl)
@@ -335,6 +351,8 @@ private suspend fun captureEvents(
                         put("xAffinity", xAffinity)
                     }
                 },
+            xGoogApiKey = fixture.xGoogApiKey,
+            requestBody = fixture.requestBody,
         )
     }
 }
@@ -342,6 +360,8 @@ private suspend fun captureEvents(
 private data class StreamCapture(
     val events: JsonArray,
     val request: JsonObject,
+    val xGoogApiKey: String?,
+    val requestBody: JsonElement,
 )
 
 private fun canonicalEvent(event: AssistantMessageEvent): JsonObject =
@@ -467,6 +487,15 @@ private fun fixtureProvider(
         "google-generative-ai" ->
             GoogleProvider("fixture", "Fixture", baseUrl, listOf(model), listOf("UNUSED"))
 
+        "google-vertex" ->
+            GoogleVertexProvider(
+                id = "google-vertex",
+                name = "Google Vertex AI",
+                models = listOf(model),
+                environment = { null },
+                accessTokenProvider = { error("ADC must not be used by the fixture") },
+            )
+
         "mistral-conversations" ->
             MistralProvider("mistral", "Mistral", baseUrl, listOf(model), listOf("UNUSED"))
 
@@ -485,6 +514,7 @@ private fun fixtureModel(
             when (api) {
                 "azure-openai-responses" -> "azure-openai-responses"
                 "mistral-conversations" -> "mistral"
+                "google-vertex" -> "google-vertex"
                 else -> "fixture"
             },
         baseUrl = if (api == "azure-openai-responses") "" else baseUrl,
@@ -559,6 +589,12 @@ private class FixtureServer(
     var xSessionAffinity: String? = null
 
     @Volatile
+    var xGoogApiKey: String? = null
+
+    @Volatile
+    var requestBody: JsonElement = JsonNull
+
+    @Volatile
     private var failure: Throwable? = null
 
     fun start() {
@@ -595,7 +631,18 @@ private class FixtureServer(
             sessionId = headers["session_id"]
             xClientRequestId = headers["x-client-request-id"]
             xSessionAffinity = headers["x-session-affinity"]
-            headers["content-length"]?.toIntOrNull()?.let(input::readNBytes)
+            xGoogApiKey = headers["x-goog-api-key"]
+            val body =
+                headers["content-length"]
+                    ?.toIntOrNull()
+                    ?.let(input::readNBytes)
+                    ?.toString(StandardCharsets.UTF_8)
+                    .orEmpty()
+            requestBody =
+                body
+                    .takeIf(String::isNotEmpty)
+                    ?.let(providerJson::parseToJsonElement)
+                    ?: JsonNull
 
             val bytes = response.toByteArray(StandardCharsets.UTF_8)
             val output = socket.getOutputStream()

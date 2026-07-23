@@ -11,6 +11,7 @@ const apiNames = [
 	"openai-responses",
 	"azure-openai-responses",
 	"google-generative-ai",
+	"google-vertex",
 	"mistral-conversations",
 ] as const;
 const modules = new Map(
@@ -39,6 +40,14 @@ for (const api of apiNames) {
 	if (api === "mistral-conversations") {
 		output["mistral-conversations-request"] = baseRequestProjection(capture.request);
 	}
+	if (api === "google-vertex") {
+		output["google-vertex-request"] = {
+			url: capture.request.url,
+			authorization: capture.request.authorization,
+			xGoogApiKey: capture.request.xGoogApiKey,
+			body: capture.request.body,
+		};
+	}
 }
 output["cloudflare-auth-resolution"] = await captureCloudflareAuthResolution();
 for (const fixture of [
@@ -54,7 +63,12 @@ console.log(JSON.stringify(output));
 async function captureEvents(
 	api: (typeof apiNames)[number],
 ): Promise<{ events: unknown[]; request: FixtureRequest }> {
-	const fixture = api === "azure-openai-responses" ? "openai-responses" : api;
+	const fixture =
+		api === "azure-openai-responses"
+			? "openai-responses"
+			: api === "google-vertex"
+				? "google-generative-ai"
+				: api;
 	const response = readFileSync(join(fixtureDir, `${fixture}.sse`), "utf8") + "\n";
 	return withFixtureServer(response, async (baseUrl) => {
 		const module = modules.get(api)!;
@@ -92,6 +106,8 @@ interface FixtureRequest {
 	sessionId: string | null;
 	xClientRequestId: string | null;
 	xSessionAffinity: string | null;
+	xGoogApiKey: string | null;
+	body: unknown;
 }
 
 function baseRequestProjection(request: FixtureRequest): Record<string, unknown> {
@@ -266,6 +282,8 @@ function fixtureModel(api: string, baseUrl: string): Record<string, unknown> {
 				? "azure-openai-responses"
 				: api === "mistral-conversations"
 					? "mistral"
+					: api === "google-vertex"
+						? "google-vertex"
 					: "fixture",
 		baseUrl: api === "azure-openai-responses" ? "" : baseUrl,
 		reasoning: false,
@@ -312,7 +330,12 @@ async function withFixtureServer<T>(
 	run: (baseUrl: string) => Promise<T>,
 ): Promise<{ events: T; request: FixtureRequest }> {
 	let capturedRequest: FixtureRequest | undefined;
-	const server = createServer((request, reply) => {
+	const server = createServer(async (request, reply) => {
+		const chunks: Buffer[] = [];
+		for await (const chunk of request) {
+			chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+		}
+		const bodyText = Buffer.concat(chunks).toString("utf8");
 		capturedRequest = {
 			url: request.url ?? "",
 			apiKey: typeof request.headers["api-key"] === "string" ? request.headers["api-key"] : null,
@@ -331,8 +354,9 @@ async function withFixtureServer<T>(
 					: null,
 			xSessionAffinity:
 				typeof request.headers["x-session-affinity"] === "string" ? request.headers["x-session-affinity"] : null,
+			xGoogApiKey: typeof request.headers["x-goog-api-key"] === "string" ? request.headers["x-goog-api-key"] : null,
+			body: bodyText ? JSON.parse(bodyText) : null,
 		};
-		request.resume();
 		reply.writeHead(200, {
 			"content-type": "text/event-stream",
 			"cache-control": "no-cache",

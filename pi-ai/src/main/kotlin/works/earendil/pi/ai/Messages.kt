@@ -412,6 +412,8 @@ data class StreamOptions(
     val azureResourceName: String? = null,
     val azureBaseUrl: String? = null,
     val azureDeploymentName: String? = null,
+    val project: String? = null,
+    val location: String? = null,
 )
 
 data class SimpleStreamOptions(

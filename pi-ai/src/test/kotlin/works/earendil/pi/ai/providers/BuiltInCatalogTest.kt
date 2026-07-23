@@ -37,7 +37,6 @@ class BuiltInCatalogTest {
         assertEquals(
             setOf(
                 "bedrock-converse-stream",
-                "google-vertex",
                 "openai-codex-responses",
             ),
             catalog.unsupportedApis,
@@ -49,8 +48,8 @@ class BuiltInCatalogTest {
         val providers = builtInProviders()
         val ids = providers.map { it.id }.toSet()
 
-        assertEquals(33, providers.size)
-        assertEquals(952, providers.sumOf { it.getModels().size })
+        assertEquals(34, providers.size)
+        assertEquals(964, providers.sumOf { it.getModels().size })
         assertTrue(
             ids.containsAll(
                 setOf(
@@ -60,6 +59,7 @@ class BuiltInCatalogTest {
                     "cloudflare-workers-ai",
                     "deepseek",
                     "google",
+                    "google-vertex",
                     "mistral",
                     "openai",
                     "openrouter",
@@ -82,6 +82,9 @@ class BuiltInCatalogTest {
         val cloudflareWorkers = providers.single { it.id == "cloudflare-workers-ai" }
         assertEquals("Cloudflare Workers AI", cloudflareWorkers.name)
         assertEquals(13, cloudflareWorkers.getModels().size)
+        val vertex = providers.single { it.id == "google-vertex" }
+        assertEquals("Google Vertex AI", vertex.name)
+        assertEquals(12, vertex.getModels().size)
         assertTrue(providers.flatMap(works.earendil.pi.ai.Provider::getModels).all { it.api in SUPPORTED_TEST_APIS })
     }
 
@@ -165,6 +168,7 @@ class BuiltInCatalogTest {
                 "anthropic-messages",
                 "azure-openai-responses",
                 "google-generative-ai",
+                "google-vertex",
                 "mistral-conversations",
                 "openai-completions",
                 "openai-responses",

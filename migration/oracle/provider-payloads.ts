@@ -8,6 +8,7 @@ const apiNames = [
 	"azure-openai-responses",
 	"anthropic-messages",
 	"google-generative-ai",
+	"google-vertex",
 	"mistral-conversations",
 ] as const;
 
@@ -45,6 +46,8 @@ for (const api of apiNames) {
 		provider:
 			api === "google-generative-ai"
 				? "google"
+				: api === "google-vertex"
+					? "google-vertex"
 				: api === "azure-openai-responses"
 					? "azure-openai-responses"
 					: api === "mistral-conversations"
@@ -118,6 +121,28 @@ payloads["google-generative-ai-reasoning"] = await capturePayload(
 		reasoning: true,
 	},
 	{ apiKey: "test", cacheRetention: "none", maxTokens: 123, reasoning: "medium" },
+	true,
+);
+payloads["google-vertex-reasoning"] = await capturePayload(
+	"google-vertex",
+	{
+		...fixtureModel("google-vertex", "google-vertex"),
+		id: "gemini-3.1-pro-preview",
+		reasoning: true,
+		thinkingLevelMap: { off: null, minimal: null, low: "LOW", medium: null, high: "HIGH" },
+	},
+	{ apiKey: "test", cacheRetention: "none", maxTokens: 123, reasoning: "high" },
+	true,
+);
+payloads["google-vertex-thinking-disabled"] = await capturePayload(
+	"google-vertex",
+	{
+		...fixtureModel("google-vertex", "google-vertex"),
+		id: "gemini-3-flash-preview",
+		reasoning: true,
+		thinkingLevelMap: { off: null },
+	},
+	{ apiKey: "test", cacheRetention: "none", maxTokens: 123 },
 	true,
 );
 payloads["openai-completions-reasoning"] = await capturePayload(
