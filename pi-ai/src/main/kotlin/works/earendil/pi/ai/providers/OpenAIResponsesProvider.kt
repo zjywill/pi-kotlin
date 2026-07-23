@@ -20,6 +20,7 @@ import works.earendil.pi.ai.BranchSummaryMessage
 import works.earendil.pi.ai.CompactionSummaryMessage
 import works.earendil.pi.ai.Context
 import works.earendil.pi.ai.CustomMessage
+import works.earendil.pi.ai.GrammarToolInputJsonBuffer
 import works.earendil.pi.ai.ImageContent
 import works.earendil.pi.ai.Message
 import works.earendil.pi.ai.MessageContent
@@ -40,9 +41,14 @@ import works.earendil.pi.ai.ToolCallDelta
 import works.earendil.pi.ai.ToolCallEnd
 import works.earendil.pi.ai.ToolCallStart
 import works.earendil.pi.ai.Usage
+import works.earendil.pi.ai.appendGrammarToolInputJsonDelta
 import works.earendil.pi.ai.contentText
+import works.earendil.pi.ai.createGrammarToolInputProperties
 import works.earendil.pi.ai.createAssistantMessageEventStream
+import works.earendil.pi.ai.getGrammarToolInput
 import works.earendil.pi.ai.http.postSse
+import works.earendil.pi.ai.resolveGrammarConstrainedSampling
+import works.earendil.pi.ai.resolveJsonSchemaStrictSampling
 
 class OpenAIResponsesProvider(
     override val id: String,
@@ -104,6 +110,10 @@ class OpenAIResponsesProvider(
         request: OpenAIResponsesHttpRequest,
         stream: AssistantMessageEventStream,
     ) {
+        val supportsOpenAIGrammarTools =
+            model.compat?.booleanValue("supportsOpenAIGrammarTools") ?: false
+        val grammarToolInputProperties =
+            createGrammarToolInputProperties(context.tools, supportsOpenAIGrammarTools)
         val body =
             requestBody(
                 model,
@@ -162,7 +172,27 @@ class OpenAIResponsesProvider(
                                 name = item.string("name").orEmpty(),
                                 arguments = item.string("arguments").orEmpty(),
                             )
-                        blocks += ToolCall(tool.id, tool.name, parseJsonObjectOrEmpty(tool.arguments))
+                        blocks += ToolCall(tool.id, tool.name, tool.argumentsJson())
+                        stream.push(ToolCallStart(contentIndex, snapshot()))
+                        tool
+                    }
+
+                    "custom_tool_call" -> {
+                        val callId = item.string("call_id").orEmpty()
+                        val itemId = item.string("id").orEmpty()
+                        val name = item.string("name").orEmpty()
+                        val inputProperty = grammarToolInputProperties[name] ?: "input"
+                        val input = item.string("input").orEmpty()
+                        val tool =
+                            Slot.Tool(
+                                contentIndex,
+                                id = listOf(callId, itemId).filter(String::isNotEmpty).joinToString("|"),
+                                name = name,
+                                customInputProperty = inputProperty,
+                                customInput = input,
+                                grammarBuffer = GrammarToolInputJsonBuffer(),
+                            )
+                        blocks += ToolCall(tool.id, tool.name, tool.argumentsJson())
                         stream.push(ToolCallStart(contentIndex, snapshot()))
                         tool
                     }
@@ -186,6 +216,8 @@ class OpenAIResponsesProvider(
                 options.headers,
             ),
             options.timeoutMs,
+            options.maxRetries,
+            options.maxRetryDelayMs,
         ) { sse ->
             if (sse.data.isBlank() || sse.data == "[DONE]") {
                 return@postSse
@@ -233,26 +265,66 @@ class OpenAIResponsesProvider(
                 "response.function_call_arguments.delta" -> {
                     val outputIndex = event.int("output_index") ?: return@postSse
                     val slot = slots[outputIndex] as? Slot.Tool ?: return@postSse
+                    if (slot.customInputProperty != null) {
+                        return@postSse
+                    }
                     val delta = event.string("delta").orEmpty()
                     slot.arguments += delta
                     blocks[slot.contentIndex] =
-                        ToolCall(slot.id, slot.name, parseJsonObjectOrEmpty(slot.arguments))
+                        ToolCall(slot.id, slot.name, slot.argumentsJson())
                     stream.push(ToolCallDelta(slot.contentIndex, delta, snapshot()))
                 }
 
                 "response.function_call_arguments.done" -> {
                     val outputIndex = event.int("output_index") ?: return@postSse
                     val slot = slots[outputIndex] as? Slot.Tool ?: return@postSse
+                    if (slot.customInputProperty != null) {
+                        return@postSse
+                    }
                     val previous = slot.arguments
                     slot.arguments = event.string("arguments") ?: previous
                     blocks[slot.contentIndex] =
-                        ToolCall(slot.id, slot.name, parseJsonObjectOrEmpty(slot.arguments))
+                        ToolCall(slot.id, slot.name, slot.argumentsJson())
                     if (slot.arguments.startsWith(previous)) {
                         val delta = slot.arguments.removePrefix(previous)
                         if (delta.isNotEmpty()) {
                             stream.push(ToolCallDelta(slot.contentIndex, delta, snapshot()))
                         }
                     }
+                }
+
+                "response.custom_tool_call_input.delta" -> {
+                    val outputIndex = event.int("output_index") ?: return@postSse
+                    val slot = slots[outputIndex] as? Slot.Tool ?: return@postSse
+                    val inputProperty = slot.customInputProperty ?: return@postSse
+                    val nextInput = slot.customInput + event.string("delta").orEmpty()
+                    val delta =
+                        appendGrammarToolInputJsonDelta(
+                            requireNotNull(slot.grammarBuffer),
+                            inputProperty,
+                            nextInput,
+                            close = false,
+                        )
+                    slot.customInput = nextInput
+                    blocks[slot.contentIndex] = ToolCall(slot.id, slot.name, slot.argumentsJson())
+                    delta?.let { stream.push(ToolCallDelta(slot.contentIndex, it, snapshot())) }
+                }
+
+                "response.custom_tool_call_input.done" -> {
+                    val outputIndex = event.int("output_index") ?: return@postSse
+                    val slot = slots[outputIndex] as? Slot.Tool ?: return@postSse
+                    val inputProperty = slot.customInputProperty ?: return@postSse
+                    val nextInput = event.string("input") ?: slot.customInput
+                    val delta =
+                        appendGrammarToolInputJsonDelta(
+                            requireNotNull(slot.grammarBuffer),
+                            inputProperty,
+                            nextInput,
+                            close = true,
+                        )
+                    slot.customInput = nextInput
+                    blocks[slot.contentIndex] = ToolCall(slot.id, slot.name, slot.argumentsJson())
+                    delta?.let { stream.push(ToolCallDelta(slot.contentIndex, it, snapshot())) }
                 }
 
                 "response.output_item.done" -> {
@@ -316,12 +388,27 @@ class OpenAIResponsesProvider(
                         }
 
                         is Slot.Tool -> {
-                            slot.arguments = item.string("arguments") ?: slot.arguments
+                            if (slot.customInputProperty != null) {
+                                val nextInput = item.string("input") ?: slot.customInput
+                                appendGrammarToolInputJsonDelta(
+                                    requireNotNull(slot.grammarBuffer),
+                                    requireNotNull(slot.customInputProperty),
+                                    nextInput,
+                                    close = true,
+                                )?.let { delta ->
+                                    slot.customInput = nextInput
+                                    blocks[slot.contentIndex] =
+                                        ToolCall(slot.id, slot.name, slot.argumentsJson())
+                                    stream.push(ToolCallDelta(slot.contentIndex, delta, snapshot()))
+                                }
+                            } else {
+                                slot.arguments = item.string("arguments") ?: slot.arguments
+                            }
                             val call =
                                 ToolCall(
                                     slot.id,
                                     item.string("name") ?: slot.name,
-                                    parseJsonObjectOrEmpty(slot.arguments),
+                                    slot.argumentsJson(),
                                 )
                             blocks[slot.contentIndex] = call
                             stream.push(ToolCallEnd(slot.contentIndex, call, snapshot()))
@@ -418,7 +505,14 @@ class OpenAIResponsesProvider(
             model,
             context,
             options,
-            responseInput(model, context),
+            responseInput(
+                model,
+                context,
+                createGrammarToolInputProperties(
+                    context.tools,
+                    model.compat?.booleanValue("supportsOpenAIGrammarTools") ?: false,
+                ),
+            ),
             requestModelId,
             promptCacheWhenDisabled,
         )
@@ -426,6 +520,7 @@ class OpenAIResponsesProvider(
     private fun responseInput(
         model: Model,
         context: Context,
+        grammarToolInputProperties: Map<String, String>,
     ): JsonArray =
         buildJsonArray {
             context.systemPrompt?.let { system ->
@@ -473,16 +568,40 @@ class OpenAIResponsesProvider(
                         }
                         message.content.filterIsInstance<ToolCall>().forEach { call ->
                             val parts = call.id.split('|', limit = 2)
+                            val customInputProperty = grammarToolInputProperties[call.name]
                             add(
-                                buildJsonObject {
-                                    put("type", "function_call")
-                                    put("call_id", parts[0])
-                                    parts.getOrNull(1)?.let { put("id", it) }
-                                    put("name", call.name)
-                                    put(
-                                        "arguments",
-                                        providerJson.encodeToString(JsonObject.serializer(), call.arguments),
-                                    )
+                                if (customInputProperty != null) {
+                                    buildJsonObject {
+                                        put("type", "custom_tool_call")
+                                        put("call_id", parts[0])
+                                        parts.getOrNull(1)?.let { put("id", it) }
+                                        put("name", call.name)
+                                        put(
+                                            "input",
+                                            getGrammarToolInput(
+                                                call.name,
+                                                call.arguments,
+                                                customInputProperty,
+                                            ),
+                                        )
+                                    }
+                                } else {
+                                    buildJsonObject {
+                                        put("type", "function_call")
+                                        put("call_id", parts[0])
+                                        parts
+                                            .getOrNull(1)
+                                            ?.takeIf { it.startsWith("fc_") }
+                                            ?.let { put("id", it) }
+                                        put("name", call.name)
+                                        put(
+                                            "arguments",
+                                            providerJson.encodeToString(
+                                                JsonObject.serializer(),
+                                                call.arguments,
+                                            ),
+                                        )
+                                    }
                                 },
                             )
                         }
@@ -491,7 +610,14 @@ class OpenAIResponsesProvider(
                     is works.earendil.pi.ai.ToolResultMessage ->
                         add(
                             buildJsonObject {
-                                put("type", "function_call_output")
+                                put(
+                                    "type",
+                                    if (grammarToolInputProperties.containsKey(message.toolName)) {
+                                        "custom_tool_call_output"
+                                    } else {
+                                        "function_call_output"
+                                    },
+                                )
                                 put("call_id", message.toolCallId.substringBefore('|'))
                                 put("output", contentText(message.content))
                             },
@@ -578,8 +704,16 @@ class OpenAIResponsesProvider(
             override val contentIndex: Int,
             val id: String,
             val name: String,
-            var arguments: String,
-        ) : Slot
+            var arguments: String = "",
+            var customInputProperty: String? = null,
+            var customInput: String = "",
+            var grammarBuffer: GrammarToolInputJsonBuffer? = null,
+        ) : Slot {
+            fun argumentsJson(): JsonObject =
+                customInputProperty?.let { property ->
+                    buildJsonObject { put(property, customInput) }
+                } ?: parseJsonObjectOrEmpty(arguments)
+        }
     }
 }
 
@@ -616,66 +750,122 @@ private fun buildOpenAIResponsesRequestBodyFromInput(
     requestModelId: String,
     promptCacheWhenDisabled: Boolean,
 ): JsonObject =
-    buildJsonObject {
-        put("model", requestModelId)
-        put("input", input)
-        put("stream", true)
-        options.sessionId
-            ?.takeIf {
-                promptCacheWhenDisabled ||
-                    options.cacheRetention != works.earendil.pi.ai.CacheRetention.NONE
-            }
-            ?.let { put("prompt_cache_key", it.take(64)) }
-        put("store", false)
-        options.maxTokens?.let { put("max_output_tokens", it.coerceAtLeast(16)) }
-        options.temperature?.let { put("temperature", it) }
-        if (context.tools.isNotEmpty()) {
-            put(
-                "tools",
-                buildJsonArray {
-                    context.tools.forEach { tool ->
-                        add(
-                            buildJsonObject {
-                                put("type", "function")
-                                put("name", tool.name)
-                                put("description", tool.description)
-                                put("parameters", tool.parameters)
-                                put("strict", false)
-                            },
-                        )
-                    }
-                },
-            )
-        }
-        if (model.reasoning) {
-            val effort =
-                options.reasoningEffort
-                    ?.let { requested ->
-                        works.earendil.pi.ai.ModelThinkingLevel.entries
-                            .firstOrNull { it.name.equals(requested, ignoreCase = true) }
-                            ?.let { model.thinkingLevelMap[it] ?: requested }
-                            ?: requested
-                    }
-                    ?: options.reasoning?.let(model::mappedThinkingLevel)
-            if (effort != null && effort != "off") {
+    run {
+        val supportsStrictMode =
+            model.compat?.booleanValue("supportsStrictMode")
+                ?: (model.api == "azure-openai-responses")
+        val supportsOpenAIGrammarTools =
+            model.compat?.booleanValue("supportsOpenAIGrammarTools") ?: false
+        buildJsonObject {
+            put("model", requestModelId)
+            put("input", input)
+            put("stream", true)
+            options.sessionId
+                ?.takeIf {
+                    promptCacheWhenDisabled ||
+                        options.cacheRetention != works.earendil.pi.ai.CacheRetention.NONE
+                }
+                ?.let { put("prompt_cache_key", it.take(64)) }
+            if (
+                options.cacheRetention == works.earendil.pi.ai.CacheRetention.NONE &&
+                model.compat?.booleanValue("supportsExplicitPromptCacheMode") == true
+            ) {
                 put(
-                    "reasoning",
-                    buildJsonObject {
-                        put("effort", effort)
-                        put("summary", options.reasoningSummary ?: "auto")
+                    "prompt_cache_options",
+                    buildJsonObject { put("mode", "explicit") },
+                )
+            }
+            put("store", false)
+            options.maxTokens?.let { put("max_output_tokens", it.coerceAtLeast(16)) }
+            options.temperature?.let { put("temperature", it) }
+            if (context.tools.isNotEmpty()) {
+                put(
+                    "tools",
+                    buildJsonArray {
+                        context.tools.forEach { tool ->
+                            val grammar =
+                                resolveGrammarConstrainedSampling(tool, supportsOpenAIGrammarTools)
+                            add(
+                                if (grammar != null) {
+                                    buildJsonObject {
+                                        put("type", "custom")
+                                        put("name", tool.name)
+                                        put("description", tool.description)
+                                        put(
+                                            "format",
+                                            buildJsonObject {
+                                                put("type", "grammar")
+                                                put("syntax", grammar.format)
+                                                put("definition", grammar.definition)
+                                            },
+                                        )
+                                    }
+                                } else {
+                                    buildJsonObject {
+                                        val strict =
+                                            resolveJsonSchemaStrictSampling(tool, supportsStrictMode)
+                                        put("type", "function")
+                                        put("name", tool.name)
+                                        put("description", tool.description)
+                                        put("parameters", tool.parameters)
+                                        if (supportsStrictMode) {
+                                            put("strict", strict ?: false)
+                                        }
+                                    }
+                                },
+                            )
+                        }
                     },
                 )
-                put("include", JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive("reasoning.encrypted_content"))))
-            } else {
-                model.mappedThinkingOff("none")?.let { off ->
-                    put("reasoning", buildJsonObject { put("effort", off) })
-                }
-                if (model.provider == "xai") {
+            }
+            if (model.reasoning) {
+                val effort =
+                    options.reasoningEffort
+                        ?.let { requested ->
+                            works.earendil.pi.ai.ModelThinkingLevel.entries
+                                .firstOrNull { it.name.equals(requested, ignoreCase = true) }
+                                ?.let { model.thinkingLevelMap[it] ?: requested }
+                                ?: requested
+                        }
+                        ?: options.reasoning?.let(model::mappedThinkingLevel)
+                if (effort != null && effort != "off") {
+                    put(
+                        "reasoning",
+                        buildJsonObject {
+                            put("effort", effort)
+                            put("summary", options.reasoningSummary ?: "auto")
+                        },
+                    )
                     put(
                         "include",
-                        JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive("reasoning.encrypted_content"))),
+                        JsonArray(
+                            listOf(
+                                kotlinx.serialization.json.JsonPrimitive(
+                                    "reasoning.encrypted_content",
+                                ),
+                            ),
+                        ),
                     )
+                } else {
+                    model.mappedThinkingOff("none")?.let { off ->
+                        put("reasoning", buildJsonObject { put("effort", off) })
+                    }
+                    if (model.provider == "xai") {
+                        put(
+                            "include",
+                            JsonArray(
+                                listOf(
+                                    kotlinx.serialization.json.JsonPrimitive(
+                                        "reasoning.encrypted_content",
+                                    ),
+                                ),
+                            ),
+                        )
+                    }
                 }
             }
         }
     }
+
+private fun JsonObject.booleanValue(name: String): Boolean? =
+    (this[name] as? kotlinx.serialization.json.JsonPrimitive)?.booleanOrNull

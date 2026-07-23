@@ -37,6 +37,9 @@ import works.earendil.pi.ai.ToolDefinition
 import works.earendil.pi.ai.ToolResultMessage
 import works.earendil.pi.ai.Usage
 import works.earendil.pi.ai.contentText
+import works.earendil.pi.ai.getGrammarToolInput
+import works.earendil.pi.ai.resolveGrammarConstrainedSampling
+import works.earendil.pi.ai.resolveJsonSchemaStrictSampling
 
 internal val providerJson =
     Json {
@@ -81,7 +84,10 @@ internal fun mergedHeaders(
     return result
 }
 
-internal fun openAIMessage(message: Message): JsonObject =
+internal fun openAIMessage(
+    message: Message,
+    grammarToolInputProperties: Map<String, String> = emptyMap(),
+): JsonObject =
     when (message) {
         is works.earendil.pi.ai.UserMessage ->
             buildJsonObject {
@@ -104,17 +110,45 @@ internal fun openAIMessage(message: Message): JsonObject =
                         "tool_calls",
                         buildJsonArray {
                             toolCalls.forEach { call ->
+                                val customInputProperty = grammarToolInputProperties[call.name]
                                 add(
-                                    buildJsonObject {
-                                        put("id", call.id)
-                                        put("type", "function")
-                                        put(
-                                            "function",
-                                            buildJsonObject {
-                                                put("name", call.name)
-                                                put("arguments", providerJson.encodeToString(JsonObject.serializer(), call.arguments))
-                                            },
-                                        )
+                                    if (customInputProperty != null) {
+                                        buildJsonObject {
+                                            put("id", call.id)
+                                            put("type", "custom")
+                                            put(
+                                                "custom",
+                                                buildJsonObject {
+                                                    put("name", call.name)
+                                                    put(
+                                                        "input",
+                                                        getGrammarToolInput(
+                                                            call.name,
+                                                            call.arguments,
+                                                            customInputProperty,
+                                                        ),
+                                                    )
+                                                },
+                                            )
+                                        }
+                                    } else {
+                                        buildJsonObject {
+                                            put("id", call.id)
+                                            put("type", "function")
+                                            put(
+                                                "function",
+                                                buildJsonObject {
+                                                    put("name", call.name)
+                                                    put(
+                                                        "arguments",
+                                                        providerJson.encodeToString(
+                                                            JsonObject.serializer(),
+                                                            call.arguments,
+                                                        ),
+                                                    )
+                                                },
+                                            )
+                                        }
                                     },
                                 )
                             }
@@ -157,10 +191,37 @@ internal fun openAIMessage(message: Message): JsonObject =
 
 internal fun openAITool(
     tool: ToolDefinition,
-    strict: Boolean = false,
-    includeStrict: Boolean = false,
-): JsonObject =
-    buildJsonObject {
+    supportsStrictMode: Boolean,
+    supportsOpenAIGrammarTools: Boolean = false,
+): JsonObject {
+    val grammar = resolveGrammarConstrainedSampling(tool, supportsOpenAIGrammarTools)
+    if (grammar != null) {
+        return buildJsonObject {
+            put("type", "custom")
+            put(
+                "custom",
+                buildJsonObject {
+                    put("name", tool.name)
+                    put("description", tool.description)
+                    put(
+                        "format",
+                        buildJsonObject {
+                            put("type", "grammar")
+                            put(
+                                "grammar",
+                                buildJsonObject {
+                                    put("syntax", grammar.format)
+                                    put("definition", grammar.definition)
+                                },
+                            )
+                        },
+                    )
+                },
+            )
+        }
+    }
+    val strict = resolveJsonSchemaStrictSampling(tool, supportsStrictMode)
+    return buildJsonObject {
         put("type", "function")
         put(
             "function",
@@ -168,12 +229,13 @@ internal fun openAITool(
                 put("name", tool.name)
                 put("description", tool.description)
                 put("parameters", tool.parameters)
-                if (includeStrict) {
-                    put("strict", strict)
+                if (supportsStrictMode) {
+                    put("strict", strict ?: false)
                 }
             },
         )
     }
+}
 
 internal fun parseJsonObjectOrEmpty(value: String): JsonObject =
     runCatching { providerJson.parseToJsonElement(value).jsonObject }.getOrElse { JsonObject(emptyMap()) }

@@ -3,6 +3,7 @@ package works.earendil.pi.ai.providers
 import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
+import java.time.Instant
 import java.util.Collections
 import kotlinx.coroutines.test.runTest
 import works.earendil.pi.ai.Context
@@ -22,13 +23,14 @@ class BuiltInCatalogTest {
         val openAI = catalog.modelsByProvider.getValue("openai")
         val sol = openAI.single { it.id == "gpt-5.6-sol" }
 
-        assertEquals(2, catalog.schemaVersion)
+        assertEquals(3, catalog.schemaVersion)
+        Instant.parse(assertNotNull(catalog.generatedAt))
         assertEquals(
-            "0ace35af4436711c3b61dbc4a839abec41d2f396017e0c160eda56a4cb030649",
+            "57655e637e6c882faa1975fa64df872aef3803dc2a1214b7ee0b58c57387354f",
             catalog.structureHash,
         )
         assertEquals(37, catalog.modelsByProvider.size)
-        assertEquals(1_108, catalog.modelsByProvider.values.sumOf(List<works.earendil.pi.ai.Model>::size))
+        assertEquals(1_109, catalog.modelsByProvider.values.sumOf(List<works.earendil.pi.ai.Model>::size))
         assertEquals("openai-responses", sol.api)
         assertEquals(272_000, sol.contextWindow)
         assertEquals(128_000, sol.maxTokens)
@@ -48,7 +50,7 @@ class BuiltInCatalogTest {
         val ids = providers.map { it.id }.toSet()
 
         assertEquals(35, providers.size)
-        assertEquals(1_073, providers.sumOf { it.getModels().size })
+        assertEquals(1_074, providers.sumOf { it.getModels().size })
         assertTrue(
             ids.containsAll(
                 setOf(

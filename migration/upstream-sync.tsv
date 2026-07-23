@@ -1,0 +1,12 @@
+commit	disposition	evidence
+da8dd87260513101add46a802c3ace94a71e2d70	already-covered	Exact model lookup precedes fuzzy lookup; ArgsTest covers bracketed IDs with thinking suffixes
+7af8533c6f22ab922fff29f252d2d3657b821d99	ported	SseHttp retry policy honors retry headers, delay limits, and coroutine cancellation
+fc85bdd88be93b1e9a6b6bcfa41c684282ec79cc	ported	RpcRuntime emits bash_execution_update events with command IDs
+bc3d36474256b271f277d8ffe9ae870fa96fb896	covered-by-known-gap	Schema-v3 generatedAt is preserved; remote model-catalog refresh is not migrated
+ab55c15fbdbca4ce2d5628f1613a3bd30d847868	not-applicable	Merge commit for the preceding source change
+65ff8e7f6db447dcddb1a9c8fd05f081c5cda76a	not-applicable	TypeScript lint-only change
+37bedb7f0b189f2ed0aed4f715c490c791baa01f	covered-by-known-gap	Full-screen editor component is not migrated
+241431c69baf667e09a0eadf8ffc34ee2f643ef0	ported	Summary requests use cacheRetention NONE and unique session IDs; Responses explicit cache mode is supported
+6abb4b06409912ac4f0c58fde0f37fd5f1d4c76a	covered-by-known-gap	llama.cpp extension is not migrated
+ec1a87e856502f29a55a5762d129bb845f094bd7	not-applicable	protobufjs package override has no JVM equivalent
+24bace27cf308c89707cf8005b4795d873e23f17	ported	Constrained sampling types, strict tools, grammar payloads, and custom-tool streams are implemented

@@ -10,12 +10,15 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import works.earendil.pi.ai.AssistantDone
 import works.earendil.pi.ai.Context
+import works.earendil.pi.ai.GrammarConstrainedSamplingConfig
+import works.earendil.pi.ai.GrammarVariants
 import works.earendil.pi.ai.ModelCost
 import works.earendil.pi.ai.ModelInput
 import works.earendil.pi.ai.StopReason
 import works.earendil.pi.ai.StreamOptions
 import works.earendil.pi.ai.TextContent
 import works.earendil.pi.ai.ToolCall
+import works.earendil.pi.ai.ToolCallDelta
 import works.earendil.pi.ai.ToolDefinition
 import works.earendil.pi.ai.UserMessage
 import kotlin.test.Test
@@ -219,6 +222,98 @@ class ProviderFixtureTest {
                 assertEquals(2, result.usage.cacheRead)
                 assertEquals(1, result.usage.reasoning)
                 assertTrue(fixture.requestBody.contains("\"store\":false"))
+            } finally {
+                fixture.close()
+            }
+        }
+
+    @Test
+    fun `openai responses provider streams grammar tool input as json deltas`() =
+        runTest {
+            val fixture =
+                fixtureServer(
+                    """
+                    data: {"type":"response.output_item.added","output_index":0,"item":{"type":"custom_tool_call","id":"ctc-1","call_id":"call-1","name":"grammar","input":""}}
+
+                    data: {"type":"response.custom_tool_call_input.delta","output_index":0,"delta":"hel"}
+
+                    data: {"type":"response.custom_tool_call_input.done","output_index":0,"input":"hello"}
+
+                    data: {"type":"response.output_item.done","output_index":0,"item":{"type":"custom_tool_call","id":"ctc-1","call_id":"call-1","name":"grammar","input":"hello"}}
+
+                    data: {"type":"response.completed","response":{"id":"resp-1","status":"completed","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"output":[]}}
+
+                    """.trimIndent(),
+                )
+            try {
+                val model =
+                    model(
+                        id = "fixture",
+                        api = "openai-responses",
+                        provider = "fixture",
+                        baseUrl = fixture.baseUrl,
+                    ).copy(
+                        compat =
+                            buildJsonObject {
+                                put("supportsOpenAIGrammarTools", true)
+                            },
+                    )
+                val provider =
+                    OpenAIResponsesProvider(
+                        "fixture",
+                        "Fixture",
+                        fixture.baseUrl,
+                        listOf(model),
+                        listOf("UNUSED"),
+                    )
+                val stream =
+                    provider.stream(
+                        model,
+                        Context(
+                            messages = mutableListOf(UserMessage("hi")),
+                            tools =
+                                listOf(
+                                    ToolDefinition(
+                                        "grammar",
+                                        "Grammar",
+                                        buildJsonObject {
+                                            put("type", "object")
+                                            put(
+                                                "properties",
+                                                buildJsonObject {
+                                                    put(
+                                                        "input",
+                                                        buildJsonObject { put("type", "string") },
+                                                    )
+                                                },
+                                            )
+                                            put(
+                                                "required",
+                                                kotlinx.serialization.json.JsonArray(
+                                                    listOf(
+                                                        kotlinx.serialization.json.JsonPrimitive("input"),
+                                                    ),
+                                                ),
+                                            )
+                                        },
+                                        GrammarConstrainedSamplingConfig(
+                                            GrammarVariants(openAIRegex = "[a-z]+"),
+                                        ),
+                                    ),
+                                ),
+                        ),
+                        StreamOptions(apiKey = "test"),
+                    )
+                val events = stream.events.toList()
+                val result = stream.result()
+
+                assertEquals("hello", result.content.filterIsInstance<ToolCall>().single().arguments["input"]
+                    ?.let { (it as kotlinx.serialization.json.JsonPrimitive).content })
+                assertEquals(
+                    """{"input":"hello"}""",
+                    events.filterIsInstance<ToolCallDelta>().joinToString("") { it.delta },
+                )
+                assertTrue(fixture.requestBody.contains("\"type\":\"custom\""))
             } finally {
                 fixture.close()
             }

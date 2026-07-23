@@ -474,9 +474,27 @@ class RpcRuntime(
                         .start()
                 bashProcess = process
                 try {
-                    val output = process.inputStream.readBytes().toString(StandardCharsets.UTF_8)
+                    val output = StringBuilder()
+                    process.inputStream.reader(StandardCharsets.UTF_8).use { reader ->
+                        val buffer = CharArray(8_192)
+                        while (true) {
+                            val count = reader.read(buffer)
+                            if (count < 0) {
+                                break
+                            }
+                            val delta = String(buffer, 0, count)
+                            output.append(delta)
+                            emit(
+                                buildJsonObject {
+                                    put("type", "bash_execution_update")
+                                    id?.let { put("id", it) }
+                                    put("delta", delta)
+                                },
+                            )
+                        }
+                    }
                     val exitCode = process.waitFor()
-                    val truncated = truncateTail(output)
+                    val truncated = truncateTail(output.toString())
                     buildJsonObject {
                         put("output", truncated.content)
                         put("exitCode", exitCode)

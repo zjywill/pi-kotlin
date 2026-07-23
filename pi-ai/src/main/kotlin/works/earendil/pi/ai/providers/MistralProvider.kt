@@ -53,6 +53,7 @@ import works.earendil.pi.ai.contentText
 import works.earendil.pi.ai.createAssistantMessageEventStream
 import works.earendil.pi.ai.http.ProviderHttpException
 import works.earendil.pi.ai.http.postSse
+import works.earendil.pi.ai.resolveJsonSchemaStrictSampling
 
 class MistralProvider(
     override val id: String,
@@ -226,6 +227,8 @@ class MistralProvider(
             body = providerJson.encodeToString(JsonObject.serializer(), body),
             headers = headers,
             timeoutMs = options.timeoutMs,
+            maxRetries = options.maxRetries,
+            maxRetryDelayMs = options.maxRetryDelayMs,
         ) { sse ->
             if (sse.data.isBlank() || sse.data == "[DONE]") {
                 return@postSse
@@ -357,6 +360,7 @@ internal fun buildMistralRequestBody(
                 "tools",
                 buildJsonArray {
                     context.tools.forEach { tool ->
+                        val strict = resolveJsonSchemaStrictSampling(tool, supportsStrictMode = true)
                         add(
                             buildJsonObject {
                                 put("type", "function")
@@ -366,7 +370,7 @@ internal fun buildMistralRequestBody(
                                         put("name", tool.name)
                                         put("description", tool.description)
                                         put("parameters", tool.parameters)
-                                        put("strict", false)
+                                        put("strict", strict ?: false)
                                     },
                                 )
                             },

@@ -38,6 +38,7 @@ import works.earendil.pi.ai.Usage
 import works.earendil.pi.ai.contentText
 import works.earendil.pi.ai.createAssistantMessageEventStream
 import works.earendil.pi.ai.http.postSse
+import works.earendil.pi.ai.resolveJsonSchemaStrictSampling
 
 class AnthropicProvider(
     override val id: String,
@@ -115,6 +116,8 @@ class AnthropicProvider(
                     options.headers,
                 ),
             timeoutMs = options.timeoutMs,
+            maxRetries = options.maxRetries,
+            maxRetryDelayMs = options.maxRetryDelayMs,
         ) { sse ->
             if (sse.data.isBlank()) {
                 return@postSse
@@ -506,27 +509,42 @@ private fun buildAnthropicRequestBodyFromMessages(
             options.temperature?.let { put("temperature", it) }
         }
         if (context.tools.isNotEmpty()) {
+            val supportsStrictTools =
+                model.compat?.get("supportsStrictTools")
+                    ?.let { it as? kotlinx.serialization.json.JsonPrimitive }
+                    ?.booleanOrNull
+                    ?: false
             put(
                 "tools",
                 buildJsonArray {
                     context.tools.forEachIndexed { index, tool ->
+                        val strict = resolveJsonSchemaStrictSampling(tool, supportsStrictTools)
+                        val legacyInputSchema =
+                            buildJsonObject {
+                                put("type", "object")
+                                put(
+                                    "properties",
+                                    tool.parameters["properties"] ?: JsonObject(emptyMap()),
+                                )
+                                put(
+                                    "required",
+                                    tool.parameters["required"] ?: JsonArray(emptyList()),
+                                )
+                            }
                         add(
                             buildJsonObject {
                                 put("name", tool.name)
                                 put("description", tool.description)
                                 put("eager_input_streaming", true)
+                                if (strict == true) {
+                                    put("strict", true)
+                                }
                                 put(
                                     "input_schema",
-                                    buildJsonObject {
-                                        put("type", "object")
-                                        put(
-                                            "properties",
-                                            tool.parameters["properties"] ?: JsonObject(emptyMap()),
-                                        )
-                                        put(
-                                            "required",
-                                            tool.parameters["required"] ?: JsonArray(emptyList()),
-                                        )
+                                    if (strict == true) {
+                                        JsonObject(tool.parameters + legacyInputSchema)
+                                    } else {
+                                        legacyInputSchema
                                     },
                                 )
                                 if (index == context.tools.lastIndex) {

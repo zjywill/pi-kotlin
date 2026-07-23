@@ -101,6 +101,7 @@ import works.earendil.pi.ai.ToolResultMessage
 import works.earendil.pi.ai.Usage
 import works.earendil.pi.ai.UserMessage
 import works.earendil.pi.ai.createAssistantMessageEventStream
+import works.earendil.pi.ai.resolveJsonSchemaStrictSampling
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
@@ -433,7 +434,7 @@ internal fun buildBedrockRequestBody(
                 options.temperature?.let { put("temperature", it) }
             },
         )
-        buildBedrockToolConfig(context, options)?.let { put("toolConfig", it) }
+        buildBedrockToolConfig(model, context, options)?.let { put("toolConfig", it) }
         buildBedrockAdditionalModelRequestFields(model, options, environment)?.let {
             put("additionalModelRequestFields", it)
         }
@@ -910,6 +911,7 @@ private fun buildBedrockSystemPrompt(
 }
 
 private fun buildBedrockToolConfig(
+    model: Model,
     context: Context,
     options: StreamOptions,
 ): JsonObject? {
@@ -921,7 +923,14 @@ private fun buildBedrockToolConfig(
         put(
             "tools",
             buildJsonArray {
+                val supportsStrictMode =
+                    model.compat
+                        ?.get("supportsStrictMode")
+                        ?.jsonPrimitive
+                        ?.booleanOrNull
+                        ?: false
                 context.tools.forEach { tool ->
+                    val strict = resolveJsonSchemaStrictSampling(tool, supportsStrictMode)
                     add(
                         buildJsonObject {
                             put(
@@ -930,6 +939,9 @@ private fun buildBedrockToolConfig(
                                     put("name", tool.name)
                                     put("description", tool.description)
                                     put("inputSchema", buildJsonObject { put("json", tool.parameters) })
+                                    if (strict == true) {
+                                        put("strict", true)
+                                    }
                                 },
                             )
                         },
@@ -1485,7 +1497,9 @@ private class AwsBedrockRuntimeTransport : BedrockRuntimeTransport {
                             ToolInputSchema.fromJson(
                                 spec.getValue("inputSchema").jsonObject.getValue("json").toDocument(),
                             ),
-                        ).build(),
+                        ).apply {
+                            spec["strict"]?.jsonPrimitive?.booleanOrNull?.let(::strict)
+                        }.build(),
                 )
             }
         return ToolConfiguration

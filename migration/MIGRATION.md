@@ -12,6 +12,11 @@
 The source commit is immutable for the first migration pass. Upstream changes
 land in a later synchronization pass so that parity failures have one cause.
 
+The latest reviewed synchronization pass reaches
+`24bace27cf308c89707cf8005b4795d873e23f17` (July 23, 2026). The original
+baseline remains recorded so regressions can be attributed either to the first
+translation or to a later upstream sync.
+
 ## Migration method
 
 1. Define independent graders before translating a subsystem.
@@ -66,7 +71,7 @@ features outside that slice remain migration work.
 | --- | --- | --- |
 | Gradle multi-module build | Functional slice | Six JVM 21 modules; `clean test installDist` passes with warnings as errors |
 | Core AI messages and stream protocol | Functional slice | Message, event-stream, UUIDv7, tool validation, and faux-provider tests |
-| Model catalog | Functional slice | Pinned schema-v2 manifest and 37 provider files verify by SHA-256; 1,108 model records load, with 1,073 models exposed across 35 providers whose protocols and authentication are currently executable |
+| Model catalog | Functional slice | Hydrated schema-v3 manifest and 37 provider files verify by SHA-256; 1,109 model records load, with 1,074 models exposed across 35 providers whose protocols and authentication are currently executable |
 | Provider HTTP implementations | Partial | Google Generative AI, Google Vertex AI, Anthropic Messages, OpenAI Chat Completions, OpenAI Responses, Azure OpenAI Responses, Mistral Conversations, Amazon Bedrock ConverseStream, Cloudflare Workers AI, and Cloudflare AI Gateway request/stream fixture tests, independent base/reasoning payload and public stream-transcript parity, provider-auth/request parity, and multi-protocol catalog dispatch |
 | Agent loop | Functional slice | Streaming, tool calls, parallel execution, steering, follow-up, abort, and session tests using the faux provider; coding-message projection has independent parity for bash/custom/branch/compaction messages |
 | CLI argument contract | Partial | Parser tests and byte-for-byte `--help` oracle against the pinned TypeScript CLI; provider-prefixed and slash-containing model IDs plus thinking suffixes are covered |
@@ -85,7 +90,7 @@ features outside that slice remain migration work.
 Verified on July 23, 2026 against source commit
 `9b3a2059171bcc74ad9d2cadeea6d186776cf2db`:
 
-- `./gradlew clean test installDist`: passed, 135 tests, 0 failures, 0 errors,
+- `./gradlew clean test installDist`: passed, 149 tests, 0 failures, 0 errors,
   and 0 skipped.
 - `./migration/oracle/compare-cli-help.sh`: passed with byte-for-byte CLI help
   parity.
@@ -137,6 +142,13 @@ Verified on July 23, 2026 against source commit
   parity for current, v1, and v2 sessions, including append-only rewrite,
   migrations, branches, compaction context, model/thinking state, and explicit
   empty-leaf behavior.
+- `./migration/audit-migration.sh sync`: passed for every target-package commit
+  between the original baseline and
+  `24bace27cf308c89707cf8005b4795d873e23f17`.
+- The July 23 incremental sync adds JSON-schema and grammar constrained
+  sampling, strict-tool negotiation across supported providers, OpenAI custom
+  tool streaming, abortable provider retry backoff, explicit cache-write
+  suppression, bracketed model-ID coverage, and RPC bash output update events.
 - Installed `pi` PTY smoke: entered interactive mode, rendered `/help`, and
   preserved `openrouter/moonshotai/kimi-k2.6` through `/model`, then exited
   normally through `/exit`.
@@ -155,7 +167,7 @@ Verified on July 23, 2026 against source commit
 - The installed server exposed all 12 Google Vertex AI models. State read-back
   preserved `google-vertex/gemini-3-flash-preview`, API `google-vertex`, and
   thinking level `high`.
-- The installed server exposed all 109 Amazon Bedrock models and 1,073 models
+- The installed server exposed all 109 Amazon Bedrock models and 1,074 models
   total. State read-back preserved
   `amazon-bedrock/us.anthropic.claude-opus-4-8`, API
   `bedrock-converse-stream`, and thinking level `high`.
@@ -164,6 +176,13 @@ Verified on July 23, 2026 against source commit
 - Piped `rpc-stream` emitted `rpc_ready` then `response` and exited with status
   0 after stdin EOF.
 - The pinned TypeScript source worktree remained clean.
+- A detached source snapshot at
+  `24bace27cf308c89707cf8005b4795d873e23f17` passed
+  `npm ci --ignore-scripts`, `npm run hydrate:model-data`,
+  `npm run build:offline`, and the full `npm test` workspace suite with an
+  isolated home directory. The tracked source checkout remains clean; its
+  checked-in schema-v2 model data requires hydration because current source
+  code expects schema 3.
 
 ## Remaining major gaps
 
@@ -180,3 +199,18 @@ Verified on July 23, 2026 against source commit
 - Match upstream HTML export theming, Markdown rendering, and syntax
   highlighting.
 - Expand process-level server compatibility and restart/recovery coverage.
+
+## Completeness audit
+
+The migration is not complete while any row in `migration/inventory.tsv` is
+`partial` or `missing`. This is intentional: compilation and the existing
+oracles prove the migrated slices, but cannot prove features that have no target
+implementation.
+
+```bash
+./migration/audit-migration.sh sync  # verifies reviewed upstream coverage
+./migration/audit-migration.sh full  # exits non-zero until all areas are complete
+```
+
+The rulebook in `migration/RULEBOOK.md` defines what may be treated as a JVM
+native replacement and what requires behavior parity.

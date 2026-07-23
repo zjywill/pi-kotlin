@@ -142,6 +142,8 @@ class GoogleVertexProvider(
             body = providerJson.encodeToString(JsonObject.serializer(), body),
             headers = mergedHeaders(request.headers, model.headers, options.headers),
             timeoutMs = options.timeoutMs,
+            maxRetries = options.maxRetries,
+            maxRetryDelayMs = options.maxRetryDelayMs,
         ) { sse ->
             if (sse.data.isBlank()) {
                 return@postSse
@@ -312,7 +314,7 @@ internal fun buildGoogleVertexParams(
                 if (context.tools.isNotEmpty()) {
                     put("tools", googleVertexTools(context))
                 }
-                googleVertexToolChoice(options)?.let { mode ->
+                resolveGoogleFunctionCallingMode(model.id, context.tools, options.toolChoice)?.let { mode ->
                     put(
                         "toolConfig",
                         buildJsonObject {
@@ -591,15 +593,6 @@ private fun googleVertexTools(context: Context): JsonArray =
             },
         )
     }
-
-private fun googleVertexToolChoice(options: StreamOptions): String? {
-    val raw = (options.toolChoice as? JsonPrimitive)?.content ?: return null
-    return when (raw.lowercase()) {
-        "none" -> "NONE"
-        "any" -> "ANY"
-        else -> "AUTO"
-    }
-}
 
 private fun googleVertexThinkingConfig(
     model: Model,

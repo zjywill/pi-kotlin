@@ -16,6 +16,7 @@ import works.earendil.pi.ai.StreamOptions
 
 data class BuiltInCatalogSnapshot(
     val schemaVersion: Int,
+    val generatedAt: String?,
     val structureHash: String,
     val modelsByProvider: Map<String, List<Model>>,
     val unsupportedApis: Set<String>,
@@ -206,6 +207,7 @@ private fun loadCatalog(): BuiltInCatalogSnapshot {
 
     return BuiltInCatalogSnapshot(
         schemaVersion = manifest.getValue("schemaVersion").jsonPrimitive.int,
+        generatedAt = manifest["generatedAt"]?.jsonPrimitive?.contentOrNull,
         structureHash = manifest.getValue("structureHash").jsonPrimitive.contentOrNull.orEmpty(),
         modelsByProvider = modelsByProvider,
         unsupportedApis = unsupportedApis,

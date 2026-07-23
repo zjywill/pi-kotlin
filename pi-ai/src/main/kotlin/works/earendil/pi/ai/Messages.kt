@@ -331,6 +331,7 @@ data class ToolDefinition(
     val name: String,
     val description: String,
     val parameters: JsonObject,
+    val constrainedSampling: ConstrainedSamplingConfig? = null,
 )
 
 data class Context(

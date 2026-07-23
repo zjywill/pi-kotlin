@@ -127,6 +127,8 @@ class GoogleProvider(
             providerJson.encodeToString(JsonObject.serializer(), body),
             mergedHeaders(emptyMap(), model.headers, options.headers),
             options.timeoutMs,
+            options.maxRetries,
+            options.maxRetryDelayMs,
         ) { sse ->
             if (sse.data.isBlank()) {
                 return@postSse
@@ -467,6 +469,17 @@ private fun buildGoogleRequestBodyFromContents(
                     )
                 },
             )
+            resolveGoogleFunctionCallingMode(model.id, context.tools, options.toolChoice)?.let { mode ->
+                put(
+                    "toolConfig",
+                    buildJsonObject {
+                        put(
+                            "functionCallingConfig",
+                            buildJsonObject { put("mode", mode) },
+                        )
+                    },
+                )
+            }
         }
     }
 }

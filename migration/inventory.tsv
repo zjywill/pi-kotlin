@@ -1,0 +1,11 @@
+area	source	target	status	judge	gap
+AI message and stream contracts	packages/ai/src/types.ts	pi-ai	complete	Gradle tests and provider stream oracle
+Built-in model catalog	packages/ai/src/providers/data	pi-ai	partial	Catalog checksum tests	Remote refresh and bundled-versus-remote selection are missing
+Provider protocols	packages/ai/src/api	pi-ai	partial	Provider payload and stream oracles	OpenAI Codex and GitHub Copilot authentication are missing
+Agent loop	packages/agent/src	pi-agent-core	complete	Agent loop and session tests
+SQLite session storage	packages/storage/sqlite-node	pi-storage-sqlite	complete	SQLite repository tests
+CLI argument and print modes	packages/coding-agent/src	pi-coding-agent	partial	CLI help oracle and CLI tests	Several parsed flags and login/package workflows are incomplete
+Extensions and resources	packages/coding-agent/src/core/extensions	pi-coding-agent	missing	None	Extensions, skills, prompt templates, themes, packages, reload, and persisted trust are missing
+Interactive terminal	packages/tui packages/coding-agent/src/modes/interactive	pi-tui pi-coding-agent	partial	PTY smoke and utility tests	Full-screen components, overlays, editor, and transcript parity are missing
+HTML export	packages/coding-agent/src/core/export-html	pi-coding-agent	partial	Exporter tests	Theme, Markdown, and syntax highlighting parity are missing
+RPC and server	packages/coding-agent/src/modes/rpc packages/server	pi-coding-agent pi-server	partial	RPC and server integration tests	Process recovery and full command/event parity are incomplete

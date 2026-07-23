@@ -72,5 +72,9 @@ class ArgsTest {
             ModelReference("openrouter", "moonshotai/kimi-k2.6", null),
             parseModelReference("openrouter", "openrouter/moonshotai/kimi-k2.6"),
         )
+        assertEquals(
+            ModelReference("custom", "bracketed-model[1m]", AgentThinkingLevel.HIGH),
+            parseModelReference(null, "custom/bracketed-model[1m]:high"),
+        )
     }
 }

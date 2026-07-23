@@ -189,6 +189,12 @@ class RpcRuntimeTest {
                         model = "faux-1",
                     ),
                 )
+            val bashUpdates = mutableListOf<JsonObject>()
+            runtime.subscribe { event ->
+                if (event.eventType() == "bash_execution_update") {
+                    bashUpdates += event
+                }
+            }
 
             assertSuccess(
                 runtime.handle(
@@ -235,6 +241,7 @@ class RpcRuntimeTest {
                 requireNotNull(
                     runtime.handle(
                         buildJsonObject {
+                            put("id", "bash-1")
                             put("type", "bash")
                             put("command", "printf rpc-ok")
                         },
@@ -245,6 +252,8 @@ class RpcRuntimeTest {
 
             assertEquals("rpc-ok", bash.data()["output"]?.jsonPrimitive?.content)
             assertEquals(0, bash.data()["exitCode"]?.jsonPrimitive?.content?.toInt())
+            assertEquals("rpc-ok", bashUpdates.joinToString("") { it["delta"]?.jsonPrimitive?.content.orEmpty() })
+            assertTrue(bashUpdates.all { it["id"]?.jsonPrimitive?.content == "bash-1" })
             assertEquals("faux-2", state.data()["model"]?.jsonObject?.get("id")?.jsonPrimitive?.content)
             assertEquals("high", state.data()["thinkingLevel"]?.jsonPrimitive?.content)
             assertEquals("all", state.data()["steeringMode"]?.jsonPrimitive?.content)

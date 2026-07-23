@@ -16,6 +16,7 @@ import works.earendil.pi.ai.AssistantMessageEventStream
 import works.earendil.pi.ai.AssistantStart
 import works.earendil.pi.ai.CacheRetention
 import works.earendil.pi.ai.Context
+import works.earendil.pi.ai.GrammarToolInputJsonBuffer
 import works.earendil.pi.ai.Model
 import works.earendil.pi.ai.Provider
 import works.earendil.pi.ai.StopReason
@@ -33,6 +34,8 @@ import works.earendil.pi.ai.ToolCallDelta
 import works.earendil.pi.ai.ToolCallEnd
 import works.earendil.pi.ai.ToolCallStart
 import works.earendil.pi.ai.Usage
+import works.earendil.pi.ai.appendGrammarToolInputJsonDelta
+import works.earendil.pi.ai.createGrammarToolInputProperties
 import works.earendil.pi.ai.createAssistantMessageEventStream
 import works.earendil.pi.ai.http.postSse
 
@@ -78,6 +81,9 @@ class OpenAIChatProvider(
         stream: AssistantMessageEventStream,
     ) {
         val apiKey = resolveApiKey(id, options.apiKey, options.env, apiKeyEnvNames)
+        val compat = openAIChatCompat(model)
+        val grammarToolInputProperties =
+            createGrammarToolInputProperties(context.tools, compat.supportsOpenAIGrammarTools)
         val body = buildOpenAIChatRequestBody(model, context, options)
 
         val blocks = mutableListOf<works.earendil.pi.ai.ContentBlock>()
@@ -109,6 +115,8 @@ class OpenAIChatProvider(
                     options.headers,
                 ),
             timeoutMs = options.timeoutMs,
+            maxRetries = options.maxRetries,
+            maxRetryDelayMs = options.maxRetryDelayMs,
         ) { event ->
             if (event.data == "[DONE]" || event.data.isBlank()) {
                 return@postSse
@@ -160,30 +168,60 @@ class OpenAIChatProvider(
                 val toolDelta = raw.jsonObject
                 val streamIndex = toolDelta.int("index") ?: 0
                 val function = toolDelta.obj("function")
+                val custom = toolDelta.obj("custom")
+                val name = function?.string("name") ?: custom?.string("name").orEmpty()
                 val existing =
                     tools.getOrPut(streamIndex) {
                         val contentIndex = blocks.size
+                        val customInputProperty =
+                            custom?.let { grammarToolInputProperties[name] ?: "input" }
                         val created =
                             StreamingTool(
                                 contentIndex = contentIndex,
                                 id = toolDelta.string("id").orEmpty(),
-                                name = function?.string("name").orEmpty(),
+                                name = name,
+                                customInputProperty = customInputProperty,
+                                grammarBuffer =
+                                    customInputProperty?.let {
+                                        GrammarToolInputJsonBuffer()
+                                    },
                             )
-                        blocks += ToolCall(created.id, created.name, JsonObject(emptyMap()))
+                        blocks += ToolCall(created.id, created.name, created.argumentsJson())
                         stream.push(ToolCallStart(contentIndex, snapshot()))
                         created
                 }
                 toolDelta.string("id")?.let { existing.id = it }
-                function?.string("name")?.takeIf { existing.name.isEmpty() }?.let { existing.name = it }
+                name.takeIf { existing.name.isEmpty() }?.let { existing.name = it }
+                if (custom != null && existing.customInputProperty == null) {
+                    existing.customInputProperty = grammarToolInputProperties[existing.name] ?: "input"
+                    existing.grammarBuffer = GrammarToolInputJsonBuffer()
+                    existing.arguments = ""
+                }
                 function?.string("arguments")?.let { arguments ->
                     existing.arguments += arguments
                     blocks[existing.contentIndex] =
                         ToolCall(
                             existing.id,
                             existing.name,
-                            parseJsonObjectOrEmpty(existing.arguments),
+                            existing.argumentsJson(),
                         )
                     stream.push(ToolCallDelta(existing.contentIndex, arguments, snapshot()))
+                }
+                custom?.string("input")?.let { inputDelta ->
+                    val nextInput = existing.customInput + inputDelta
+                    val delta =
+                        appendGrammarToolInputJsonDelta(
+                            requireNotNull(existing.grammarBuffer),
+                            requireNotNull(existing.customInputProperty),
+                            nextInput,
+                            close = false,
+                        )
+                    existing.customInput = nextInput
+                    blocks[existing.contentIndex] =
+                        ToolCall(existing.id, existing.name, existing.argumentsJson())
+                    delta?.let {
+                        stream.push(ToolCallDelta(existing.contentIndex, it, snapshot()))
+                    }
                 }
             }
             choice.string("finish_reason")?.let { reason ->
@@ -204,11 +242,23 @@ class OpenAIChatProvider(
             stream.push(ThinkingEnd(index, (blocks[index] as ThinkingContent).thinking, snapshot()))
         }
         tools.values.forEach { tool ->
+            if (tool.customInputProperty != null) {
+                appendGrammarToolInputJsonDelta(
+                    requireNotNull(tool.grammarBuffer),
+                    requireNotNull(tool.customInputProperty),
+                    tool.customInput,
+                    close = true,
+                )?.let { delta ->
+                    blocks[tool.contentIndex] =
+                        ToolCall(tool.id, tool.name, tool.argumentsJson())
+                    stream.push(ToolCallDelta(tool.contentIndex, delta, snapshot()))
+                }
+            }
             val call =
                 ToolCall(
                     tool.id,
                     tool.name,
-                    parseJsonObjectOrEmpty(tool.arguments),
+                    tool.argumentsJson(),
                 )
             blocks[tool.contentIndex] = call
             stream.push(ToolCallEnd(tool.contentIndex, call, snapshot()))
@@ -226,7 +276,15 @@ class OpenAIChatProvider(
         var id: String,
         var name: String,
         var arguments: String = "",
-    )
+        var customInputProperty: String? = null,
+        var customInput: String = "",
+        var grammarBuffer: GrammarToolInputJsonBuffer? = null,
+    ) {
+        fun argumentsJson(): JsonObject =
+            customInputProperty?.let { property ->
+                buildJsonObject { put(property, customInput) }
+            } ?: parseJsonObjectOrEmpty(arguments)
+    }
 }
 
 internal fun buildOpenAIChatRequestBody(
@@ -235,6 +293,8 @@ internal fun buildOpenAIChatRequestBody(
     options: StreamOptions,
 ): JsonObject {
     val compat = openAIChatCompat(model)
+    val grammarToolInputProperties =
+        createGrammarToolInputProperties(context.tools, compat.supportsOpenAIGrammarTools)
     return buildJsonObject {
         put("model", model.id)
         put(
@@ -255,7 +315,7 @@ internal fun buildOpenAIChatRequestBody(
                         },
                     )
                 }
-                context.messages.forEach { add(openAIMessage(it)) }
+                context.messages.forEach { add(openAIMessage(it, grammarToolInputProperties)) }
             },
         )
         put("stream", true)
@@ -274,7 +334,11 @@ internal fun buildOpenAIChatRequestBody(
                 "tools",
                 JsonArray(
                     context.tools.map {
-                        openAITool(it, strict = false, includeStrict = compat.supportsStrictMode)
+                        openAITool(
+                            it,
+                            supportsStrictMode = compat.supportsStrictMode,
+                            supportsOpenAIGrammarTools = compat.supportsOpenAIGrammarTools,
+                        )
                     },
                 ),
             )
@@ -363,6 +427,7 @@ private data class OpenAIChatCompat(
     val supportsUsageInStreaming: Boolean,
     val maxTokensField: String,
     val supportsStrictMode: Boolean,
+    val supportsOpenAIGrammarTools: Boolean,
     val supportsReasoningEffort: Boolean,
     val thinkingFormat: String,
     val sendSessionAffinityHeaders: Boolean,
@@ -418,6 +483,7 @@ private fun openAIChatCompat(model: Model): OpenAIChatCompat {
             supportsUsageInStreaming = true,
             maxTokensField = if (useMaxTokens) "max_tokens" else "max_completion_tokens",
             supportsStrictMode = !isMoonshot && !isTogether && !isCloudflareGateway && !isNvidia,
+            supportsOpenAIGrammarTools = false,
             supportsReasoningEffort =
                 !isGrok &&
                     !isZai &&
@@ -446,6 +512,8 @@ private fun openAIChatCompat(model: Model): OpenAIChatCompat {
             raw.boolean("supportsUsageInStreaming") ?: detected.supportsUsageInStreaming,
         maxTokensField = raw.string("maxTokensField") ?: detected.maxTokensField,
         supportsStrictMode = raw.boolean("supportsStrictMode") ?: detected.supportsStrictMode,
+        supportsOpenAIGrammarTools =
+            raw.boolean("supportsOpenAIGrammarTools") ?: detected.supportsOpenAIGrammarTools,
         supportsReasoningEffort =
             raw.boolean("supportsReasoningEffort") ?: detected.supportsReasoningEffort,
         thinkingFormat = raw.string("thinkingFormat") ?: detected.thinkingFormat,
