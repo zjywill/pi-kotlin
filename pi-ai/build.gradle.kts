@@ -24,3 +24,10 @@ tasks.register<JavaExec>("providerPayloadOracle") {
     classpath = sourceSets["test"].runtimeClasspath
     mainClass = "works.earendil.pi.ai.providers.ProviderPayloadOracleKt"
 }
+
+tasks.register<JavaExec>("providerStreamEventOracle") {
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass = "works.earendil.pi.ai.providers.ProviderStreamEventOracleKt"
+    args(rootProject.file("migration/oracle/provider-stream-fixtures").absolutePath)
+}

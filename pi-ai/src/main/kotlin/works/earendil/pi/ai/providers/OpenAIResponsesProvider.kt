@@ -237,7 +237,18 @@ class OpenAIResponsesProvider(
                                             ?: content.jsonObject.string("refusal").orEmpty()
                                     }.orEmpty()
                             if (text.isNotEmpty()) {
-                                blocks[slot.contentIndex] = TextContent(text)
+                                blocks[slot.contentIndex] =
+                                    TextContent(
+                                        text = text,
+                                        textSignature =
+                                            buildJsonObject {
+                                                put("v", 1)
+                                                put("id", item.string("id").orEmpty())
+                                                item.string("phase")?.let { put("phase", it) }
+                                            }.let {
+                                                providerJson.encodeToString(JsonObject.serializer(), it)
+                                            },
+                                    )
                             }
                             stream.push(
                                 TextEnd(

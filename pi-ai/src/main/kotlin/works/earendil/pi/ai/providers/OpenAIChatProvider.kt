@@ -114,13 +114,21 @@ class OpenAIChatProvider(
             }
             val root = providerJson.parseToJsonElement(event.data).jsonObject
             root.obj("usage")?.let { rawUsage ->
+                val promptTokens = rawUsage.int("prompt_tokens") ?: 0
+                val promptDetails = rawUsage.obj("prompt_tokens_details")
+                val cacheRead =
+                    promptDetails?.int("cached_tokens")
+                        ?: rawUsage.int("prompt_cache_hit_tokens")
+                        ?: 0
+                val cacheWrite = promptDetails?.int("cache_write_tokens") ?: 0
                 usage =
                     calculateUsageCost(
                         model = model,
-                        input = rawUsage.int("prompt_tokens") ?: 0,
+                        input = (promptTokens - cacheRead - cacheWrite).coerceAtLeast(0),
                         output = rawUsage.int("completion_tokens") ?: 0,
-                        cacheRead = rawUsage.obj("prompt_tokens_details")?.int("cached_tokens") ?: 0,
-                        reasoning = rawUsage.obj("completion_tokens_details")?.int("reasoning_tokens"),
+                        cacheRead = cacheRead,
+                        cacheWrite = cacheWrite,
+                        reasoning = rawUsage.obj("completion_tokens_details")?.int("reasoning_tokens") ?: 0,
                     )
             }
             val choice = root.array("choices")?.firstOrNull()?.jsonObject ?: return@postSse
@@ -163,9 +171,9 @@ class OpenAIChatProvider(
                         blocks += ToolCall(created.id, created.name, JsonObject(emptyMap()))
                         stream.push(ToolCallStart(contentIndex, snapshot()))
                         created
-                    }
+                }
                 toolDelta.string("id")?.let { existing.id = it }
-                function?.string("name")?.let { existing.name += it }
+                function?.string("name")?.takeIf { existing.name.isEmpty() }?.let { existing.name = it }
                 function?.string("arguments")?.let { arguments ->
                     existing.arguments += arguments
                     blocks[existing.contentIndex] =

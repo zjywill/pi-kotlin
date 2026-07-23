@@ -21,9 +21,16 @@ Run the available comparisons from the Kotlin repository:
 ./migration/oracle/compare-cli-help.sh
 ./migration/oracle/compare-coding-message-projection.sh
 ./migration/oracle/compare-provider-payloads.sh
+./migration/oracle/compare-provider-stream-events.sh
 ./migration/oracle/compare-session-jsonl.sh
 ```
 
 Normalizers may remove absolute paths, timestamps, and version strings. They
 must not remove flags, event ordering, message content, error categories, or
 serialized fields.
+
+The provider stream comparison projects the documented public event transcript:
+event type, index, delta/end content, tool calls, and terminal messages. It does
+not compare `partial` object snapshots because the TypeScript implementation
+queues mutable references whose observed historical state depends on consumer
+timing.

@@ -80,7 +80,11 @@ class ProviderFixtureTest {
                 assertEquals("hello world", result.content.filterIsInstance<TextContent>().single().text)
                 assertEquals("ok", result.content.filterIsInstance<ToolCall>().single().arguments["value"]
                     ?.let { (it as kotlinx.serialization.json.JsonPrimitive).content })
+                assertEquals("echo", result.content.filterIsInstance<ToolCall>().single().name)
+                assertEquals(8, result.usage.input)
                 assertEquals(2, result.usage.cacheRead)
+                assertEquals(0, result.usage.reasoning)
+                assertEquals(14, result.usage.totalTokens)
                 assertTrue(events.last() is AssistantDone)
                 assertTrue(fixture.requestBody.contains("\"tools\""))
             } finally {
@@ -149,9 +153,15 @@ class ProviderFixtureTest {
                 assertEquals(StopReason.TOOL_USE, result.stopReason)
                 assertEquals("hello", (result.content[0] as TextContent).text)
                 assertEquals("echo", (result.content[1] as ToolCall).name)
+                assertEquals(
+                    "ok",
+                    ((result.content[1] as ToolCall).arguments["value"] as kotlinx.serialization.json.JsonPrimitive)
+                        .content,
+                )
                 assertEquals("msg-1", result.responseId)
                 assertEquals(7, result.usage.input)
                 assertEquals(5, result.usage.output)
+                assertEquals(0, result.usage.cacheWrite1h)
                 assertTrue(fixture.requestBody.contains("\"max_tokens\""))
             } finally {
                 fixture.close()
@@ -200,6 +210,10 @@ class ProviderFixtureTest {
                     ).result()
 
                 assertEquals("hello", (result.content.single() as TextContent).text)
+                assertEquals(
+                    """{"v":1,"id":"msg-1"}""",
+                    (result.content.single() as TextContent).textSignature,
+                )
                 assertEquals("resp-1", result.responseId)
                 assertEquals(10, result.usage.input)
                 assertEquals(2, result.usage.cacheRead)

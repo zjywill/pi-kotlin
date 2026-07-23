@@ -1,0 +1,5 @@
+data: {"responseId":"google-1","candidates":[{"content":{"parts":[{"text":"think","thought":true,"thoughtSignature":"sig"}]}}]}
+
+data: {"candidates":[{"content":{"parts":[{"text":"answer"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":9,"candidatesTokenCount":2,"thoughtsTokenCount":1,"cachedContentTokenCount":3,"totalTokenCount":12}}
+
+data: {"candidates":[{"content":{"parts":[{"functionCall":{"id":"call-1","name":"echo","args":{"value":"ok"}}}]},"finishReason":"STOP"}]}

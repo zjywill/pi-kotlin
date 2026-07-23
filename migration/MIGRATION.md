@@ -67,7 +67,7 @@ features outside that slice remain migration work.
 | Gradle multi-module build | Functional slice | Six JVM 21 modules; `clean test installDist` passes with warnings as errors |
 | Core AI messages and stream protocol | Functional slice | Message, event-stream, UUIDv7, tool validation, and faux-provider tests |
 | Model catalog | Functional slice | Pinned schema-v2 manifest and 37 provider files verify by SHA-256; 1,108 model records load, with 821 models exposed across 29 providers whose protocols and authentication are currently executable |
-| Provider HTTP implementations | Partial | Google Generative AI, Anthropic Messages, OpenAI Chat Completions, and OpenAI Responses request/stream fixture tests, independent base/reasoning payload parity, and multi-protocol catalog dispatch |
+| Provider HTTP implementations | Partial | Google Generative AI, Anthropic Messages, OpenAI Chat Completions, and OpenAI Responses request/stream fixture tests, independent base/reasoning payload and public stream-transcript parity, and multi-protocol catalog dispatch |
 | Agent loop | Functional slice | Streaming, tool calls, parallel execution, steering, follow-up, abort, and session tests using the faux provider; coding-message projection has independent parity for bash/custom/branch/compaction messages |
 | CLI argument contract | Partial | Parser tests and byte-for-byte `--help` oracle against the pinned TypeScript CLI; provider-prefixed and slash-containing model IDs plus thinking suffixes are covered |
 | Prompt and context resources | Partial | Global and ancestor `AGENTS.md`/`CLAUDE.md` discovery, `SYSTEM.md`/`APPEND_SYSTEM.md`, CLI overrides, trust gating, and `--no-context-files` tests |
@@ -92,6 +92,10 @@ Verified on July 23, 2026 against source commit
 - `./migration/oracle/compare-provider-payloads.sh`: passed with exact normalized
   JSON parity for OpenAI Chat Completions, OpenAI Responses, Anthropic Messages,
   and Google Generative AI base and reasoning requests.
+- `./migration/oracle/compare-provider-stream-events.sh`: passed with normalized
+  public transcript parity for event ordering, text/thinking/tool deltas and
+  endings, terminal messages, usage, stop reasons, and replay signatures across
+  the same four provider protocols.
 - `./migration/oracle/compare-coding-message-projection.sh`: passed with
   normalized JSON parity for ordinary messages, custom messages, branch and
   compaction summaries, bash formatting, and `excludeFromContext` filtering.
@@ -116,7 +120,7 @@ Verified on July 23, 2026 against source commit
 - Implement the remaining provider protocols and authentication wrappers:
   Bedrock, Azure OpenAI, Google Vertex, Mistral, OpenAI Codex, Cloudflare, and
   GitHub Copilot/OAuth.
-- Add provider request/stream fixture parity for all supported protocols and
+- Extend request/stream parity as the remaining provider protocols land, and add
   opt-in live provider smoke tests.
 - Port extensions, skills, prompt templates, themes, package management,
   persisted project trust, resource reload, and related CLI commands.

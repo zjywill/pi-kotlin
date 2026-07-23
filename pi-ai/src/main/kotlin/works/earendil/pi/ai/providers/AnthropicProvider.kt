@@ -132,6 +132,12 @@ class AnthropicProvider(
                             rawUsage?.int("output_tokens") ?: 0,
                             rawUsage?.int("cache_read_input_tokens") ?: 0,
                             rawUsage?.int("cache_creation_input_tokens") ?: 0,
+                        ).copy(
+                            cacheWrite1h =
+                                rawUsage
+                                    ?.obj("cache_creation")
+                                    ?.int("ephemeral_1h_input_tokens")
+                                    ?: 0,
                         )
                 }
 
@@ -166,10 +172,7 @@ class AnthropicProvider(
                         }
 
                         "tool_use" -> {
-                            toolArguments[providerIndex] =
-                                block.obj("input")?.let {
-                                    providerJson.encodeToString(JsonObject.serializer(), it)
-                                }.orEmpty()
+                            toolArguments[providerIndex] = ""
                             blocks +=
                                 ToolCall(
                                     id = block.string("id").orEmpty(),
@@ -258,7 +261,7 @@ class AnthropicProvider(
                                 rawUsage.int("cache_read_input_tokens") ?: usage.cacheRead,
                                 rawUsage.int("cache_creation_input_tokens") ?: usage.cacheWrite,
                                 rawUsage.obj("output_tokens_details")?.int("thinking_tokens"),
-                            )
+                            ).copy(cacheWrite1h = usage.cacheWrite1h)
                     }
                 }
             }
