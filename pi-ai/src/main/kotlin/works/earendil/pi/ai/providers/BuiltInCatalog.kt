@@ -85,6 +85,14 @@ private class CatalogProvider(
                             apiKeyEnvNames = apiKeyEnvNames,
                         )
 
+                    "azure-openai-responses" ->
+                        AzureOpenAIResponsesProvider(
+                            id = id,
+                            name = name,
+                            models = apiModels,
+                            apiKeyEnvNames = apiKeyEnvNames,
+                        )
+
                     "anthropic-messages" ->
                         AnthropicProvider(
                             id = id,
@@ -185,6 +193,7 @@ private const val CATALOG_RESOURCE_ROOT = "/works/earendil/pi/ai/providers/data"
 private val SUPPORTED_APIS =
     setOf(
         "anthropic-messages",
+        "azure-openai-responses",
         "google-generative-ai",
         "openai-completions",
         "openai-responses",
@@ -199,6 +208,7 @@ private val PROVIDER_NAMES =
     mapOf(
         "ant-ling" to "Ant Ling",
         "anthropic" to "Anthropic",
+        "azure-openai-responses" to "Azure OpenAI",
         "cerebras" to "Cerebras",
         "deepseek" to "DeepSeek",
         "fireworks" to "Fireworks",
@@ -231,6 +241,7 @@ private val PROVIDER_API_KEY_ENV_NAMES =
     mapOf(
         "ant-ling" to listOf("ANT_LING_API_KEY"),
         "anthropic" to listOf("ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"),
+        "azure-openai-responses" to listOf("AZURE_OPENAI_API_KEY"),
         "cerebras" to listOf("CEREBRAS_API_KEY"),
         "deepseek" to listOf("DEEPSEEK_API_KEY"),
         "fireworks" to listOf("FIREWORKS_API_KEY"),

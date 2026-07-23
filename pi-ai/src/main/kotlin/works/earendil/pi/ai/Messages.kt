@@ -403,7 +403,13 @@ data class StreamOptions(
     val metadata: JsonObject? = null,
     val env: Map<String, String> = emptyMap(),
     val reasoning: ThinkingLevel? = null,
+    val reasoningEffort: String? = null,
+    val reasoningSummary: String? = null,
     val thinkingBudgets: ThinkingBudgets? = null,
+    val azureApiVersion: String? = null,
+    val azureResourceName: String? = null,
+    val azureBaseUrl: String? = null,
+    val azureDeploymentName: String? = null,
 )
 
 data class SimpleStreamOptions(

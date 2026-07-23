@@ -9,6 +9,7 @@ const apiNames = [
 	"openai-completions",
 	"anthropic-messages",
 	"openai-responses",
+	"azure-openai-responses",
 	"google-generative-ai",
 ] as const;
 const modules = new Map(
@@ -22,12 +23,19 @@ const modules = new Map(
 
 const output: Record<string, unknown> = {};
 for (const api of apiNames) {
-	output[api] = await captureEvents(api);
+	const capture = await captureEvents(api);
+	output[api] = capture.events;
+	if (api === "azure-openai-responses") {
+		output["azure-openai-responses-request"] = capture.request;
+	}
 }
 console.log(JSON.stringify(output));
 
-async function captureEvents(api: (typeof apiNames)[number]): Promise<unknown[]> {
-	const response = readFileSync(join(fixtureDir, `${api}.sse`), "utf8") + "\n";
+async function captureEvents(
+	api: (typeof apiNames)[number],
+): Promise<{ events: unknown[]; request: FixtureRequest }> {
+	const fixture = api === "azure-openai-responses" ? "openai-responses" : api;
+	const response = readFileSync(join(fixtureDir, `${fixture}.sse`), "utf8") + "\n";
 	return withFixtureServer(response, async (baseUrl) => {
 		const module = modules.get(api)!;
 		const model = fixtureModel(api, baseUrl);
@@ -35,6 +43,13 @@ async function captureEvents(api: (typeof apiNames)[number]): Promise<unknown[]>
 			apiKey: "test",
 			cacheRetention: "none",
 			maxRetries: 0,
+			...(api === "azure-openai-responses"
+				? {
+						azureBaseUrl: `${baseUrl}/proxy?tenant=one`,
+						azureApiVersion: "2026-07-01-preview",
+						azureDeploymentName: "fixture-deployment",
+					}
+				: {}),
 		});
 		const events: unknown[] = [];
 		for await (const event of stream) {
@@ -43,6 +58,12 @@ async function captureEvents(api: (typeof apiNames)[number]): Promise<unknown[]>
 		await stream.result();
 		return events;
 	});
+}
+
+interface FixtureRequest {
+	url: string;
+	apiKey: string | null;
+	hasAuthorization: boolean;
 }
 
 function canonicalEvent(event: Record<string, unknown>): Record<string, unknown> {
@@ -90,8 +111,8 @@ function fixtureModel(api: string, baseUrl: string): Record<string, unknown> {
 		id: "fixture",
 		name: "Fixture",
 		api,
-		provider: "fixture",
-		baseUrl,
+		provider: api === "azure-openai-responses" ? "azure-openai-responses" : "fixture",
+		baseUrl: api === "azure-openai-responses" ? "" : baseUrl,
 		reasoning: false,
 		input: ["text"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -131,8 +152,17 @@ function normalizeDynamicValues(value: unknown, key?: string): unknown {
 	return value;
 }
 
-async function withFixtureServer<T>(response: string, run: (baseUrl: string) => Promise<T>): Promise<T> {
+async function withFixtureServer<T>(
+	response: string,
+	run: (baseUrl: string) => Promise<T>,
+): Promise<{ events: T; request: FixtureRequest }> {
+	let capturedRequest: FixtureRequest | undefined;
 	const server = createServer((request, reply) => {
+		capturedRequest = {
+			url: request.url ?? "",
+			apiKey: typeof request.headers["api-key"] === "string" ? request.headers["api-key"] : null,
+			hasAuthorization: typeof request.headers.authorization === "string",
+		};
 		request.resume();
 		reply.writeHead(200, {
 			"content-type": "text/event-stream",
@@ -149,7 +179,11 @@ async function withFixtureServer<T>(response: string, run: (baseUrl: string) => 
 		if (!address || typeof address === "string") {
 			throw new Error("Fixture server did not expose a TCP port");
 		}
-		return await run(`http://127.0.0.1:${address.port}`);
+		const events = await run(`http://127.0.0.1:${address.port}`);
+		if (!capturedRequest) {
+			throw new Error("Fixture server did not receive a request");
+		}
+		return { events, request: capturedRequest };
 	} finally {
 		await new Promise<void>((resolve, reject) => {
 			server.close((error) => (error ? reject(error) : resolve()));

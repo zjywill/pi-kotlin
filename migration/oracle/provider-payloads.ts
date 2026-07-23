@@ -5,6 +5,7 @@ const sourceRoot = process.env.PI_TYPESCRIPT_ROOT ?? "/Users/junyizhang/Git/pi";
 const apiNames = [
 	"openai-completions",
 	"openai-responses",
+	"azure-openai-responses",
 	"anthropic-messages",
 	"google-generative-ai",
 ] as const;
@@ -40,8 +41,13 @@ for (const api of apiNames) {
 		id: "fixture",
 		name: "Fixture",
 		api,
-		provider: api === "google-generative-ai" ? "google" : "fixture",
-		baseUrl: "https://fixture.invalid/v1",
+		provider:
+			api === "google-generative-ai"
+				? "google"
+				: api === "azure-openai-responses"
+					? "azure-openai-responses"
+					: "fixture",
+		baseUrl: api === "azure-openai-responses" ? "" : "https://fixture.invalid/v1",
 		reasoning: false,
 		input: ["text"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -53,6 +59,13 @@ for (const api of apiNames) {
 		cacheRetention: "none",
 		maxTokens: 123,
 		temperature: 0.25,
+		...(api === "azure-openai-responses"
+			? {
+					azureBaseUrl: "https://fixture.invalid/v1",
+					azureDeploymentName: "fixture-deployment",
+					sessionId: "x".repeat(67),
+				}
+			: {}),
 	});
 }
 
@@ -65,6 +78,24 @@ payloads["openai-responses-reasoning"] = await capturePayload(
 	},
 	{ apiKey: "test", cacheRetention: "none", maxTokens: 123, reasoning: "high" },
 	true,
+);
+payloads["azure-openai-responses-reasoning"] = await capturePayload(
+	"azure-openai-responses",
+	{
+		...fixtureModel("azure-openai-responses", "azure-openai-responses"),
+		baseUrl: "",
+		reasoning: true,
+		thinkingLevelMap: { off: "none", high: "high" },
+	},
+	{
+		apiKey: "test",
+		cacheRetention: "none",
+		maxTokens: 123,
+		reasoningEffort: "high",
+		reasoningSummary: "detailed",
+		azureBaseUrl: "https://fixture.invalid/v1",
+		azureDeploymentName: "reasoning-deployment",
+	},
 );
 payloads["anthropic-messages-reasoning"] = await capturePayload(
 	"anthropic-messages",

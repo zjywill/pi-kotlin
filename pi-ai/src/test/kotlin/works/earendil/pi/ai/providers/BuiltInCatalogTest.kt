@@ -36,7 +36,6 @@ class BuiltInCatalogTest {
         assertEquals("max", sol.thinkingLevelMap[works.earendil.pi.ai.ModelThinkingLevel.MAX])
         assertEquals(
             setOf(
-                "azure-openai-responses",
                 "bedrock-converse-stream",
                 "google-vertex",
                 "mistral-conversations",
@@ -51,14 +50,30 @@ class BuiltInCatalogTest {
         val providers = builtInProviders()
         val ids = providers.map { it.id }.toSet()
 
-        assertEquals(29, providers.size)
-        assertTrue(ids.containsAll(setOf("anthropic", "deepseek", "google", "openai", "openrouter", "xai")))
+        assertEquals(30, providers.size)
+        assertEquals(867, providers.sumOf { it.getModels().size })
+        assertTrue(
+            ids.containsAll(
+                setOf(
+                    "anthropic",
+                    "azure-openai-responses",
+                    "deepseek",
+                    "google",
+                    "openai",
+                    "openrouter",
+                    "xai",
+                ),
+            ),
+        )
         assertFalse("amazon-bedrock" in ids)
         assertFalse("cloudflare-ai-gateway" in ids)
         assertFalse("cloudflare-workers-ai" in ids)
         assertFalse("github-copilot" in ids)
         assertFalse("mistral" in ids)
         assertFalse("openai-codex" in ids)
+        val azure = providers.single { it.id == "azure-openai-responses" }
+        assertEquals("Azure OpenAI", azure.name)
+        assertEquals(46, azure.getModels().size)
         assertTrue(providers.flatMap(works.earendil.pi.ai.Provider::getModels).all { it.api in SUPPORTED_TEST_APIS })
     }
 
@@ -140,6 +155,7 @@ class BuiltInCatalogTest {
         val SUPPORTED_TEST_APIS =
             setOf(
                 "anthropic-messages",
+                "azure-openai-responses",
                 "google-generative-ai",
                 "openai-completions",
                 "openai-responses",

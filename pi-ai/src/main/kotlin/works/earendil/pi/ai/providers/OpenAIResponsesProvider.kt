@@ -58,11 +58,26 @@ class OpenAIResponsesProvider(
         model: Model,
         context: Context,
         options: StreamOptions,
+    ): AssistantMessageEventStream =
+        streamWithRequest(model, context, options) {
+            val apiKey = resolveApiKey(id, options.apiKey, options.env, apiKeyEnvNames)
+            OpenAIResponsesHttpRequest(
+                url = "${model.baseUrl.trimEnd('/')}/responses",
+                modelId = model.id,
+                headers = mapOf("authorization" to "Bearer $apiKey"),
+            )
+        }
+
+    internal fun streamWithRequest(
+        model: Model,
+        context: Context,
+        options: StreamOptions,
+        request: () -> OpenAIResponsesHttpRequest,
     ): AssistantMessageEventStream {
         val stream = createAssistantMessageEventStream()
         providerScope.launch {
             runCatching {
-                execute(model, context, options, stream)
+                execute(model, context, options, request(), stream)
             }.onFailure { error ->
                 stream.push(
                     AssistantError(
@@ -86,13 +101,21 @@ class OpenAIResponsesProvider(
         model: Model,
         context: Context,
         options: StreamOptions,
+        request: OpenAIResponsesHttpRequest,
         stream: AssistantMessageEventStream,
     ) {
-        val apiKey = resolveApiKey(id, options.apiKey, options.env, apiKeyEnvNames)
-        val body = requestBody(model, context, options)
+        val body =
+            requestBody(
+                model,
+                context,
+                options,
+                request.modelId,
+                request.promptCacheWhenDisabled,
+            )
 
         val blocks = mutableListOf<works.earendil.pi.ai.ContentBlock>()
         val slots = mutableMapOf<Int, Slot>()
+        val reasoningBlocksById = mutableMapOf<String, Int>()
         var responseId: String? = null
         var usage = Usage()
         var stopReason = StopReason.STOP
@@ -155,10 +178,10 @@ class OpenAIResponsesProvider(
         stream.push(AssistantStart(snapshot()))
         postSse(
             client,
-            "${model.baseUrl.trimEnd('/')}/responses",
+            request.url,
             providerJson.encodeToString(JsonObject.serializer(), body),
             mergedHeaders(
-                mapOf("authorization" to "Bearer $apiKey"),
+                request.headers,
                 model.headers,
                 options.headers,
             ),
@@ -220,9 +243,16 @@ class OpenAIResponsesProvider(
                 "response.function_call_arguments.done" -> {
                     val outputIndex = event.int("output_index") ?: return@postSse
                     val slot = slots[outputIndex] as? Slot.Tool ?: return@postSse
-                    slot.arguments = event.string("arguments") ?: slot.arguments
+                    val previous = slot.arguments
+                    slot.arguments = event.string("arguments") ?: previous
                     blocks[slot.contentIndex] =
                         ToolCall(slot.id, slot.name, parseJsonObjectOrEmpty(slot.arguments))
+                    if (slot.arguments.startsWith(previous)) {
+                        val delta = slot.arguments.removePrefix(previous)
+                        if (delta.isNotEmpty()) {
+                            stream.push(ToolCallDelta(slot.contentIndex, delta, snapshot()))
+                        }
+                    }
                 }
 
                 "response.output_item.done" -> {
@@ -260,17 +290,22 @@ class OpenAIResponsesProvider(
                         }
 
                         is Slot.Thinking -> {
-                            val thinking =
+                            val summary =
                                 item.array("summary")
+                                    ?.joinToString("\n\n") { it.jsonObject.string("text").orEmpty() }
+                                    .orEmpty()
+                            val content =
+                                item.array("content")
                                     ?.joinToString("\n\n") { it.jsonObject.string("text").orEmpty() }
                                     .orEmpty()
                             val current = blocks[slot.contentIndex] as ThinkingContent
                             blocks[slot.contentIndex] =
                                 current.copy(
-                                    thinking = thinking.ifEmpty { current.thinking },
+                                    thinking = summary.ifEmpty { content }.ifEmpty { current.thinking },
                                     thinkingSignature =
                                         providerJson.encodeToString(JsonObject.serializer(), item),
                                 )
+                            item.string("id")?.let { reasoningBlocksById[it] = slot.contentIndex }
                             stream.push(
                                 ThinkingEnd(
                                     slot.contentIndex,
@@ -303,11 +338,33 @@ class OpenAIResponsesProvider(
                     sawTerminal = true
                     val response = event.obj("response") ?: JsonObject(emptyMap())
                     responseId = response.string("id") ?: responseId
+                    response.array("output")
+                        ?.mapNotNull { it as? JsonObject }
+                        ?.filter { it.string("type") == "reasoning" }
+                        ?.forEach { item ->
+                            val encryptedContent = item.string("encrypted_content") ?: return@forEach
+                            val contentIndex = reasoningBlocksById[item.string("id")] ?: return@forEach
+                            val current = blocks[contentIndex] as? ThinkingContent ?: return@forEach
+                            val signature =
+                                current.thinkingSignature
+                                    ?.let { runCatching { providerJson.parseToJsonElement(it).jsonObject }.getOrNull() }
+                                    ?: return@forEach
+                            if (signature.string("encrypted_content") == null) {
+                                blocks[contentIndex] =
+                                    current.copy(
+                                        thinkingSignature =
+                                            providerJson.encodeToString(
+                                                JsonObject.serializer(),
+                                                JsonObject(signature + ("encrypted_content" to kotlinx.serialization.json.JsonPrimitive(encryptedContent))),
+                                            ),
+                                    )
+                            }
+                        }
                     val rawUsage = response.obj("usage")
                     val details = rawUsage?.obj("input_tokens_details")
                     val cached = details?.int("cached_tokens") ?: 0
                     val cacheWrite = details?.int("cache_write_tokens") ?: 0
-                    usage =
+                    val calculatedUsage =
                         calculateUsageCost(
                             model,
                             ((rawUsage?.int("input_tokens") ?: 0) - cached - cacheWrite).coerceAtLeast(0),
@@ -315,6 +372,10 @@ class OpenAIResponsesProvider(
                             cached,
                             cacheWrite,
                             rawUsage?.obj("output_tokens_details")?.int("reasoning_tokens"),
+                        )
+                    usage =
+                        calculatedUsage.copy(
+                            totalTokens = rawUsage?.int("total_tokens") ?: calculatedUsage.totalTokens,
                         )
                     stopReason =
                         when (response.string("status")) {
@@ -350,12 +411,16 @@ class OpenAIResponsesProvider(
         model: Model,
         context: Context,
         options: StreamOptions,
+        requestModelId: String = model.id,
+        promptCacheWhenDisabled: Boolean = false,
     ): JsonObject =
         buildOpenAIResponsesRequestBodyFromInput(
             model,
             context,
             options,
             responseInput(model, context),
+            requestModelId,
+            promptCacheWhenDisabled,
         )
 
     private fun responseInput(
@@ -518,10 +583,19 @@ class OpenAIResponsesProvider(
     }
 }
 
+internal data class OpenAIResponsesHttpRequest(
+    val url: String,
+    val modelId: String,
+    val headers: Map<String, String>,
+    val promptCacheWhenDisabled: Boolean = false,
+)
+
 internal fun buildOpenAIResponsesRequestBody(
     model: Model,
     context: Context,
     options: StreamOptions,
+    requestModelId: String = model.id,
+    promptCacheWhenDisabled: Boolean = false,
 ): JsonObject {
     val provider =
         OpenAIResponsesProvider(
@@ -531,7 +605,7 @@ internal fun buildOpenAIResponsesRequestBody(
             models = listOf(model),
             apiKeyEnvNames = emptyList(),
         )
-    return provider.requestBody(model, context, options)
+    return provider.requestBody(model, context, options, requestModelId, promptCacheWhenDisabled)
 }
 
 private fun buildOpenAIResponsesRequestBodyFromInput(
@@ -539,13 +613,18 @@ private fun buildOpenAIResponsesRequestBodyFromInput(
     context: Context,
     options: StreamOptions,
     input: JsonArray,
+    requestModelId: String,
+    promptCacheWhenDisabled: Boolean,
 ): JsonObject =
     buildJsonObject {
-        put("model", model.id)
+        put("model", requestModelId)
         put("input", input)
         put("stream", true)
         options.sessionId
-            ?.takeIf { options.cacheRetention != works.earendil.pi.ai.CacheRetention.NONE }
+            ?.takeIf {
+                promptCacheWhenDisabled ||
+                    options.cacheRetention != works.earendil.pi.ai.CacheRetention.NONE
+            }
             ?.let { put("prompt_cache_key", it.take(64)) }
         put("store", false)
         options.maxTokens?.let { put("max_output_tokens", it.coerceAtLeast(16)) }
@@ -569,13 +648,21 @@ private fun buildOpenAIResponsesRequestBodyFromInput(
             )
         }
         if (model.reasoning) {
-            val effort = options.reasoning?.let(model::mappedThinkingLevel)
+            val effort =
+                options.reasoningEffort
+                    ?.let { requested ->
+                        works.earendil.pi.ai.ModelThinkingLevel.entries
+                            .firstOrNull { it.name.equals(requested, ignoreCase = true) }
+                            ?.let { model.thinkingLevelMap[it] ?: requested }
+                            ?: requested
+                    }
+                    ?: options.reasoning?.let(model::mappedThinkingLevel)
             if (effort != null && effort != "off") {
                 put(
                     "reasoning",
                     buildJsonObject {
                         put("effort", effort)
-                        put("summary", "auto")
+                        put("summary", options.reasoningSummary ?: "auto")
                     },
                 )
                 put("include", JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive("reasoning.encrypted_content"))))

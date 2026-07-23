@@ -34,3 +34,9 @@ event type, index, delta/end content, tool calls, and terminal messages. It does
 not compare `partial` object snapshots because the TypeScript implementation
 queues mutable references whose observed historical state depends on consumer
 timing.
+
+Provider payload and stream comparisons cover OpenAI Chat Completions, OpenAI
+Responses, Azure OpenAI Responses, Anthropic Messages, and Google Generative AI.
+Azure reuses the OpenAI Responses stream fixture while independently exercising
+its deployment-name payload contract plus the actual request URL, API-version
+query, API-key header, and absence of Bearer authorization.

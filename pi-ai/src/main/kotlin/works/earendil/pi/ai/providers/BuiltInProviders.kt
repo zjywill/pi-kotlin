@@ -16,6 +16,16 @@ fun openAIProvider(
         apiKeyEnvNames = listOf("OPENAI_API_KEY"),
     )
 
+fun azureOpenAIResponsesProvider(
+    models: List<Model> = builtInModels("azure-openai-responses"),
+): AzureOpenAIResponsesProvider =
+    AzureOpenAIResponsesProvider(
+        id = "azure-openai-responses",
+        name = "Azure OpenAI",
+        models = models,
+        apiKeyEnvNames = listOf("AZURE_OPENAI_API_KEY"),
+    )
+
 fun googleProvider(
     models: List<Model> =
         builtInModels("google").filter { it.api == "google-generative-ai" },

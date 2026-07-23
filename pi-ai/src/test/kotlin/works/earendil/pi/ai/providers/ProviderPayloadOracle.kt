@@ -58,6 +58,21 @@ fun main() {
                 buildOpenAIResponsesRequestBody(fixtureModel("openai-responses"), context, options),
             )
             put(
+                "azure-openai-responses",
+                buildAzureOpenAIResponsesRequestBody(
+                    fixtureModel(
+                        "azure-openai-responses",
+                        provider = "azure-openai-responses",
+                    ).copy(baseUrl = ""),
+                    context,
+                    options.copy(
+                        sessionId = "x".repeat(67),
+                        azureBaseUrl = "https://fixture.invalid/v1",
+                        azureDeploymentName = "fixture-deployment",
+                    ),
+                ),
+            )
+            put(
                 "anthropic-messages",
                 buildAnthropicRequestBody(fixtureModel("anthropic-messages"), context, options),
             )
@@ -93,6 +108,31 @@ fun main() {
                     ),
                     context,
                     options.copy(temperature = null, reasoning = ThinkingLevel.HIGH),
+                ),
+            )
+            put(
+                "azure-openai-responses-reasoning",
+                buildAzureOpenAIResponsesRequestBody(
+                    fixtureModel(
+                        "azure-openai-responses",
+                        provider = "azure-openai-responses",
+                    ).copy(
+                        baseUrl = "",
+                        reasoning = true,
+                        thinkingLevelMap =
+                            mapOf(
+                                ModelThinkingLevel.OFF to "none",
+                                ModelThinkingLevel.HIGH to "high",
+                            ),
+                    ),
+                    context,
+                    options.copy(
+                        temperature = null,
+                        reasoningEffort = "high",
+                        reasoningSummary = "detailed",
+                        azureBaseUrl = "https://fixture.invalid/v1",
+                        azureDeploymentName = "reasoning-deployment",
+                    ),
                 ),
             )
             put(
