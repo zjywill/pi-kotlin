@@ -1,0 +1,261 @@
+package works.earendil.pi.ai.providers
+
+import java.security.MessageDigest
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import works.earendil.pi.ai.AssistantMessageEventStream
+import works.earendil.pi.ai.Context
+import works.earendil.pi.ai.Model
+import works.earendil.pi.ai.Models
+import works.earendil.pi.ai.Provider
+import works.earendil.pi.ai.StreamOptions
+
+data class BuiltInCatalogSnapshot(
+    val schemaVersion: Int,
+    val structureHash: String,
+    val modelsByProvider: Map<String, List<Model>>,
+    val unsupportedApis: Set<String>,
+)
+
+fun builtInCatalog(): BuiltInCatalogSnapshot = CatalogHolder.snapshot
+
+fun builtInModels(provider: String): List<Model> = builtInCatalog().modelsByProvider[provider].orEmpty()
+
+fun builtInProviders(): List<Provider> =
+    builtInCatalog()
+        .modelsByProvider
+        .mapNotNull { (providerId, models) ->
+            val supportedModels =
+                if (providerId in SPECIAL_AUTH_PROVIDERS) {
+                    emptyList()
+                } else {
+                    models.filter { it.api in SUPPORTED_APIS }
+                }
+            supportedModels
+                .takeIf(List<Model>::isNotEmpty)
+                ?.let {
+                    CatalogProvider(
+                        id = providerId,
+                        name = PROVIDER_NAMES[providerId] ?: providerId.toDisplayName(),
+                        models = it,
+                        apiKeyEnvNames = PROVIDER_API_KEY_ENV_NAMES[providerId] ?: defaultApiKeyNames(providerId),
+                    )
+                }
+        }
+        .sortedBy(Provider::id)
+
+fun builtInModelsCollection(): Models = Models(builtInProviders())
+
+private object CatalogHolder {
+    val snapshot: BuiltInCatalogSnapshot by lazy(::loadCatalog)
+}
+
+private class CatalogProvider(
+    override val id: String,
+    override val name: String,
+    private val models: List<Model>,
+    apiKeyEnvNames: List<String>,
+) : Provider {
+    override val baseUrl: String? = models.firstOrNull()?.baseUrl
+
+    private val delegates: Map<String, Provider> =
+        models
+            .groupBy(Model::api)
+            .mapValues { (api, apiModels) ->
+                when (api) {
+                    "openai-completions" ->
+                        OpenAIChatProvider(
+                            id = id,
+                            name = name,
+                            baseUrl = apiModels.first().baseUrl,
+                            models = apiModels,
+                            apiKeyEnvNames = apiKeyEnvNames,
+                        )
+
+                    "openai-responses" ->
+                        OpenAIResponsesProvider(
+                            id = id,
+                            name = name,
+                            baseUrl = apiModels.first().baseUrl,
+                            models = apiModels,
+                            apiKeyEnvNames = apiKeyEnvNames,
+                        )
+
+                    "anthropic-messages" ->
+                        AnthropicProvider(
+                            id = id,
+                            name = name,
+                            baseUrl = apiModels.first().baseUrl,
+                            models = apiModels,
+                            apiKeyEnvNames = apiKeyEnvNames,
+                        )
+
+                    "google-generative-ai" ->
+                        GoogleProvider(
+                            id = id,
+                            name = name,
+                            baseUrl = apiModels.first().baseUrl,
+                            models = apiModels,
+                            apiKeyEnvNames = apiKeyEnvNames,
+                        )
+
+                    else -> error("Unsupported catalog API: $api")
+                }
+            }
+
+    override fun getModels(): List<Model> = models
+
+    override suspend fun stream(
+        model: Model,
+        context: Context,
+        options: StreamOptions,
+    ): AssistantMessageEventStream =
+        requireNotNull(delegates[model.api]) {
+            "Provider $id does not support API ${model.api}"
+        }.stream(model, context, options)
+}
+
+private fun loadCatalog(): BuiltInCatalogSnapshot {
+    val manifestBytes = readCatalogResource(".manifest.json")
+    val manifest = providerJson.parseToJsonElement(manifestBytes.decodeToString()).jsonObject
+    val expectedFiles = manifest.getValue("files").jsonObject
+    val modelsByProvider = linkedMapOf<String, List<Model>>()
+    val unsupportedApis = linkedSetOf<String>()
+
+    expectedFiles.entries.sortedBy(Map.Entry<String, *>::key).forEach { (fileName, hashValue) ->
+        val bytes = readCatalogResource(fileName)
+        val expectedHash = hashValue.jsonPrimitive.content
+        require(bytes.sha256() == expectedHash) {
+            "Built-in model catalog checksum mismatch: $fileName"
+        }
+        val providerId = fileName.removeSuffix(".json")
+        val groups = providerJson.parseToJsonElement(bytes.decodeToString()).jsonObject
+        val models =
+            groups.flatMap { (api, rawModels) ->
+                if (api !in SUPPORTED_APIS) {
+                    unsupportedApis += api
+                }
+                rawModels.jsonObject.values.map { rawModel ->
+                    providerJson.decodeFromJsonElement(Model.serializer(), rawModel)
+                }
+            }
+        require(models.all { it.provider == providerId }) {
+            "Built-in model catalog provider mismatch: $providerId"
+        }
+        require(models.map(Model::id).distinct().size == models.size) {
+            "Built-in model catalog contains duplicate model ids: $providerId"
+        }
+        modelsByProvider[providerId] = models
+    }
+
+    return BuiltInCatalogSnapshot(
+        schemaVersion = manifest.getValue("schemaVersion").jsonPrimitive.int,
+        structureHash = manifest.getValue("structureHash").jsonPrimitive.contentOrNull.orEmpty(),
+        modelsByProvider = modelsByProvider,
+        unsupportedApis = unsupportedApis,
+    )
+}
+
+private fun readCatalogResource(fileName: String): ByteArray {
+    val resource = "$CATALOG_RESOURCE_ROOT/$fileName"
+    return requireNotNull(BuiltInCatalogSnapshot::class.java.getResourceAsStream(resource)) {
+        "Missing built-in model catalog resource: $resource"
+    }.use { it.readAllBytes() }
+}
+
+private fun ByteArray.sha256(): String =
+    MessageDigest
+        .getInstance("SHA-256")
+        .digest(this)
+        .joinToString("") { "%02x".format(it) }
+
+private fun String.toDisplayName(): String =
+    split('-').joinToString(" ") { word ->
+        word.replaceFirstChar(Char::uppercaseChar)
+    }
+
+private fun defaultApiKeyNames(provider: String): List<String> =
+    listOf(provider.uppercase().replace('-', '_') + "_API_KEY")
+
+private const val CATALOG_RESOURCE_ROOT = "/works/earendil/pi/ai/providers/data"
+private val SUPPORTED_APIS =
+    setOf(
+        "anthropic-messages",
+        "google-generative-ai",
+        "openai-completions",
+        "openai-responses",
+    )
+private val SPECIAL_AUTH_PROVIDERS =
+    setOf(
+        "cloudflare-ai-gateway",
+        "cloudflare-workers-ai",
+        "github-copilot",
+    )
+private val PROVIDER_NAMES =
+    mapOf(
+        "ant-ling" to "Ant Ling",
+        "anthropic" to "Anthropic",
+        "cerebras" to "Cerebras",
+        "deepseek" to "DeepSeek",
+        "fireworks" to "Fireworks",
+        "google" to "Google",
+        "groq" to "Groq",
+        "huggingface" to "Hugging Face",
+        "kimi-coding" to "Kimi For Coding",
+        "minimax" to "MiniMax",
+        "minimax-cn" to "MiniMax CN",
+        "moonshotai" to "Moonshot AI",
+        "moonshotai-cn" to "Moonshot AI CN",
+        "nvidia" to "NVIDIA",
+        "openai" to "OpenAI",
+        "opencode" to "OpenCode Zen",
+        "opencode-go" to "OpenCode Zen Go",
+        "openrouter" to "OpenRouter",
+        "qwen-token-plan" to "Qwen Token Plan",
+        "qwen-token-plan-cn" to "Qwen Token Plan CN",
+        "together" to "Together AI",
+        "vercel-ai-gateway" to "Vercel AI Gateway",
+        "xai" to "xAI",
+        "xiaomi" to "Xiaomi MiMo",
+        "xiaomi-token-plan-ams" to "Xiaomi Token Plan AMS",
+        "xiaomi-token-plan-cn" to "Xiaomi Token Plan CN",
+        "xiaomi-token-plan-sgp" to "Xiaomi Token Plan SGP",
+        "zai" to "Z.AI",
+        "zai-coding-cn" to "Z.AI Coding CN",
+    )
+private val PROVIDER_API_KEY_ENV_NAMES =
+    mapOf(
+        "ant-ling" to listOf("ANT_LING_API_KEY"),
+        "anthropic" to listOf("ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"),
+        "cerebras" to listOf("CEREBRAS_API_KEY"),
+        "deepseek" to listOf("DEEPSEEK_API_KEY"),
+        "fireworks" to listOf("FIREWORKS_API_KEY"),
+        "google" to listOf("GEMINI_API_KEY"),
+        "groq" to listOf("GROQ_API_KEY"),
+        "huggingface" to listOf("HF_TOKEN"),
+        "kimi-coding" to listOf("KIMI_API_KEY"),
+        "minimax" to listOf("MINIMAX_API_KEY"),
+        "minimax-cn" to listOf("MINIMAX_CN_API_KEY"),
+        "moonshotai" to listOf("MOONSHOT_API_KEY"),
+        "moonshotai-cn" to listOf("MOONSHOT_API_KEY"),
+        "nvidia" to listOf("NVIDIA_API_KEY"),
+        "openai" to listOf("OPENAI_API_KEY"),
+        "opencode" to listOf("OPENCODE_API_KEY"),
+        "opencode-go" to listOf("OPENCODE_API_KEY"),
+        "openrouter" to listOf("OPENROUTER_API_KEY"),
+        "qwen-token-plan" to listOf("QWEN_TOKEN_PLAN_API_KEY"),
+        "qwen-token-plan-cn" to listOf("QWEN_TOKEN_PLAN_CN_API_KEY"),
+        "together" to listOf("TOGETHER_API_KEY"),
+        "vercel-ai-gateway" to listOf("AI_GATEWAY_API_KEY"),
+        "xai" to listOf("XAI_API_KEY"),
+        "xiaomi" to listOf("XIAOMI_API_KEY"),
+        "xiaomi-token-plan-ams" to listOf("XIAOMI_TOKEN_PLAN_AMS_API_KEY"),
+        "xiaomi-token-plan-cn" to listOf("XIAOMI_TOKEN_PLAN_CN_API_KEY"),
+        "xiaomi-token-plan-sgp" to listOf("XIAOMI_TOKEN_PLAN_SGP_API_KEY"),
+        "zai" to listOf("ZAI_API_KEY"),
+        "zai-coding-cn" to listOf("ZAI_CODING_CN_API_KEY"),
+    )

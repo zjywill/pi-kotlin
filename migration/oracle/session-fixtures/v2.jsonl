@@ -1,0 +1,2 @@
+{"type":"session","version":2,"id":"session-v2","timestamp":"2025-02-01T00:00:00Z","cwd":"/fixture/v2"}
+{"type":"message","id":"legacy-hook","parentId":null,"timestamp":"2025-02-01T00:00:01Z","message":{"role":"hookMessage","customType":"legacy-hook","content":"legacy context","display":true,"timestamp":1}}

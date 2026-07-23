@@ -1,0 +1,142 @@
+package works.earendil.pi.ai.providers
+
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import works.earendil.pi.ai.CacheRetention
+import works.earendil.pi.ai.Context
+import works.earendil.pi.ai.ModelThinkingLevel
+import works.earendil.pi.ai.StreamOptions
+import works.earendil.pi.ai.ThinkingLevel
+import works.earendil.pi.ai.ToolDefinition
+import works.earendil.pi.ai.UserMessage
+
+fun main() {
+    val context =
+        Context(
+            systemPrompt = "system",
+            messages = mutableListOf(UserMessage("hello", timestamp = 1)),
+            tools =
+                listOf(
+                    ToolDefinition(
+                        name = "echo",
+                        description = "Echo",
+                        parameters =
+                            buildJsonObject {
+                                put("type", "object")
+                                put(
+                                    "properties",
+                                    buildJsonObject {
+                                        put(
+                                            "value",
+                                            buildJsonObject { put("type", "string") },
+                                        )
+                                    },
+                                )
+                                put("required", JsonArray(listOf(JsonPrimitive("value"))))
+                            },
+                    ),
+                ),
+        )
+    val options =
+        StreamOptions(
+            temperature = 0.25,
+            maxTokens = 123,
+            apiKey = "test",
+            cacheRetention = CacheRetention.NONE,
+        )
+    val payloads =
+        buildJsonObject {
+            put(
+                "openai-completions",
+                buildOpenAIChatRequestBody(fixtureModel("openai-completions"), context, options),
+            )
+            put(
+                "openai-responses",
+                buildOpenAIResponsesRequestBody(fixtureModel("openai-responses"), context, options),
+            )
+            put(
+                "anthropic-messages",
+                buildAnthropicRequestBody(fixtureModel("anthropic-messages"), context, options),
+            )
+            put(
+                "google-generative-ai",
+                buildGoogleRequestBody(
+                    fixtureModel("google-generative-ai", provider = "google"),
+                    context,
+                    options,
+                ),
+            )
+            put(
+                "openai-responses-reasoning",
+                buildOpenAIResponsesRequestBody(
+                    fixtureModel("openai-responses").copy(
+                        reasoning = true,
+                        thinkingLevelMap =
+                            mapOf(
+                                ModelThinkingLevel.OFF to "none",
+                                ModelThinkingLevel.HIGH to "high",
+                            ),
+                    ),
+                    context,
+                    options.copy(temperature = null, reasoning = ThinkingLevel.HIGH),
+                ),
+            )
+            put(
+                "anthropic-messages-reasoning",
+                buildAnthropicRequestBody(
+                    fixtureModel("anthropic-messages").copy(
+                        reasoning = true,
+                        compat = buildJsonObject { put("forceAdaptiveThinking", true) },
+                    ),
+                    context,
+                    options.copy(temperature = null, reasoning = ThinkingLevel.HIGH),
+                ),
+            )
+            put(
+                "google-generative-ai-reasoning",
+                buildGoogleRequestBody(
+                    fixtureModel("google-generative-ai", provider = "google").copy(
+                        id = "gemini-3.1-pro-preview",
+                        reasoning = true,
+                    ),
+                    context,
+                    options.copy(temperature = null, reasoning = ThinkingLevel.MEDIUM),
+                ),
+            )
+            put(
+                "openai-completions-reasoning",
+                buildOpenAIChatRequestBody(
+                    fixtureModel("openai-completions", provider = "deepseek").copy(
+                        baseUrl = "https://api.deepseek.com",
+                        reasoning = true,
+                        compat =
+                            buildJsonObject {
+                                put("supportsStore", false)
+                                put("supportsDeveloperRole", false)
+                                put("requiresReasoningContentOnAssistantMessages", true)
+                                put("thinkingFormat", "deepseek")
+                            },
+                    ),
+                    context,
+                    options.copy(temperature = null, reasoning = ThinkingLevel.HIGH),
+                ),
+            )
+        }
+    println(providerJson.encodeToString(JsonObject.serializer(), payloads))
+}
+
+private fun fixtureModel(
+    api: String,
+    provider: String = "fixture",
+) = model(
+    id = "fixture",
+    name = "Fixture",
+    api = api,
+    provider = provider,
+    baseUrl = "https://fixture.invalid/v1",
+    contextWindow = 128_000,
+    maxTokens = 16_384,
+)

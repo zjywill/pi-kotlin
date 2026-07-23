@@ -1,0 +1,44 @@
+plugins {
+    kotlin("jvm")
+    kotlin("plugin.serialization")
+    application
+}
+
+kotlin {
+    jvmToolchain(21)
+    compilerOptions {
+        allWarningsAsErrors = true
+    }
+}
+
+application {
+    applicationName = "pi"
+    mainClass = "works.earendil.pi.codingagent.MainKt"
+}
+
+dependencies {
+    api(project(":pi-agent-core"))
+    api(project(":pi-ai"))
+    api(project(":pi-tui"))
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+    implementation("org.jline:jline:3.26.3")
+
+    testImplementation(kotlin("test-junit5"))
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
+    testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.13.4")
+}
+
+tasks.register<JavaExec>("sessionJsonlOracle") {
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass = "works.earendil.pi.codingagent.session.SessionJsonlOracleKt"
+    args(rootProject.file("migration/oracle/session-fixtures").absolutePath)
+}
+
+tasks.register<JavaExec>("codingMessageProjectionOracle") {
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass = "works.earendil.pi.codingagent.CodingMessageProjectionOracleKt"
+    args(rootProject.file("migration/oracle/coding-messages.json").absolutePath)
+}

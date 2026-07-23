@@ -1,0 +1,124 @@
+[
+  {
+    "role": "user",
+    "content": "plain user",
+    "timestamp": 1000
+  },
+  {
+    "role": "assistant",
+    "content": [
+      {
+        "type": "text",
+        "text": "assistant reply"
+      }
+    ],
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "model": "moonshotai/kimi-k2.6",
+    "usage": {
+      "input": 1,
+      "output": 2,
+      "cacheRead": 3,
+      "cacheWrite": 4,
+      "totalTokens": 10,
+      "cost": {
+        "input": 0.1,
+        "output": 0.2,
+        "cacheRead": 0.3,
+        "cacheWrite": 0.4,
+        "total": 1
+      }
+    },
+    "stopReason": "stop",
+    "timestamp": 2000
+  },
+  {
+    "role": "toolResult",
+    "toolCallId": "call-1",
+    "toolName": "read",
+    "content": [
+      {
+        "type": "text",
+        "text": "tool output"
+      }
+    ],
+    "isError": false,
+    "timestamp": 3000
+  },
+  {
+    "role": "custom",
+    "customType": "string-note",
+    "content": "custom string",
+    "display": true,
+    "details": {
+      "source": "oracle"
+    },
+    "timestamp": 4000
+  },
+  {
+    "role": "custom",
+    "customType": "block-note",
+    "content": [
+      {
+        "type": "text",
+        "text": "custom blocks"
+      },
+      {
+        "type": "image",
+        "data": "aW1hZ2U=",
+        "mimeType": "image/png"
+      }
+    ],
+    "display": false,
+    "timestamp": 5000
+  },
+  {
+    "role": "branchSummary",
+    "summary": "branch summary text",
+    "fromId": "branch-source",
+    "timestamp": 6000
+  },
+  {
+    "role": "compactionSummary",
+    "summary": "compaction summary text",
+    "tokensBefore": 1234,
+    "timestamp": 7000
+  },
+  {
+    "role": "bashExecution",
+    "command": "printf ok",
+    "output": "ok",
+    "exitCode": 0,
+    "cancelled": false,
+    "truncated": false,
+    "timestamp": 8000
+  },
+  {
+    "role": "bashExecution",
+    "command": "sleep 1",
+    "output": "",
+    "cancelled": true,
+    "truncated": false,
+    "timestamp": 9000
+  },
+  {
+    "role": "bashExecution",
+    "command": "false",
+    "output": "failed",
+    "exitCode": 7,
+    "cancelled": false,
+    "truncated": true,
+    "fullOutputPath": "/tmp/full.log",
+    "timestamp": 10000
+  },
+  {
+    "role": "bashExecution",
+    "command": "printf secret",
+    "output": "secret",
+    "exitCode": 0,
+    "cancelled": false,
+    "truncated": false,
+    "excludeFromContext": true,
+    "timestamp": 11000
+  }
+]

@@ -1,0 +1,354 @@
+package works.earendil.pi.codingagent
+
+import java.nio.file.Files
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import works.earendil.pi.ai.FauxModelDefinition
+import works.earendil.pi.ai.FauxProvider
+import works.earendil.pi.ai.FauxResponseStep
+import works.earendil.pi.ai.Models
+import works.earendil.pi.ai.fauxAssistantMessage
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+
+class RpcRuntimeTest {
+    @Test
+    fun `prompt emits lifecycle events and updates rpc state`() =
+        runTest {
+            val provider =
+                FauxProvider(
+                    definitions =
+                        listOf(
+                            FauxModelDefinition("faux-1", reasoning = true),
+                        ),
+                )
+            provider.setResponses(listOf(FauxResponseStep.Message(fauxAssistantMessage("done"))))
+            val runtime =
+                RpcRuntime(
+                    Models(listOf(provider)),
+                    RpcRuntimeOptions(
+                        cwd = Files.createTempDirectory("pi-kotlin-rpc"),
+                        noSession = true,
+                        provider = "faux",
+                        model = "faux-1",
+                    ),
+                )
+            val events = mutableListOf<JsonObject>()
+            val settled = CompletableDeferred<Unit>()
+            runtime.subscribe { event ->
+                events += event
+                if (event.eventType() == "agent_settled") {
+                    settled.complete(Unit)
+                }
+            }
+
+            val response =
+                runtime.handle(
+                    buildJsonObject {
+                        put("id", "prompt-1")
+                        put("type", "prompt")
+                        put("message", "hello")
+                    },
+                )
+            runtime.waitForIdle()
+            assertTrue(settled.isCompleted)
+            val state = requireNotNull(runtime.handle(buildJsonObject { put("type", "get_state") }))
+            val messages = requireNotNull(runtime.handle(buildJsonObject { put("type", "get_messages") }))
+
+            assertEquals(true, response?.get("success")?.jsonPrimitive?.boolean)
+            assertEquals(
+                listOf("agent_start", "turn_start"),
+                events.map { it.eventType() }.take(2),
+            )
+            assertTrue(events.any { it.eventType() == "message_update" })
+            assertEquals("agent_settled", events.last().eventType())
+            assertFalse(state.data()["isStreaming"]?.jsonPrimitive?.boolean ?: true)
+            assertEquals(2, state.data()["messageCount"]?.jsonPrimitive?.content?.toInt())
+            assertEquals(2, messages.data()["messages"]?.jsonArray?.size)
+            runtime.close()
+        }
+
+    @Test
+    fun `startup options configure prompt context tools and thinking`() =
+        runTest {
+            val root = Files.createTempDirectory("pi-kotlin-rpc-startup")
+            val agentDir = Files.createDirectories(root.resolve("agent"))
+            val cwd = Files.createDirectories(root.resolve("project"))
+            Files.writeString(agentDir.resolve("AGENTS.md"), "global context")
+            Files.writeString(cwd.resolve("AGENTS.md"), "project context")
+            val provider =
+                FauxProvider(
+                    definitions =
+                        listOf(
+                            FauxModelDefinition("faux-1", reasoning = true),
+                        ),
+                )
+            provider.setResponses(
+                listOf(
+                    FauxResponseStep.Factory { context, _, _, _ ->
+                        val prompt = context.systemPrompt.orEmpty()
+                        assertTrue(prompt.startsWith("custom prompt\n\nappend prompt"))
+                        assertTrue(prompt.contains("global context"))
+                        assertTrue(prompt.contains("project context"))
+                        assertTrue(context.tools.isEmpty())
+                        fauxAssistantMessage("configured")
+                    },
+                ),
+            )
+            val runtime =
+                RpcRuntime(
+                    Models(listOf(provider)),
+                    RpcRuntimeOptions(
+                        cwd = cwd,
+                        agentDir = agentDir,
+                        noSession = true,
+                        provider = "faux",
+                        model = "faux-1",
+                        systemPrompt = "custom prompt",
+                        appendSystemPrompt = listOf("append prompt"),
+                        noBuiltinTools = true,
+                        thinking = AgentThinkingLevel.HIGH,
+                    ),
+                )
+
+            val initialState = requireNotNull(runtime.handle(buildJsonObject { put("type", "get_state") }))
+            assertEquals("high", initialState.data()["thinkingLevel"]?.jsonPrimitive?.content)
+            assertSuccess(
+                runtime.handle(
+                    buildJsonObject {
+                        put("type", "prompt")
+                        put("message", "hello")
+                    },
+                ),
+            )
+            runtime.waitForIdle()
+
+            assertEquals(1, provider.state.callCount)
+            runtime.close()
+        }
+
+    @Test
+    fun `startup model reference preserves slash ids and thinking suffix`() =
+        runTest {
+            val provider =
+                FauxProvider(
+                    definitions =
+                        listOf(
+                            FauxModelDefinition(
+                                id = "vendor/model",
+                                reasoning = true,
+                            ),
+                        ),
+                )
+            val runtime =
+                RpcRuntime(
+                    Models(listOf(provider)),
+                    RpcRuntimeOptions(
+                        cwd = Files.createTempDirectory("pi-kotlin-rpc-slash-model"),
+                        noSession = true,
+                        provider = "faux",
+                        model = "vendor/model:xhigh",
+                    ),
+                )
+
+            val state = requireNotNull(runtime.handle(buildJsonObject { put("type", "get_state") }))
+
+            assertEquals("vendor/model", state.data()["model"]?.jsonObject?.get("id")?.jsonPrimitive?.content)
+            assertEquals("xhigh", state.data()["thinkingLevel"]?.jsonPrimitive?.content)
+            runtime.close()
+        }
+
+    @Test
+    fun `model thinking queues session metadata and bash commands are controllable`() =
+        runTest {
+            val provider =
+                FauxProvider(
+                    definitions =
+                        listOf(
+                            FauxModelDefinition("faux-1", reasoning = true),
+                            FauxModelDefinition("faux-2", reasoning = true),
+                        ),
+                )
+            val cwd = Files.createTempDirectory("pi-kotlin-rpc-controls")
+            val runtime =
+                RpcRuntime(
+                    Models(listOf(provider)),
+                    RpcRuntimeOptions(
+                        cwd = cwd,
+                        noSession = true,
+                        provider = "faux",
+                        model = "faux-1",
+                    ),
+                )
+
+            assertSuccess(
+                runtime.handle(
+                    buildJsonObject {
+                        put("type", "set_model")
+                        put("provider", "faux")
+                        put("modelId", "faux-2")
+                    },
+                ),
+            )
+            assertSuccess(
+                runtime.handle(
+                    buildJsonObject {
+                        put("type", "set_thinking_level")
+                        put("level", "high")
+                    },
+                ),
+            )
+            assertSuccess(
+                runtime.handle(
+                    buildJsonObject {
+                        put("type", "set_steering_mode")
+                        put("mode", "all")
+                    },
+                ),
+            )
+            assertSuccess(
+                runtime.handle(
+                    buildJsonObject {
+                        put("type", "set_follow_up_mode")
+                        put("mode", "all")
+                    },
+                ),
+            )
+            assertSuccess(
+                runtime.handle(
+                    buildJsonObject {
+                        put("type", "set_session_name")
+                        put("name", "  RPC Session  ")
+                    },
+                ),
+            )
+            val bash =
+                requireNotNull(
+                    runtime.handle(
+                        buildJsonObject {
+                            put("type", "bash")
+                            put("command", "printf rpc-ok")
+                        },
+                    ),
+                )
+            val state = requireNotNull(runtime.handle(buildJsonObject { put("type", "get_state") }))
+            val entries = requireNotNull(runtime.handle(buildJsonObject { put("type", "get_entries") }))
+
+            assertEquals("rpc-ok", bash.data()["output"]?.jsonPrimitive?.content)
+            assertEquals(0, bash.data()["exitCode"]?.jsonPrimitive?.content?.toInt())
+            assertEquals("faux-2", state.data()["model"]?.jsonObject?.get("id")?.jsonPrimitive?.content)
+            assertEquals("high", state.data()["thinkingLevel"]?.jsonPrimitive?.content)
+            assertEquals("all", state.data()["steeringMode"]?.jsonPrimitive?.content)
+            assertEquals("all", state.data()["followUpMode"]?.jsonPrimitive?.content)
+            assertEquals("RPC Session", state.data()["sessionName"]?.jsonPrimitive?.content)
+            assertEquals(3, entries.data()["entries"]?.jsonArray?.size)
+            runtime.close()
+        }
+
+    @Test
+    fun `invalid json and unsupported commands return protocol errors`() =
+        runTest {
+            val runtime =
+                RpcRuntime(
+                    Models(listOf(FauxProvider())),
+                    RpcRuntimeOptions(
+                        cwd = Files.createTempDirectory("pi-kotlin-rpc-errors"),
+                        noSession = true,
+                        provider = "faux",
+                        model = "faux-1",
+                    ),
+                )
+
+            val parseError = requireNotNull(runtime.handleLine("{"))
+            val unknownError =
+                requireNotNull(
+                    runtime.handle(
+                        buildJsonObject {
+                            put("id", "unknown-1")
+                            put("type", "unknown")
+                        },
+                    ),
+                )
+
+            assertFalse(parseError["success"]?.jsonPrimitive?.boolean ?: true)
+            assertEquals("parse", parseError["command"]?.jsonPrimitive?.content)
+            assertFalse(unknownError["success"]?.jsonPrimitive?.boolean ?: true)
+            assertTrue(unknownError["error"]?.jsonPrimitive?.content.orEmpty().contains("Unknown command"))
+            runtime.close()
+        }
+
+    @Test
+    fun `compact summarizes old turns and reloads agent context`() =
+        runTest {
+            val provider = FauxProvider()
+            provider.setResponses(
+                listOf(
+                    FauxResponseStep.Message(fauxAssistantMessage("first response")),
+                    FauxResponseStep.Message(fauxAssistantMessage("second response")),
+                    FauxResponseStep.Message(fauxAssistantMessage("structured summary")),
+                ),
+            )
+            val runtime =
+                RpcRuntime(
+                    Models(listOf(provider)),
+                    RpcRuntimeOptions(
+                        cwd = Files.createTempDirectory("pi-kotlin-rpc-compact"),
+                        noSession = true,
+                        provider = "faux",
+                        model = "faux-1",
+                    ),
+                )
+            repeat(2) { index ->
+                assertSuccess(
+                    runtime.handle(
+                        buildJsonObject {
+                            put("type", "prompt")
+                            put("message", "turn-$index " + "x".repeat(100_000))
+                        },
+                    ),
+                )
+                runtime.waitForIdle()
+            }
+            val events = mutableListOf<String>()
+            runtime.subscribe { event -> events += event.eventType() }
+
+            val response =
+                requireNotNull(
+                    runtime.handle(
+                        buildJsonObject {
+                            put("id", "compact-1")
+                            put("type", "compact")
+                        },
+                    ),
+                )
+            val messages = requireNotNull(runtime.handle(buildJsonObject { put("type", "get_messages") }))
+
+            assertSuccess(response)
+            assertEquals("structured summary", response.data()["summary"]?.jsonPrimitive?.content)
+            assertTrue(response.data()["tokensBefore"]?.jsonPrimitive?.content?.toInt() ?: 0 > 0)
+            assertEquals(listOf("compaction_start", "compaction_end"), events)
+            assertEquals(
+                "compactionSummary",
+                messages.data()["messages"]?.jsonArray?.first()?.jsonObject
+                    ?.get("role")?.jsonPrimitive?.content,
+            )
+            runtime.close()
+        }
+
+    private fun JsonObject.eventType(): String = this["type"]?.jsonPrimitive?.content.orEmpty()
+
+    private fun JsonObject.data(): JsonObject = this["data"]?.jsonObject ?: JsonObject(emptyMap())
+
+    private fun assertSuccess(response: JsonObject?) {
+        assertEquals(true, response?.get("success")?.jsonPrimitive?.boolean)
+    }
+}

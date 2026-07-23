@@ -1,0 +1,4 @@
+{"type":"session","id":"session-v1","timestamp":"2025-01-01T00:00:00Z","cwd":"/fixture/v1"}
+{"type":"message","timestamp":"2025-01-01T00:00:01Z","message":{"role":"user","content":"legacy user","timestamp":1}}
+{"type":"message","timestamp":"2025-01-01T00:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"legacy assistant"}],"api":"test","provider":"test","model":"test","usage":{"input":1,"output":2,"cacheRead":0,"cacheWrite":0,"totalTokens":3,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":2}}
+{"type":"compaction","timestamp":"2025-01-01T00:00:03Z","summary":"legacy summary","firstKeptEntryIndex":1,"tokensBefore":100}
