@@ -8,6 +8,7 @@ const apiNames = [
 	"azure-openai-responses",
 	"anthropic-messages",
 	"google-generative-ai",
+	"mistral-conversations",
 ] as const;
 
 const modules = new Map(
@@ -46,6 +47,8 @@ for (const api of apiNames) {
 				? "google"
 				: api === "azure-openai-responses"
 					? "azure-openai-responses"
+					: api === "mistral-conversations"
+						? "mistral"
 					: "fixture",
 		baseUrl: api === "azure-openai-responses" ? "" : "https://fixture.invalid/v1",
 		reasoning: false,
@@ -133,6 +136,37 @@ payloads["openai-completions-reasoning"] = await capturePayload(
 	{ apiKey: "test", cacheRetention: "none", maxTokens: 123, reasoning: "high" },
 	true,
 );
+payloads["mistral-conversations-reasoning-effort"] = await capturePayload(
+	"mistral-conversations",
+	{
+		...fixtureModel("mistral-conversations", "mistral"),
+		id: "mistral-small-2603",
+		reasoning: true,
+	},
+	{
+		apiKey: "test",
+		cacheRetention: "short",
+		sessionId: "session-123",
+		maxTokens: 123,
+		reasoning: "medium",
+	},
+	true,
+);
+payloads["mistral-conversations-prompt-mode"] = await capturePayload(
+	"mistral-conversations",
+	{
+		...fixtureModel("mistral-conversations", "mistral"),
+		id: "magistral-medium-latest",
+		reasoning: true,
+	},
+	{
+		apiKey: "test",
+		cacheRetention: "none",
+		maxTokens: 123,
+		reasoning: "medium",
+	},
+	true,
+);
 
 console.log(JSON.stringify(payloads));
 
@@ -155,7 +189,9 @@ async function capturePayload(
 	if (payload === undefined) {
 		throw new Error(`No payload captured for ${api}`);
 	}
-	return api === "google-generative-ai" ? normalizeGooglePayload(payload) : payload;
+	if (api === "google-generative-ai") return normalizeGooglePayload(payload);
+	if (api === "mistral-conversations") return normalizeMistralPayload(payload);
+	return payload;
 }
 
 function fixtureModel(api: string, provider = "fixture"): Record<string, unknown> {
@@ -202,4 +238,27 @@ function normalizeGooglePayload(value: unknown): unknown {
 			: {}),
 		...(payload.config.tools ? { tools: payload.config.tools } : {}),
 	};
+}
+
+function normalizeMistralPayload(value: unknown): unknown {
+	const keyMap: Record<string, string> = {
+		maxTokens: "max_tokens",
+		toolChoice: "tool_choice",
+		reasoningEffort: "reasoning_effort",
+		promptMode: "prompt_mode",
+		promptCacheKey: "prompt_cache_key",
+		toolCalls: "tool_calls",
+		toolCallId: "tool_call_id",
+		imageUrl: "image_url",
+	};
+	const normalize = (entry: unknown): unknown => {
+		if (Array.isArray(entry)) return entry.map(normalize);
+		if (entry && typeof entry === "object") {
+			return Object.fromEntries(
+				Object.entries(entry).map(([key, child]) => [keyMap[key] ?? key, normalize(child)]),
+			);
+		}
+		return entry;
+	};
+	return normalize(value);
 }

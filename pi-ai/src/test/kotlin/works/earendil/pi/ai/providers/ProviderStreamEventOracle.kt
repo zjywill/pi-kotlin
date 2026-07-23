@@ -60,6 +60,9 @@ fun main(args: Array<String>) =
                 put("azure-openai-responses", azure.events)
                 put("azure-openai-responses-request", azure.request)
                 put("google-generative-ai", captureEvents("google-generative-ai", fixtureDir).events)
+                val mistral = captureEvents("mistral-conversations", fixtureDir)
+                put("mistral-conversations", mistral.events)
+                put("mistral-conversations-request", mistral.request)
             }
         println(streamOracleJson.encodeToString(JsonObject.serializer(), output))
     }
@@ -96,6 +99,7 @@ private suspend fun captureEvents(
                             .takeIf { api == "azure-openai-responses" },
                     azureApiVersion = "2026-07-01-preview".takeIf { api == "azure-openai-responses" },
                     azureDeploymentName = "fixture-deployment".takeIf { api == "azure-openai-responses" },
+                    sessionId = "session-123".takeIf { api == "mistral-conversations" },
                 ),
             )
         val events =
@@ -116,6 +120,18 @@ private suspend fun captureEvents(
                         put("apiKey", apiKey)
                     }
                     put("hasAuthorization", fixture.hasAuthorization)
+                    val authorization = fixture.authorization
+                    if (authorization == null) {
+                        put("authorization", JsonNull)
+                    } else {
+                        put("authorization", authorization)
+                    }
+                    val xAffinity = fixture.xAffinity
+                    if (xAffinity == null) {
+                        put("xAffinity", JsonNull)
+                    } else {
+                        put("xAffinity", xAffinity)
+                    }
                 },
         )
     }
@@ -249,6 +265,9 @@ private fun fixtureProvider(
         "google-generative-ai" ->
             GoogleProvider("fixture", "Fixture", baseUrl, listOf(model), listOf("UNUSED"))
 
+        "mistral-conversations" ->
+            MistralProvider("mistral", "Mistral", baseUrl, listOf(model), listOf("UNUSED"))
+
         else -> error("Unsupported fixture API: $api")
     }
 
@@ -260,7 +279,12 @@ private fun fixtureModel(
         id = "fixture",
         name = "Fixture",
         api = api,
-        provider = if (api == "azure-openai-responses") "azure-openai-responses" else "fixture",
+        provider =
+            when (api) {
+                "azure-openai-responses" -> "azure-openai-responses"
+                "mistral-conversations" -> "mistral"
+                else -> "fixture"
+            },
         baseUrl = if (api == "azure-openai-responses") "" else baseUrl,
         reasoning = false,
         input = listOf(ModelInput.TEXT),
@@ -312,6 +336,12 @@ private class FixtureServer(
     var hasAuthorization: Boolean = false
 
     @Volatile
+    var authorization: String? = null
+
+    @Volatile
+    var xAffinity: String? = null
+
+    @Volatile
     private var failure: Throwable? = null
 
     fun start() {
@@ -341,6 +371,8 @@ private class FixtureServer(
             }
             apiKey = headers["api-key"]
             hasAuthorization = "authorization" in headers
+            authorization = headers["authorization"]
+            xAffinity = headers["x-affinity"]
             headers["content-length"]?.toIntOrNull()?.let(input::readNBytes)
 
             val bytes = response.toByteArray(StandardCharsets.UTF_8)

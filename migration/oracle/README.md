@@ -36,7 +36,12 @@ queues mutable references whose observed historical state depends on consumer
 timing.
 
 Provider payload and stream comparisons cover OpenAI Chat Completions, OpenAI
-Responses, Azure OpenAI Responses, Anthropic Messages, and Google Generative AI.
-Azure reuses the OpenAI Responses stream fixture while independently exercising
-its deployment-name payload contract plus the actual request URL, API-version
-query, API-key header, and absence of Bearer authorization.
+Responses, Azure OpenAI Responses, Anthropic Messages, Google Generative AI,
+and Mistral Conversations. Azure reuses the OpenAI Responses stream fixture
+while independently exercising its deployment-name payload contract plus the
+actual request URL, API-version query, API-key header, and absence of Bearer
+authorization.
+
+Mistral Conversations adds independent payload cases for reasoning effort,
+prompt mode, and prompt caching. Its stream fixture also compares the actual
+chat-completions path, Bearer authorization, and `x-affinity` header.

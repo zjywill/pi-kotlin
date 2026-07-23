@@ -405,6 +405,8 @@ data class StreamOptions(
     val reasoning: ThinkingLevel? = null,
     val reasoningEffort: String? = null,
     val reasoningSummary: String? = null,
+    val promptMode: String? = null,
+    val toolChoice: JsonElement? = null,
     val thinkingBudgets: ThinkingBudgets? = null,
     val azureApiVersion: String? = null,
     val azureResourceName: String? = null,

@@ -85,6 +85,14 @@ fun main() {
                 ),
             )
             put(
+                "mistral-conversations",
+                buildMistralRequestBody(
+                    fixtureModel("mistral-conversations", provider = "mistral"),
+                    context,
+                    options,
+                ),
+            )
+            put(
                 "openai-responses-reasoning",
                 buildOpenAIResponsesRequestBody(
                     fixtureModel("openai-responses").copy(
@@ -162,6 +170,36 @@ fun main() {
                     ),
                     context,
                     options.copy(temperature = null, reasoning = ThinkingLevel.HIGH),
+                ),
+            )
+            put(
+                "mistral-conversations-reasoning-effort",
+                buildMistralRequestBody(
+                    fixtureModel("mistral-conversations", provider = "mistral").copy(
+                        id = "mistral-small-2603",
+                        reasoning = true,
+                    ),
+                    context,
+                    options.copy(
+                        temperature = null,
+                        cacheRetention = CacheRetention.SHORT,
+                        sessionId = "session-123",
+                        reasoningEffort = "high",
+                    ),
+                ),
+            )
+            put(
+                "mistral-conversations-prompt-mode",
+                buildMistralRequestBody(
+                    fixtureModel("mistral-conversations", provider = "mistral").copy(
+                        id = "magistral-medium-latest",
+                        reasoning = true,
+                    ),
+                    context,
+                    options.copy(
+                        temperature = null,
+                        promptMode = "reasoning",
+                    ),
                 ),
             )
         }

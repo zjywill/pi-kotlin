@@ -1,0 +1,11 @@
+data: {"id":"mistral-1","model":"fixture","choices":[{"index":0,"delta":{"content":[{"type":"thinking","thinking":[{"type":"text","text":"think"}]}]},"finish_reason":null}]}
+
+data: {"id":"mistral-1","model":"fixture","choices":[{"index":0,"delta":{"content":"hello "},"finish_reason":null}]}
+
+data: {"id":"mistral-1","model":"fixture","choices":[{"index":0,"delta":{"content":[{"type":"text","text":"world"}]},"finish_reason":null}]}
+
+data: {"id":"mistral-1","model":"fixture","choices":[{"index":0,"delta":{"content":null,"tool_calls":[{"id":"abc123456","type":"function","function":{"name":"echo","arguments":"{\"value\":\""},"index":0}]},"finish_reason":null}]}
+
+data: {"id":"mistral-1","model":"fixture","usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14,"prompt_tokens_details":{"cached_tokens":2}},"choices":[{"index":0,"delta":{"content":null,"tool_calls":[{"id":"abc123456","type":"function","function":{"name":"echo","arguments":"ok\"}"},"index":0}]},"finish_reason":"tool_calls"}]}
+
+data: [DONE]

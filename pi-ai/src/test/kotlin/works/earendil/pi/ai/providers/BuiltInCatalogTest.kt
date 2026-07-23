@@ -38,7 +38,6 @@ class BuiltInCatalogTest {
             setOf(
                 "bedrock-converse-stream",
                 "google-vertex",
-                "mistral-conversations",
                 "openai-codex-responses",
             ),
             catalog.unsupportedApis,
@@ -50,8 +49,8 @@ class BuiltInCatalogTest {
         val providers = builtInProviders()
         val ids = providers.map { it.id }.toSet()
 
-        assertEquals(30, providers.size)
-        assertEquals(867, providers.sumOf { it.getModels().size })
+        assertEquals(31, providers.size)
+        assertEquals(897, providers.sumOf { it.getModels().size })
         assertTrue(
             ids.containsAll(
                 setOf(
@@ -59,6 +58,7 @@ class BuiltInCatalogTest {
                     "azure-openai-responses",
                     "deepseek",
                     "google",
+                    "mistral",
                     "openai",
                     "openrouter",
                     "xai",
@@ -69,11 +69,13 @@ class BuiltInCatalogTest {
         assertFalse("cloudflare-ai-gateway" in ids)
         assertFalse("cloudflare-workers-ai" in ids)
         assertFalse("github-copilot" in ids)
-        assertFalse("mistral" in ids)
         assertFalse("openai-codex" in ids)
         val azure = providers.single { it.id == "azure-openai-responses" }
         assertEquals("Azure OpenAI", azure.name)
         assertEquals(46, azure.getModels().size)
+        val mistral = providers.single { it.id == "mistral" }
+        assertEquals("Mistral", mistral.name)
+        assertEquals(30, mistral.getModels().size)
         assertTrue(providers.flatMap(works.earendil.pi.ai.Provider::getModels).all { it.api in SUPPORTED_TEST_APIS })
     }
 
@@ -157,6 +159,7 @@ class BuiltInCatalogTest {
                 "anthropic-messages",
                 "azure-openai-responses",
                 "google-generative-ai",
+                "mistral-conversations",
                 "openai-completions",
                 "openai-responses",
             )

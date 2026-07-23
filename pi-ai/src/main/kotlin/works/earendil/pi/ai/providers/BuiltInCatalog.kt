@@ -111,6 +111,15 @@ private class CatalogProvider(
                             apiKeyEnvNames = apiKeyEnvNames,
                         )
 
+                    "mistral-conversations" ->
+                        MistralProvider(
+                            id = id,
+                            name = name,
+                            baseUrl = apiModels.first().baseUrl,
+                            models = apiModels,
+                            apiKeyEnvNames = apiKeyEnvNames,
+                        )
+
                     else -> error("Unsupported catalog API: $api")
                 }
             }
@@ -195,6 +204,7 @@ private val SUPPORTED_APIS =
         "anthropic-messages",
         "azure-openai-responses",
         "google-generative-ai",
+        "mistral-conversations",
         "openai-completions",
         "openai-responses",
     )
@@ -218,6 +228,7 @@ private val PROVIDER_NAMES =
         "kimi-coding" to "Kimi For Coding",
         "minimax" to "MiniMax",
         "minimax-cn" to "MiniMax CN",
+        "mistral" to "Mistral",
         "moonshotai" to "Moonshot AI",
         "moonshotai-cn" to "Moonshot AI CN",
         "nvidia" to "NVIDIA",
@@ -251,6 +262,7 @@ private val PROVIDER_API_KEY_ENV_NAMES =
         "kimi-coding" to listOf("KIMI_API_KEY"),
         "minimax" to listOf("MINIMAX_API_KEY"),
         "minimax-cn" to listOf("MINIMAX_CN_API_KEY"),
+        "mistral" to listOf("MISTRAL_API_KEY"),
         "moonshotai" to listOf("MOONSHOT_API_KEY"),
         "moonshotai-cn" to listOf("MOONSHOT_API_KEY"),
         "nvidia" to listOf("NVIDIA_API_KEY"),

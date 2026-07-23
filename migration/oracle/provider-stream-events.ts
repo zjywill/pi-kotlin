@@ -11,6 +11,7 @@ const apiNames = [
 	"openai-responses",
 	"azure-openai-responses",
 	"google-generative-ai",
+	"mistral-conversations",
 ] as const;
 const modules = new Map(
 	await Promise.all(
@@ -27,6 +28,9 @@ for (const api of apiNames) {
 	output[api] = capture.events;
 	if (api === "azure-openai-responses") {
 		output["azure-openai-responses-request"] = capture.request;
+	}
+	if (api === "mistral-conversations") {
+		output["mistral-conversations-request"] = capture.request;
 	}
 }
 console.log(JSON.stringify(output));
@@ -50,6 +54,7 @@ async function captureEvents(
 						azureDeploymentName: "fixture-deployment",
 					}
 				: {}),
+			...(api === "mistral-conversations" ? { sessionId: "session-123" } : {}),
 		});
 		const events: unknown[] = [];
 		for await (const event of stream) {
@@ -64,6 +69,8 @@ interface FixtureRequest {
 	url: string;
 	apiKey: string | null;
 	hasAuthorization: boolean;
+	authorization: string | null;
+	xAffinity: string | null;
 }
 
 function canonicalEvent(event: Record<string, unknown>): Record<string, unknown> {
@@ -111,7 +118,12 @@ function fixtureModel(api: string, baseUrl: string): Record<string, unknown> {
 		id: "fixture",
 		name: "Fixture",
 		api,
-		provider: api === "azure-openai-responses" ? "azure-openai-responses" : "fixture",
+		provider:
+			api === "azure-openai-responses"
+				? "azure-openai-responses"
+				: api === "mistral-conversations"
+					? "mistral"
+					: "fixture",
 		baseUrl: api === "azure-openai-responses" ? "" : baseUrl,
 		reasoning: false,
 		input: ["text"],
@@ -162,6 +174,8 @@ async function withFixtureServer<T>(
 			url: request.url ?? "",
 			apiKey: typeof request.headers["api-key"] === "string" ? request.headers["api-key"] : null,
 			hasAuthorization: typeof request.headers.authorization === "string",
+			authorization: typeof request.headers.authorization === "string" ? request.headers.authorization : null,
+			xAffinity: typeof request.headers["x-affinity"] === "string" ? request.headers["x-affinity"] : null,
 		};
 		request.resume();
 		reply.writeHead(200, {

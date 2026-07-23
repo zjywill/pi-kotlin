@@ -50,6 +50,17 @@ fun anthropicProvider(
         apiKeyEnvNames = listOf("ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"),
     )
 
+fun mistralProvider(
+    models: List<Model> = builtInModels("mistral"),
+): MistralProvider =
+    MistralProvider(
+        id = "mistral",
+        name = "Mistral",
+        baseUrl = "https://api.mistral.ai",
+        models = models,
+        apiKeyEnvNames = listOf("MISTRAL_API_KEY"),
+    )
+
 fun model(
     id: String,
     name: String = id,
