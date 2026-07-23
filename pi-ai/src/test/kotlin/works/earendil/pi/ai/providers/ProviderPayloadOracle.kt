@@ -8,7 +8,9 @@ import kotlinx.serialization.json.put
 import works.earendil.pi.ai.CacheRetention
 import works.earendil.pi.ai.Context
 import works.earendil.pi.ai.ModelThinkingLevel
+import works.earendil.pi.ai.SimpleStreamOptions
 import works.earendil.pi.ai.StreamOptions
+import works.earendil.pi.ai.ThinkingBudgets
 import works.earendil.pi.ai.ThinkingLevel
 import works.earendil.pi.ai.ToolDefinition
 import works.earendil.pi.ai.UserMessage
@@ -98,6 +100,15 @@ fun main() {
                     fixtureModel("mistral-conversations", provider = "mistral"),
                     context,
                     options,
+                ),
+            )
+            put(
+                "bedrock-converse-stream",
+                buildBedrockRequestBody(
+                    fixtureModel("bedrock-converse-stream", provider = "amazon-bedrock"),
+                    context,
+                    options,
+                    { null },
                 ),
             )
             put(
@@ -239,6 +250,60 @@ fun main() {
                         temperature = null,
                         promptMode = "reasoning",
                     ),
+                ),
+            )
+            put(
+                "bedrock-converse-stream-adaptive-thinking",
+                buildBedrockRequestBody(
+                    fixtureModel("bedrock-converse-stream", provider = "amazon-bedrock").copy(
+                        id = "global.anthropic.claude-opus-4-8-v1",
+                        name = "Claude Opus 4.8",
+                        reasoning = true,
+                        thinkingLevelMap =
+                            mapOf(
+                                ModelThinkingLevel.XHIGH to "xhigh",
+                                ModelThinkingLevel.MAX to "max",
+                            ),
+                    ),
+                    context,
+                    options.copy(temperature = null, reasoning = ThinkingLevel.XHIGH),
+                    { null },
+                ),
+            )
+            put(
+                "bedrock-converse-stream-fixed-thinking",
+                buildBedrockRequestBody(
+                    fixtureModel("bedrock-converse-stream", provider = "amazon-bedrock").copy(
+                        id = "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                        name = "Claude Sonnet 4.5",
+                        reasoning = true,
+                    ),
+                    context,
+                    options.copy(temperature = null, reasoning = ThinkingLevel.MEDIUM),
+                    { null },
+                ),
+            )
+            val simpleFixedModel =
+                fixtureModel("bedrock-converse-stream", provider = "amazon-bedrock").copy(
+                    id = "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                    name = "Claude Sonnet 4.5",
+                    reasoning = true,
+                )
+            put(
+                "bedrock-converse-stream-simple-fixed-thinking",
+                buildBedrockRequestBody(
+                    simpleFixedModel,
+                    context,
+                    bedrockSimpleStreamOptions(
+                        simpleFixedModel,
+                        context,
+                        SimpleStreamOptions(
+                            stream = options.copy(temperature = null),
+                            reasoning = ThinkingLevel.MEDIUM,
+                            thinkingBudgets = ThinkingBudgets(medium = 4_096),
+                        ),
+                    ),
+                    { null },
                 ),
             )
         }

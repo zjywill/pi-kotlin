@@ -56,6 +56,13 @@ fun builtInProviders(): List<Provider> =
                                 models = it,
                             )
 
+                        "amazon-bedrock" ->
+                            BedrockProvider(
+                                id = providerId,
+                                name = name,
+                                models = it,
+                            )
+
                         else ->
                             CatalogProvider(
                                 id = providerId,
@@ -231,6 +238,7 @@ private val SUPPORTED_APIS =
     setOf(
         "anthropic-messages",
         "azure-openai-responses",
+        "bedrock-converse-stream",
         "google-generative-ai",
         "google-vertex",
         "mistral-conversations",
@@ -244,6 +252,7 @@ private val SPECIAL_AUTH_PROVIDERS =
 private val PROVIDER_NAMES =
     mapOf(
         "ant-ling" to "Ant Ling",
+        "amazon-bedrock" to "Amazon Bedrock",
         "anthropic" to "Anthropic",
         "azure-openai-responses" to "Azure OpenAI",
         "cerebras" to "Cerebras",

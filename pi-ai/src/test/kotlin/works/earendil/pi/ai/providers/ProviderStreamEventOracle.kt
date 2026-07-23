@@ -74,6 +74,9 @@ fun main(args: Array<String>) =
                 val mistral = captureEvents("mistral-conversations", fixtureDir)
                 put("mistral-conversations", mistral.events)
                 put("mistral-conversations-request", mistral.request)
+                val bedrock = captureBedrockEvents()
+                put("bedrock-converse-stream", bedrock.events)
+                put("bedrock-converse-stream-request", bedrock.request)
                 put("cloudflare-auth-resolution", captureCloudflareAuthResolution())
                 put(
                     "cloudflare-workers-ai-request",
@@ -94,6 +97,101 @@ fun main(args: Array<String>) =
             }
         println(streamOracleJson.encodeToString(JsonObject.serializer(), output))
     }
+
+private suspend fun captureBedrockEvents(): BedrockStreamCapture {
+    lateinit var invocation: BedrockInvocation
+    val transport =
+        BedrockRuntimeTransport { captured, onEvent ->
+            invocation = captured
+            onEvent(BedrockStreamEvent.MessageStart("assistant"))
+            onEvent(BedrockStreamEvent.ContentDelta(0, reasoningText = "think"))
+            onEvent(BedrockStreamEvent.ContentDelta(0, reasoningSignature = "sig"))
+            onEvent(BedrockStreamEvent.ContentStop(0))
+            onEvent(BedrockStreamEvent.ContentDelta(1, text = "answer"))
+            onEvent(BedrockStreamEvent.ContentStop(1))
+            onEvent(BedrockStreamEvent.ContentStart(2, "tool-1", "echo"))
+            onEvent(BedrockStreamEvent.ContentDelta(2, toolInput = "{\"value\":"))
+            onEvent(BedrockStreamEvent.ContentDelta(2, toolInput = "\"ok\"}"))
+            onEvent(BedrockStreamEvent.ContentStop(2))
+            onEvent(BedrockStreamEvent.MessageStop("tool_use"))
+            onEvent(BedrockStreamEvent.Metadata(10, 5, 3, 2, 20))
+        }
+    val model =
+        fixtureModel(
+            "bedrock-converse-stream",
+            "https://bedrock-runtime.us-east-1.amazonaws.com",
+        ).copy(
+            id = "us.anthropic.claude-opus-4-8",
+            name = "Claude Opus 4.8",
+            provider = "amazon-bedrock",
+            reasoning = true,
+        )
+    val provider =
+        BedrockProvider(
+            id = "amazon-bedrock",
+            name = "Amazon Bedrock",
+            models = listOf(model),
+            environment = { null },
+            transport = transport,
+        )
+    val stream =
+        provider.stream(
+            model,
+            Context(
+                messages = mutableListOf(UserMessage("hi", timestamp = 1)),
+                tools =
+                    listOf(
+                        ToolDefinition(
+                            name = "echo",
+                            description = "Echo",
+                            parameters = buildJsonObject { put("type", "object") },
+                        ),
+                    ),
+            ),
+            StreamOptions(
+                apiKey = "test",
+                cacheRetention = works.earendil.pi.ai.CacheRetention.NONE,
+                maxTokens = 123,
+                reasoning = works.earendil.pi.ai.ThinkingLevel.HIGH,
+                headers =
+                    mapOf(
+                        "Authorization" to "blocked",
+                        "X-Amz-Date" to "blocked",
+                        "x-fixture" to "yes",
+                    ),
+            ),
+        )
+    val events = stream.events.toList().map(::canonicalEvent)
+    stream.result()
+    return BedrockStreamCapture(
+        events = JsonArray(events),
+        request =
+            buildJsonObject {
+                put(
+                    "client",
+                    buildJsonObject {
+                        putNullableString("region", invocation.client.region)
+                        putNullableString("endpoint", invocation.client.endpoint)
+                        putNullableString("profile", invocation.client.profile)
+                        put("authMode", invocation.client.authMode.name.lowercase())
+                        putNullableString("bearerToken", invocation.client.bearerToken)
+                    },
+                )
+                put(
+                    "headers",
+                    buildJsonObject {
+                        invocation.headers.forEach { (name, value) -> put(name, value) }
+                    },
+                )
+                put("body", invocation.request)
+            },
+    )
+}
+
+private data class BedrockStreamCapture(
+    val events: JsonArray,
+    val request: JsonObject,
+)
 
 private fun captureCloudflareAuthResolution(): JsonObject {
     val ambient =

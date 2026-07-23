@@ -10,6 +10,7 @@ const apiNames = [
 	"google-generative-ai",
 	"google-vertex",
 	"mistral-conversations",
+	"bedrock-converse-stream",
 ] as const;
 
 const modules = new Map(
@@ -52,6 +53,8 @@ for (const api of apiNames) {
 					? "azure-openai-responses"
 					: api === "mistral-conversations"
 						? "mistral"
+						: api === "bedrock-converse-stream"
+							? "amazon-bedrock"
 					: "fixture",
 		baseUrl: api === "azure-openai-responses" ? "" : "https://fixture.invalid/v1",
 		reasoning: false,
@@ -189,6 +192,54 @@ payloads["mistral-conversations-prompt-mode"] = await capturePayload(
 		cacheRetention: "none",
 		maxTokens: 123,
 		reasoning: "medium",
+	},
+	true,
+);
+payloads["bedrock-converse-stream-adaptive-thinking"] = await capturePayload(
+	"bedrock-converse-stream",
+	{
+		...fixtureModel("bedrock-converse-stream", "amazon-bedrock"),
+		id: "global.anthropic.claude-opus-4-8-v1",
+		name: "Claude Opus 4.8",
+		reasoning: true,
+		thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+	},
+	{
+		apiKey: "test",
+		cacheRetention: "none",
+		maxTokens: 123,
+		reasoning: "xhigh",
+	},
+);
+payloads["bedrock-converse-stream-fixed-thinking"] = await capturePayload(
+	"bedrock-converse-stream",
+	{
+		...fixtureModel("bedrock-converse-stream", "amazon-bedrock"),
+		id: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+		name: "Claude Sonnet 4.5",
+		reasoning: true,
+	},
+	{
+		apiKey: "test",
+		cacheRetention: "none",
+		maxTokens: 123,
+		reasoning: "medium",
+	},
+);
+payloads["bedrock-converse-stream-simple-fixed-thinking"] = await capturePayload(
+	"bedrock-converse-stream",
+	{
+		...fixtureModel("bedrock-converse-stream", "amazon-bedrock"),
+		id: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+		name: "Claude Sonnet 4.5",
+		reasoning: true,
+	},
+	{
+		apiKey: "test",
+		cacheRetention: "none",
+		maxTokens: 123,
+		reasoning: "medium",
+		thinkingBudgets: { medium: 4096 },
 	},
 	true,
 );

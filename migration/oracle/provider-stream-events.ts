@@ -5,6 +5,11 @@ import { pathToFileURL } from "node:url";
 
 const sourceRoot = process.env.PI_TYPESCRIPT_ROOT ?? "/Users/junyizhang/Git/pi";
 const fixtureDir = join(import.meta.dirname, "provider-stream-fixtures");
+(globalThis as typeof globalThis & { __piBedrockMock: BedrockMockState }).__piBedrockMock = {
+	configs: [],
+	requests: [],
+	events: [],
+};
 const apiNames = [
 	"openai-completions",
 	"anthropic-messages",
@@ -13,6 +18,7 @@ const apiNames = [
 	"google-generative-ai",
 	"google-vertex",
 	"mistral-conversations",
+	"bedrock-converse-stream",
 ] as const;
 const modules = new Map(
 	await Promise.all(
@@ -32,6 +38,12 @@ const cloudflareWorkersModule = await import(
 
 const output: Record<string, unknown> = {};
 for (const api of apiNames) {
+	if (api === "bedrock-converse-stream") {
+		const bedrock = await captureBedrockEvents();
+		output[api] = bedrock.events;
+		output["bedrock-converse-stream-request"] = bedrock.request;
+		continue;
+	}
 	const capture = await captureEvents(api);
 	output[api] = capture.events;
 	if (api === "azure-openai-responses") {
@@ -59,6 +71,98 @@ for (const fixture of [
 	output[`${fixture.name}-request`] = await captureCloudflareRequest(fixture.provider, fixture.api);
 }
 console.log(JSON.stringify(output));
+
+interface BedrockMockState {
+	configs: Array<Record<string, unknown>>;
+	requests: Array<{ input: unknown; headers: Record<string, string> }>;
+	events: unknown[];
+}
+
+async function captureBedrockEvents(): Promise<{ events: unknown[]; request: Record<string, unknown> }> {
+	const state = (globalThis as typeof globalThis & { __piBedrockMock: BedrockMockState }).__piBedrockMock;
+	state.configs.length = 0;
+	state.requests.length = 0;
+	state.events = [
+		{ messageStart: { role: "assistant" } },
+		{ contentBlockDelta: { contentBlockIndex: 0, delta: { reasoningContent: { text: "think" } } } },
+		{ contentBlockDelta: { contentBlockIndex: 0, delta: { reasoningContent: { signature: "sig" } } } },
+		{ contentBlockStop: { contentBlockIndex: 0 } },
+		{ contentBlockDelta: { contentBlockIndex: 1, delta: { text: "answer" } } },
+		{ contentBlockStop: { contentBlockIndex: 1 } },
+		{
+			contentBlockStart: {
+				contentBlockIndex: 2,
+				start: { toolUse: { toolUseId: "tool-1", name: "echo" } },
+			},
+		},
+		{ contentBlockDelta: { contentBlockIndex: 2, delta: { toolUse: { input: "{\"value\":" } } } },
+		{ contentBlockDelta: { contentBlockIndex: 2, delta: { toolUse: { input: "\"ok\"}" } } } },
+		{ contentBlockStop: { contentBlockIndex: 2 } },
+		{ messageStop: { stopReason: "tool_use" } },
+		{
+			metadata: {
+				usage: {
+					inputTokens: 10,
+					outputTokens: 5,
+					cacheReadInputTokens: 3,
+					cacheWriteInputTokens: 2,
+					totalTokens: 20,
+				},
+			},
+		},
+	];
+	const module = modules.get("bedrock-converse-stream")!;
+	const model = {
+		id: "us.anthropic.claude-opus-4-8",
+		name: "Claude Opus 4.8",
+		api: "bedrock-converse-stream",
+		provider: "amazon-bedrock",
+		baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128000,
+		maxTokens: 16384,
+	};
+	const stream = module.stream(model, fixtureContext(), {
+		apiKey: "test",
+		cacheRetention: "none",
+		maxTokens: 123,
+		reasoning: "high",
+		headers: {
+			Authorization: "blocked",
+			"X-Amz-Date": "blocked",
+			"x-fixture": "yes",
+		},
+	});
+	const events: unknown[] = [];
+	for await (const event of stream) {
+		events.push(canonicalEvent(event as Record<string, unknown>));
+	}
+	await stream.result();
+	const config = state.configs.at(-1) ?? {};
+	const request = state.requests.at(-1);
+	if (!request) throw new Error("Bedrock mock did not receive a request");
+	const token = config.token as { token?: string } | undefined;
+	return {
+		events,
+		request: {
+			client: {
+				region: config.region ?? null,
+				endpoint: config.endpoint ?? null,
+				profile: config.profile ?? null,
+				authMode:
+					Array.isArray(config.authSchemePreference) &&
+					config.authSchemePreference[0] === "httpBearerAuth"
+						? "bearer"
+						: "default",
+				bearerToken: token?.token ?? null,
+			},
+			headers: request.headers,
+			body: request.input,
+		},
+	};
+}
 
 async function captureEvents(
 	api: (typeof apiNames)[number],
@@ -282,9 +386,11 @@ function fixtureModel(api: string, baseUrl: string): Record<string, unknown> {
 				? "azure-openai-responses"
 				: api === "mistral-conversations"
 					? "mistral"
-					: api === "google-vertex"
-						? "google-vertex"
-					: "fixture",
+						: api === "google-vertex"
+							? "google-vertex"
+							: api === "bedrock-converse-stream"
+								? "amazon-bedrock"
+						: "fixture",
 		baseUrl: api === "azure-openai-responses" ? "" : baseUrl,
 		reasoning: false,
 		input: ["text"],

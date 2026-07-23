@@ -22,7 +22,8 @@ normalize_json() {
 
 cd "$ROOT"
 PI_TYPESCRIPT_ROOT="$TS_ROOT" NODE_NO_WARNINGS=1 \
-  node --experimental-strip-types migration/oracle/provider-stream-events.ts \
+  node --experimental-loader ./migration/oracle/bedrock-sdk-mock.mjs \
+  --experimental-strip-types migration/oracle/provider-stream-events.ts \
   | normalize_json > "$TMP_DIR/typescript.json"
 ./gradlew -q :pi-ai:providerStreamEventOracle \
   | normalize_json > "$TMP_DIR/kotlin.json"

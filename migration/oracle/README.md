@@ -37,7 +37,8 @@ timing.
 
 Provider payload and stream comparisons cover OpenAI Chat Completions, OpenAI
 Responses, Azure OpenAI Responses, Anthropic Messages, Google Generative AI,
-Google Vertex AI, and Mistral Conversations. Vertex independently compares SDK
+Google Vertex AI, Mistral Conversations, and Amazon Bedrock ConverseStream.
+Vertex independently compares SDK
 parameters, public stream events, the collection-scoped request URL, and
 `x-goog-api-key`; Kotlin unit fixtures additionally cover ADC bearer tokens and
 regional endpoint resolution. Cloudflare Workers AI and AI Gateway reuse the
@@ -52,3 +53,9 @@ authorization.
 Mistral Conversations adds independent payload cases for reasoning effort,
 prompt mode, and prompt caching. Its stream fixture also compares the actual
 chat-completions path, Bearer authorization, and `x-affinity` header.
+
+Bedrock adds independent payload cases for base, adaptive-thinking, and
+fixed-budget thinking requests. Its SDK-boundary fixture compares Bearer auth,
+region and endpoint selection, reserved-header filtering, the final Converse
+request, and public reasoning/text/tool/usage stream events without requiring
+live AWS credentials.

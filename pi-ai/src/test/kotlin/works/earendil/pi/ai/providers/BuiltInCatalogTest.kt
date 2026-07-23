@@ -36,7 +36,6 @@ class BuiltInCatalogTest {
         assertEquals("max", sol.thinkingLevelMap[works.earendil.pi.ai.ModelThinkingLevel.MAX])
         assertEquals(
             setOf(
-                "bedrock-converse-stream",
                 "openai-codex-responses",
             ),
             catalog.unsupportedApis,
@@ -48,11 +47,12 @@ class BuiltInCatalogTest {
         val providers = builtInProviders()
         val ids = providers.map { it.id }.toSet()
 
-        assertEquals(34, providers.size)
-        assertEquals(964, providers.sumOf { it.getModels().size })
+        assertEquals(35, providers.size)
+        assertEquals(1_073, providers.sumOf { it.getModels().size })
         assertTrue(
             ids.containsAll(
                 setOf(
+                    "amazon-bedrock",
                     "anthropic",
                     "azure-openai-responses",
                     "cloudflare-ai-gateway",
@@ -67,7 +67,6 @@ class BuiltInCatalogTest {
                 ),
             ),
         )
-        assertFalse("amazon-bedrock" in ids)
         assertFalse("github-copilot" in ids)
         assertFalse("openai-codex" in ids)
         val azure = providers.single { it.id == "azure-openai-responses" }
@@ -85,6 +84,9 @@ class BuiltInCatalogTest {
         val vertex = providers.single { it.id == "google-vertex" }
         assertEquals("Google Vertex AI", vertex.name)
         assertEquals(12, vertex.getModels().size)
+        val bedrock = providers.single { it.id == "amazon-bedrock" }
+        assertEquals("Amazon Bedrock", bedrock.name)
+        assertEquals(109, bedrock.getModels().size)
         assertTrue(providers.flatMap(works.earendil.pi.ai.Provider::getModels).all { it.api in SUPPORTED_TEST_APIS })
     }
 
@@ -167,6 +169,7 @@ class BuiltInCatalogTest {
             setOf(
                 "anthropic-messages",
                 "azure-openai-responses",
+                "bedrock-converse-stream",
                 "google-generative-ai",
                 "google-vertex",
                 "mistral-conversations",

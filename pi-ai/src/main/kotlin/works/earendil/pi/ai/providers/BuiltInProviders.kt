@@ -3,6 +3,7 @@ package works.earendil.pi.ai.providers
 import works.earendil.pi.ai.Model
 import works.earendil.pi.ai.ModelCost
 import works.earendil.pi.ai.ModelInput
+import works.earendil.pi.ai.Provider
 
 fun openAIProvider(
     models: List<Model> =
@@ -44,6 +45,15 @@ fun googleVertexProvider(
     GoogleVertexProvider(
         id = "google-vertex",
         name = "Google Vertex AI",
+        models = models,
+    )
+
+fun amazonBedrockProvider(
+    models: List<Model> = builtInModels("amazon-bedrock"),
+): Provider =
+    BedrockProvider(
+        id = "amazon-bedrock",
+        name = "Amazon Bedrock",
         models = models,
     )
 

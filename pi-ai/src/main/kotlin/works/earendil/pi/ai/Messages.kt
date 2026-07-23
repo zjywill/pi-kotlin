@@ -388,6 +388,11 @@ data class ProviderResponse(
     val headers: Map<String, String>,
 )
 
+enum class BedrockThinkingDisplay {
+    SUMMARIZED,
+    OMITTED,
+}
+
 data class StreamOptions(
     val temperature: Double? = null,
     val maxTokens: Int? = null,
@@ -414,6 +419,12 @@ data class StreamOptions(
     val azureDeploymentName: String? = null,
     val project: String? = null,
     val location: String? = null,
+    val region: String? = null,
+    val profile: String? = null,
+    val interleavedThinking: Boolean? = null,
+    val thinkingDisplay: BedrockThinkingDisplay? = null,
+    val requestMetadata: Map<String, String>? = null,
+    val bearerToken: String? = null,
 )
 
 data class SimpleStreamOptions(
