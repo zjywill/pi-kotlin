@@ -45,17 +45,19 @@ class BuiltInCatalogTest {
     }
 
     @Test
-    fun `providers expose only executable protocols and special auth providers stay hidden`() {
+    fun `providers expose only executable protocols and unsupported auth providers stay hidden`() {
         val providers = builtInProviders()
         val ids = providers.map { it.id }.toSet()
 
-        assertEquals(31, providers.size)
-        assertEquals(897, providers.sumOf { it.getModels().size })
+        assertEquals(33, providers.size)
+        assertEquals(952, providers.sumOf { it.getModels().size })
         assertTrue(
             ids.containsAll(
                 setOf(
                     "anthropic",
                     "azure-openai-responses",
+                    "cloudflare-ai-gateway",
+                    "cloudflare-workers-ai",
                     "deepseek",
                     "google",
                     "mistral",
@@ -66,8 +68,6 @@ class BuiltInCatalogTest {
             ),
         )
         assertFalse("amazon-bedrock" in ids)
-        assertFalse("cloudflare-ai-gateway" in ids)
-        assertFalse("cloudflare-workers-ai" in ids)
         assertFalse("github-copilot" in ids)
         assertFalse("openai-codex" in ids)
         val azure = providers.single { it.id == "azure-openai-responses" }
@@ -76,6 +76,12 @@ class BuiltInCatalogTest {
         val mistral = providers.single { it.id == "mistral" }
         assertEquals("Mistral", mistral.name)
         assertEquals(30, mistral.getModels().size)
+        val cloudflareGateway = providers.single { it.id == "cloudflare-ai-gateway" }
+        assertEquals("Cloudflare AI Gateway", cloudflareGateway.name)
+        assertEquals(42, cloudflareGateway.getModels().size)
+        val cloudflareWorkers = providers.single { it.id == "cloudflare-workers-ai" }
+        assertEquals("Cloudflare Workers AI", cloudflareWorkers.name)
+        assertEquals(13, cloudflareWorkers.getModels().size)
         assertTrue(providers.flatMap(works.earendil.pi.ai.Provider::getModels).all { it.api in SUPPORTED_TEST_APIS })
     }
 

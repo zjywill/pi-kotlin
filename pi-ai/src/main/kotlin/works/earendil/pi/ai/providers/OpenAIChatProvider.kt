@@ -14,6 +14,7 @@ import works.earendil.pi.ai.AssistantError
 import works.earendil.pi.ai.AssistantMessage
 import works.earendil.pi.ai.AssistantMessageEventStream
 import works.earendil.pi.ai.AssistantStart
+import works.earendil.pi.ai.CacheRetention
 import works.earendil.pi.ai.Context
 import works.earendil.pi.ai.Model
 import works.earendil.pi.ai.Provider
@@ -103,7 +104,7 @@ class OpenAIChatProvider(
             body = providerJson.encodeToString(JsonObject.serializer(), body),
             headers =
                 mergedHeaders(
-                    mapOf("authorization" to "Bearer $apiKey"),
+                    openAIChatBaseHeaders(model, options, apiKey),
                     model.headers,
                     options.headers,
                 ),
@@ -364,6 +365,8 @@ private data class OpenAIChatCompat(
     val supportsStrictMode: Boolean,
     val supportsReasoningEffort: Boolean,
     val thinkingFormat: String,
+    val sendSessionAffinityHeaders: Boolean,
+    val sessionAffinityFormat: String,
 )
 
 private fun openAIChatCompat(model: Model): OpenAIChatCompat {
@@ -432,6 +435,8 @@ private fun openAIChatCompat(model: Model): OpenAIChatCompat {
                     isOpenRouter -> "openrouter"
                     else -> "openai"
                 },
+            sendSessionAffinityHeaders = false,
+            sessionAffinityFormat = if (isOpenRouter) "openrouter" else "openai",
         )
     val raw = model.compat ?: return detected
     return detected.copy(
@@ -444,8 +449,36 @@ private fun openAIChatCompat(model: Model): OpenAIChatCompat {
         supportsReasoningEffort =
             raw.boolean("supportsReasoningEffort") ?: detected.supportsReasoningEffort,
         thinkingFormat = raw.string("thinkingFormat") ?: detected.thinkingFormat,
+        sendSessionAffinityHeaders =
+            raw.boolean("sendSessionAffinityHeaders") ?: detected.sendSessionAffinityHeaders,
+        sessionAffinityFormat = raw.string("sessionAffinityFormat") ?: detected.sessionAffinityFormat,
     )
 }
+
+private fun openAIChatBaseHeaders(
+    model: Model,
+    options: StreamOptions,
+    apiKey: String,
+): Map<String, String> =
+    buildMap {
+        put("authorization", "Bearer $apiKey")
+        val sessionId =
+            options.sessionId
+                ?.takeIf(String::isNotEmpty)
+                ?.takeUnless { options.cacheRetention == CacheRetention.NONE }
+        val compat = openAIChatCompat(model)
+        if (sessionId != null && compat.sendSessionAffinityHeaders) {
+            if (compat.sessionAffinityFormat == "openrouter") {
+                put("x-session-id", sessionId)
+            } else {
+                if (compat.sessionAffinityFormat == "openai") {
+                    put("session_id", sessionId)
+                }
+                put("x-client-request-id", sessionId)
+                put("x-session-affinity", sessionId)
+            }
+        }
+    }
 
 private fun JsonObject.boolean(name: String): Boolean? =
     this[name]?.let { element ->

@@ -38,12 +38,33 @@ fun builtInProviders(): List<Provider> =
             supportedModels
                 .takeIf(List<Model>::isNotEmpty)
                 ?.let {
-                    CatalogProvider(
-                        id = providerId,
-                        name = PROVIDER_NAMES[providerId] ?: providerId.toDisplayName(),
-                        models = it,
-                        apiKeyEnvNames = PROVIDER_API_KEY_ENV_NAMES[providerId] ?: defaultApiKeyNames(providerId),
-                    )
+                    val name = PROVIDER_NAMES[providerId] ?: providerId.toDisplayName()
+                    when (providerId) {
+                        "cloudflare-ai-gateway" ->
+                            CloudflareProvider(
+                                id = providerId,
+                                name = name,
+                                kind = CloudflareProviderKind.AI_GATEWAY,
+                                models = it,
+                            )
+
+                        "cloudflare-workers-ai" ->
+                            CloudflareProvider(
+                                id = providerId,
+                                name = name,
+                                kind = CloudflareProviderKind.WORKERS_AI,
+                                models = it,
+                            )
+
+                        else ->
+                            CatalogProvider(
+                                id = providerId,
+                                name = name,
+                                models = it,
+                                apiKeyEnvNames =
+                                    PROVIDER_API_KEY_ENV_NAMES[providerId] ?: defaultApiKeyNames(providerId),
+                            )
+                    }
                 }
         }
         .sortedBy(Provider::id)
@@ -210,8 +231,6 @@ private val SUPPORTED_APIS =
     )
 private val SPECIAL_AUTH_PROVIDERS =
     setOf(
-        "cloudflare-ai-gateway",
-        "cloudflare-workers-ai",
         "github-copilot",
     )
 private val PROVIDER_NAMES =
@@ -220,6 +239,8 @@ private val PROVIDER_NAMES =
         "anthropic" to "Anthropic",
         "azure-openai-responses" to "Azure OpenAI",
         "cerebras" to "Cerebras",
+        "cloudflare-ai-gateway" to "Cloudflare AI Gateway",
+        "cloudflare-workers-ai" to "Cloudflare Workers AI",
         "deepseek" to "DeepSeek",
         "fireworks" to "Fireworks",
         "google" to "Google",
@@ -254,6 +275,8 @@ private val PROVIDER_API_KEY_ENV_NAMES =
         "anthropic" to listOf("ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"),
         "azure-openai-responses" to listOf("AZURE_OPENAI_API_KEY"),
         "cerebras" to listOf("CEREBRAS_API_KEY"),
+        "cloudflare-ai-gateway" to listOf("CLOUDFLARE_API_KEY"),
+        "cloudflare-workers-ai" to listOf("CLOUDFLARE_API_KEY"),
         "deepseek" to listOf("DEEPSEEK_API_KEY"),
         "fireworks" to listOf("FIREWORKS_API_KEY"),
         "google" to listOf("GEMINI_API_KEY"),

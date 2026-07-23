@@ -21,17 +21,33 @@ const modules = new Map(
 		}),
 	),
 );
+const modelsModule = await import(pathToFileURL(join(sourceRoot, "packages", "ai", "src", "models.ts")).href);
+const cloudflareGatewayModule = await import(
+	pathToFileURL(join(sourceRoot, "packages", "ai", "src", "providers", "cloudflare-ai-gateway.ts")).href
+);
+const cloudflareWorkersModule = await import(
+	pathToFileURL(join(sourceRoot, "packages", "ai", "src", "providers", "cloudflare-workers-ai.ts")).href
+);
 
 const output: Record<string, unknown> = {};
 for (const api of apiNames) {
 	const capture = await captureEvents(api);
 	output[api] = capture.events;
 	if (api === "azure-openai-responses") {
-		output["azure-openai-responses-request"] = capture.request;
+		output["azure-openai-responses-request"] = baseRequestProjection(capture.request);
 	}
 	if (api === "mistral-conversations") {
-		output["mistral-conversations-request"] = capture.request;
+		output["mistral-conversations-request"] = baseRequestProjection(capture.request);
 	}
+}
+output["cloudflare-auth-resolution"] = await captureCloudflareAuthResolution();
+for (const fixture of [
+	{ name: "cloudflare-workers-ai", provider: "workers" as const, api: "openai-completions" as const },
+	{ name: "cloudflare-ai-gateway-chat", provider: "gateway" as const, api: "openai-completions" as const },
+	{ name: "cloudflare-ai-gateway-responses", provider: "gateway" as const, api: "openai-responses" as const },
+	{ name: "cloudflare-ai-gateway-anthropic", provider: "gateway" as const, api: "anthropic-messages" as const },
+]) {
+	output[`${fixture.name}-request`] = await captureCloudflareRequest(fixture.provider, fixture.api);
 }
 console.log(JSON.stringify(output));
 
@@ -71,6 +87,133 @@ interface FixtureRequest {
 	hasAuthorization: boolean;
 	authorization: string | null;
 	xAffinity: string | null;
+	cfAigAuthorization: string | null;
+	xApiKey: string | null;
+	sessionId: string | null;
+	xClientRequestId: string | null;
+	xSessionAffinity: string | null;
+}
+
+function baseRequestProjection(request: FixtureRequest): Record<string, unknown> {
+	return {
+		url: request.url,
+		apiKey: request.apiKey,
+		hasAuthorization: request.hasAuthorization,
+		authorization: request.authorization,
+		xAffinity: request.xAffinity,
+	};
+}
+
+function cloudflareRequestProjection(request: FixtureRequest): Record<string, unknown> {
+	return {
+		url: request.url,
+		authorization: request.authorization,
+		cfAigAuthorization: request.cfAigAuthorization,
+		xApiKey: request.xApiKey,
+		sessionId: request.sessionId,
+		xClientRequestId: request.xClientRequestId,
+		xSessionAffinity: request.xSessionAffinity,
+	};
+}
+
+async function captureCloudflareAuthResolution(): Promise<Record<string, unknown>> {
+	const ambient = {
+		CLOUDFLARE_API_KEY: "ambient-key",
+		CLOUDFLARE_ACCOUNT_ID: "ambient-account",
+		CLOUDFLARE_GATEWAY_ID: "ambient-gateway",
+	};
+	const context = {
+		env: async (name: string) => ambient[name as keyof typeof ambient],
+		fileExists: async () => false,
+	};
+	const gatewayAuth = cloudflareGatewayModule.cloudflareAIGatewayProvider().auth.apiKey;
+	const workersAuth = cloudflareWorkersModule.cloudflareWorkersAIProvider().auth.apiKey;
+	const gateway = await gatewayAuth.resolve({
+		ctx: context,
+		credential: {
+			type: "api_key",
+			key: "stored-key",
+			env: { CLOUDFLARE_ACCOUNT_ID: "stored-account" },
+		},
+	});
+	const workers = await workersAuth.resolve({
+		ctx: context,
+		credential: {
+			type: "api_key",
+			key: "stored-key",
+			env: { CLOUDFLARE_ACCOUNT_ID: "stored-account" },
+		},
+	});
+	const missingGateway = await gatewayAuth.resolve({
+		ctx: {
+			env: async (name: string) =>
+				({ CLOUDFLARE_API_KEY: "key", CLOUDFLARE_ACCOUNT_ID: "account" })[
+					name as "CLOUDFLARE_API_KEY" | "CLOUDFLARE_ACCOUNT_ID"
+				],
+			fileExists: async () => false,
+		},
+	});
+	return {
+		gateway: {
+			apiKey: gateway?.auth.apiKey ?? null,
+			headers: gateway?.auth.headers ?? null,
+			env: gateway?.env ?? null,
+		},
+		workers: {
+			apiKey: workers?.auth.apiKey ?? null,
+			headers: workers?.auth.headers ?? null,
+			env: workers?.env ?? null,
+		},
+		missingGatewayConfigured: missingGateway !== undefined,
+	};
+}
+
+async function captureCloudflareRequest(
+	providerKind: "workers" | "gateway",
+	api: "openai-completions" | "openai-responses" | "anthropic-messages",
+): Promise<Record<string, unknown>> {
+	const response = readFileSync(join(fixtureDir, `${api}.sse`), "utf8") + "\n";
+	const capture = await withFixtureServer(response, async (baseUrl) => {
+		const provider =
+			providerKind === "workers"
+				? cloudflareWorkersModule.cloudflareWorkersAIProvider()
+				: cloudflareGatewayModule.cloudflareAIGatewayProvider();
+		const providerId = providerKind === "workers" ? "cloudflare-workers-ai" : "cloudflare-ai-gateway";
+		const basePath =
+			providerKind === "workers"
+				? `${baseUrl}/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1`
+				: `${baseUrl}/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/${
+						api === "openai-completions" ? "compat" : api === "openai-responses" ? "openai" : "anthropic"
+					}`;
+		const model = {
+			...fixtureModel(api, basePath),
+			provider: providerId,
+			baseUrl: basePath,
+			...(api === "openai-completions" ? { compat: { sendSessionAffinityHeaders: true } } : {}),
+		};
+		const env = {
+			CLOUDFLARE_API_KEY: "cf-token",
+			CLOUDFLARE_ACCOUNT_ID: "account",
+			CLOUDFLARE_GATEWAY_ID: "gateway",
+		};
+		const models = modelsModule.createModels({
+			authContext: {
+				env: async (name: string) => env[name as keyof typeof env],
+				fileExists: async () => false,
+			},
+		});
+		models.setProvider(provider);
+		const stream = models.stream(model, fixtureContext(), {
+			maxRetries: 0,
+			...(api === "openai-completions" ? { sessionId: "session-123" } : {}),
+			...(providerKind === "gateway" && api === "openai-responses"
+				? { headers: { Authorization: "Bearer upstream-token" } }
+				: {}),
+		});
+		await stream.result();
+		return null;
+	});
+	return cloudflareRequestProjection(capture.request);
 }
 
 function canonicalEvent(event: Record<string, unknown>): Record<string, unknown> {
@@ -176,6 +319,18 @@ async function withFixtureServer<T>(
 			hasAuthorization: typeof request.headers.authorization === "string",
 			authorization: typeof request.headers.authorization === "string" ? request.headers.authorization : null,
 			xAffinity: typeof request.headers["x-affinity"] === "string" ? request.headers["x-affinity"] : null,
+			cfAigAuthorization:
+				typeof request.headers["cf-aig-authorization"] === "string"
+					? request.headers["cf-aig-authorization"]
+					: null,
+			xApiKey: typeof request.headers["x-api-key"] === "string" ? request.headers["x-api-key"] : null,
+			sessionId: typeof request.headers.session_id === "string" ? request.headers.session_id : null,
+			xClientRequestId:
+				typeof request.headers["x-client-request-id"] === "string"
+					? request.headers["x-client-request-id"]
+					: null,
+			xSessionAffinity:
+				typeof request.headers["x-session-affinity"] === "string" ? request.headers["x-session-affinity"] : null,
 		};
 		request.resume();
 		reply.writeHead(200, {
