@@ -4,6 +4,7 @@ import java.nio.file.Files
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
@@ -13,8 +14,12 @@ import kotlinx.serialization.json.put
 import works.earendil.pi.ai.FauxModelDefinition
 import works.earendil.pi.ai.FauxProvider
 import works.earendil.pi.ai.FauxResponseStep
+import works.earendil.pi.ai.InMemoryCredentialStore
 import works.earendil.pi.ai.Models
+import works.earendil.pi.ai.OAuthCredential
 import works.earendil.pi.ai.fauxAssistantMessage
+import works.earendil.pi.ai.providers.builtInModels
+import works.earendil.pi.ai.providers.githubCopilotProvider
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -164,6 +169,75 @@ class RpcRuntimeTest {
 
             assertEquals("vendor/model", state.data()["model"]?.jsonObject?.get("id")?.jsonPrimitive?.content)
             assertEquals("xhigh", state.data()["thinkingLevel"]?.jsonPrimitive?.content)
+            runtime.close()
+        }
+
+    @Test
+    fun `rpc model commands respect the authenticated Copilot account catalog`() =
+        runTest {
+            val catalogModels = builtInModels("github-copilot").take(2)
+            val selected = catalogModels.first()
+            val excluded = catalogModels.last()
+            val models =
+                Models(
+                    providers = listOf(githubCopilotProvider(catalogModels)),
+                    credentials =
+                        InMemoryCredentialStore(
+                            mapOf(
+                                "github-copilot" to
+                                    OAuthCredential(
+                                        access = "copilot-token",
+                                        refresh = "ghu-refresh",
+                                        expires = Long.MAX_VALUE,
+                                        availableModelIds = listOf(selected.id),
+                                    ),
+                            ),
+                        ),
+                )
+            val runtime =
+                RpcRuntime(
+                    models,
+                    RpcRuntimeOptions(
+                        cwd = Files.createTempDirectory("pi-kotlin-rpc-copilot-models"),
+                        noSession = true,
+                        provider = "github-copilot",
+                        model = selected.id,
+                    ),
+                )
+
+            val available =
+                requireNotNull(
+                    runtime.handle(
+                        buildJsonObject { put("type", "get_available_models") },
+                    ),
+                )
+            val modelIds =
+                available
+                    .data()["models"]
+                    ?.jsonArray
+                    .orEmpty()
+                    .map { it.jsonObject.getValue("id").jsonPrimitive.content }
+            assertEquals(listOf(selected.id), modelIds)
+
+            val rejected =
+                requireNotNull(
+                    runtime.handle(
+                        buildJsonObject {
+                            put("type", "set_model")
+                            put("provider", "github-copilot")
+                            put("modelId", excluded.id)
+                        },
+                    ),
+                )
+            assertFalse(rejected["success"]?.jsonPrimitive?.boolean ?: true)
+
+            val cycled =
+                requireNotNull(
+                    runtime.handle(
+                        buildJsonObject { put("type", "cycle_model") },
+                    ),
+                )
+            assertTrue(cycled["data"] is JsonNull)
             runtime.close()
         }
 

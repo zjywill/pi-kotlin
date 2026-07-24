@@ -110,7 +110,12 @@ class OpenAIChatProvider(
             body = providerJson.encodeToString(JsonObject.serializer(), body),
             headers =
                 mergedHeaders(
-                    openAIChatBaseHeaders(model, options, apiKey),
+                    openAIChatBaseHeaders(model, options, apiKey) +
+                        if (model.provider == "github-copilot") {
+                            githubCopilotDynamicHeaders(context)
+                        } else {
+                            emptyMap()
+                        },
                     model.headers,
                     options.headers,
                 ),

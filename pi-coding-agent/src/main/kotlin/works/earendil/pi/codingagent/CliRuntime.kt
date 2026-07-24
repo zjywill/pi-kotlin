@@ -168,8 +168,8 @@ class CliRuntime(
         return if (finalMessage?.errorMessage == null) 0 else 1
     }
 
-    private fun listModels(query: String?) {
-        val all = models.getModels()
+    private suspend fun listModels(query: String?) {
+        val all = models.getAvailable()
         val filtered =
             if (query.isNullOrBlank()) {
                 all
@@ -183,18 +183,18 @@ class CliRuntime(
             }
     }
 
-    private fun resolveModel(
+    private suspend fun resolveModel(
         args: Args,
         sessionModel: SessionModel?,
     ): Model? {
         if (args.provider == null && args.model == null && sessionModel != null) {
             return models
-                .getModels(sessionModel.provider)
+                .getAvailable(sessionModel.provider)
                 .firstOrNull { it.id == sessionModel.modelId }
         }
         val reference = parseModelReference(args.provider, args.model)
         val providerName = reference.provider ?: "google"
-        val candidates = models.getModels(providerName)
+        val candidates = models.getAvailable(providerName)
         val pattern = reference.modelId
         if (pattern.isNullOrBlank()) {
             val defaultId = defaultModelId(providerName)

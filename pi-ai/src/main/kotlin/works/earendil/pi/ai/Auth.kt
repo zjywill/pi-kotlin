@@ -27,6 +27,8 @@ data class OAuthCredential(
     val refresh: String,
     val expires: Long,
     val accountId: String? = null,
+    val enterpriseUrl: String? = null,
+    val availableModelIds: List<String>? = null,
 ) : Credential
 
 @Serializable

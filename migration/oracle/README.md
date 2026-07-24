@@ -20,6 +20,7 @@ Run the available comparisons from the Kotlin repository:
 ```bash
 ./migration/oracle/compare-cli-help.sh
 ./migration/oracle/compare-coding-message-projection.sh
+./migration/oracle/compare-github-copilot.sh
 ./migration/oracle/compare-model-catalog-runtime.sh
 ./migration/oracle/compare-openai-codex-oauth.sh
 ./migration/oracle/compare-provider-payloads.sh
@@ -34,6 +35,11 @@ serialized fields.
 The model catalog runtime comparison covers bundled-versus-remote timestamp
 selection, a newer persisted overlay restored without network access, and
 404/501-style unavailable catalog fallback.
+
+The GitHub Copilot comparison covers enterprise-domain device OAuth, the
+GitHub-to-Copilot token exchange, policy enablement for every known model,
+account-specific model filtering, `proxy-ep` API URL derivation, catalog
+protocol counts, and `X-Initiator`/vision request headers.
 
 The provider stream comparison projects the documented public event transcript:
 event type, index, delta/end content, tool calls, and terminal messages. It does
@@ -80,3 +86,6 @@ fallback, post-output failure, and sticky session fallback. Interactive OAuth
 adds a separate browser/device/refresh grader that compares PKCE authorization
 parameters, code and refresh exchanges, device events and request payloads,
 JWT account extraction, credential rotation, and request-auth derivation.
+GitHub Copilot has a separate device-flow grader because its long-lived GitHub
+token, short-lived Copilot token, enterprise endpoints, policy calls, and
+account model catalog differ from OpenAI Codex OAuth.

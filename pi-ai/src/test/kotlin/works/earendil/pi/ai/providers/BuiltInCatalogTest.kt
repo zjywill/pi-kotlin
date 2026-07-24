@@ -40,12 +40,12 @@ class BuiltInCatalogTest {
     }
 
     @Test
-    fun `providers expose only executable protocols and unsupported auth providers stay hidden`() {
+    fun `providers expose every executable protocol including GitHub Copilot`() {
         val providers = builtInProviders()
         val ids = providers.map { it.id }.toSet()
 
-        assertEquals(36, providers.size)
-        assertEquals(1_081, providers.sumOf { it.getModels().size })
+        assertEquals(37, providers.size)
+        assertEquals(1_109, providers.sumOf { it.getModels().size })
         assertTrue(
             ids.containsAll(
                 setOf(
@@ -58,6 +58,7 @@ class BuiltInCatalogTest {
                     "google",
                     "google-vertex",
                     "mistral",
+                    "github-copilot",
                     "openai",
                     "openai-codex",
                     "openrouter",
@@ -65,7 +66,18 @@ class BuiltInCatalogTest {
                 ),
             ),
         )
-        assertFalse("github-copilot" in ids)
+        val copilot = providers.single { it.id == "github-copilot" }
+        assertEquals("GitHub Copilot", copilot.name)
+        assertEquals(28, copilot.getModels().size)
+        assertEquals(
+            mapOf(
+                "anthropic-messages" to 9,
+                "openai-completions" to 7,
+                "openai-responses" to 12,
+            ),
+            copilot.getModels().groupingBy { it.api }.eachCount(),
+        )
+        assertNotNull(copilot.oauth)
         val azure = providers.single { it.id == "azure-openai-responses" }
         assertEquals("Azure OpenAI", azure.name)
         assertEquals(46, azure.getModels().size)

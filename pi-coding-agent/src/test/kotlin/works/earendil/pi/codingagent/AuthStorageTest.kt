@@ -29,6 +29,8 @@ class AuthStorageTest {
                         refresh = "refresh-token",
                         expires = 123_456,
                         accountId = "account-id",
+                        enterpriseUrl = "company.ghe.com",
+                        availableModelIds = listOf("gpt-4.1", "claude-sonnet-4.6"),
                     )
 
                 store.modify("openai-codex") { credential }
@@ -36,6 +38,8 @@ class AuthStorageTest {
                 assertEquals(credential, JsonFileCredentialStore(path).read("openai-codex"))
                 assertTrue(path.readText().contains("\"type\": \"oauth\""))
                 assertTrue(path.readText().contains("\"accountId\": \"account-id\""))
+                assertTrue(path.readText().contains("\"enterpriseUrl\": \"company.ghe.com\""))
+                assertTrue(path.readText().contains("\"availableModelIds\""))
                 runCatching {
                     assertEquals(
                         setOf(

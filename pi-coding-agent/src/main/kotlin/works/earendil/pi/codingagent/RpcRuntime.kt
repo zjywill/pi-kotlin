@@ -164,7 +164,7 @@ class RpcRuntime(
                             put(
                                 "models",
                                 JsonArray(
-                                    models.getModels().map {
+                                    models.getAvailable().map {
                                         protocolJson.encodeToJsonElement(Model.serializer(), it)
                                     },
                                 ),
@@ -340,14 +340,16 @@ class RpcRuntime(
         return successResponse(id, "prompt")
     }
 
-    private fun handleSetModel(
+    private suspend fun handleSetModel(
         command: JsonObject,
         id: String?,
     ): JsonObject {
         val provider = command.string("provider").orEmpty()
         val modelId = command.string("modelId").orEmpty()
         val model =
-            models.getModel(provider, modelId)
+            models
+                .getAvailable(provider)
+                .firstOrNull { it.id == modelId }
                 ?: return errorResponse(id, "set_model", "Model not found: $provider/$modelId")
         agent.state.model = model
         sessionManager.appendModelChange(provider, modelId)
@@ -358,9 +360,12 @@ class RpcRuntime(
         )
     }
 
-    private fun handleCycleModel(id: String?): JsonObject {
-        val available = models.getModels().sortedWith(compareBy<Model> { it.provider }.thenBy { it.id })
-        if (available.isEmpty()) {
+    private suspend fun handleCycleModel(id: String?): JsonObject {
+        val available =
+            models
+                .getAvailable()
+                .sortedWith(compareBy<Model> { it.provider }.thenBy { it.id })
+        if (available.size <= 1) {
             return successResponse(id, "cycle_model", JsonNull)
         }
         val currentIndex = available.indexOfFirst { it.provider == agent.state.model.provider && it.id == agent.state.model.id }

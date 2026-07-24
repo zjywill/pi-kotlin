@@ -108,10 +108,7 @@ class AnthropicProvider(
             body = providerJson.encodeToString(JsonObject.serializer(), body),
             headers =
                 mergedHeaders(
-                    mapOf(
-                        "x-api-key" to apiKey,
-                        "anthropic-version" to "2023-06-01",
-                    ),
+                    anthropicRequestHeaders(model, context, options, apiKey),
                     model.headers,
                     options.headers,
                 ),
@@ -420,6 +417,46 @@ class AnthropicProvider(
                     }
                 }
         }
+}
+
+private fun anthropicRequestHeaders(
+    model: Model,
+    context: Context,
+    options: StreamOptions,
+    apiKey: String,
+): Map<String, String> {
+    if (model.provider != "github-copilot") {
+        return mapOf(
+            "x-api-key" to apiKey,
+            "anthropic-version" to "2023-06-01",
+        )
+    }
+    val betaFeatures = mutableListOf<String>()
+    val supportsEagerToolInputStreaming =
+        model.compat?.get("supportsEagerToolInputStreaming")
+            ?.let { it as? kotlinx.serialization.json.JsonPrimitive }
+            ?.booleanOrNull
+            ?: true
+    if (context.tools.isNotEmpty() && !supportsEagerToolInputStreaming) {
+        betaFeatures += "fine-grained-tool-streaming-2025-05-14"
+    }
+    val forceAdaptiveThinking =
+        model.compat?.get("forceAdaptiveThinking")
+            ?.let { it as? kotlinx.serialization.json.JsonPrimitive }
+            ?.booleanOrNull == true
+    if (options.interleavedThinking != false && !forceAdaptiveThinking) {
+        betaFeatures += "interleaved-thinking-2025-05-14"
+    }
+    return buildMap {
+        put("authorization", "Bearer $apiKey")
+        put("anthropic-version", "2023-06-01")
+        put("accept", "application/json")
+        put("anthropic-dangerous-direct-browser-access", "true")
+        if (betaFeatures.isNotEmpty()) {
+            put("anthropic-beta", betaFeatures.joinToString(","))
+        }
+        putAll(githubCopilotDynamicHeaders(context))
+    }
 }
 
 internal fun buildAnthropicRequestBody(

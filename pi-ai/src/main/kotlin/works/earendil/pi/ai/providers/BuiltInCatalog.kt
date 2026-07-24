@@ -37,12 +37,7 @@ fun builtInProviders(): List<Provider> =
     builtInCatalog()
         .modelsByProvider
         .mapNotNull { (providerId, models) ->
-            val supportedModels =
-                if (providerId in SPECIAL_AUTH_PROVIDERS) {
-                    emptyList()
-                } else {
-                    models.filter { it.api in SUPPORTED_APIS }
-                }
+            val supportedModels = models.filter { it.api in SUPPORTED_APIS }
             supportedModels
                 .takeIf(List<Model>::isNotEmpty)
                 ?.let {
@@ -73,6 +68,13 @@ fun builtInProviders(): List<Provider> =
 
                         "openai-codex" ->
                             OpenAICodexProvider(
+                                id = providerId,
+                                name = name,
+                                models = it,
+                            )
+
+                        "github-copilot" ->
+                            GitHubCopilotProvider(
                                 id = providerId,
                                 name = name,
                                 models = it,
@@ -297,10 +299,6 @@ private val SUPPORTED_APIS =
         "openai-codex-responses",
         "openai-responses",
     )
-private val SPECIAL_AUTH_PROVIDERS =
-    setOf(
-        "github-copilot",
-    )
 private val PROVIDER_NAMES =
     mapOf(
         "ant-ling" to "Ant Ling",
@@ -315,6 +313,7 @@ private val PROVIDER_NAMES =
         "google" to "Google",
         "google-vertex" to "Google Vertex AI",
         "groq" to "Groq",
+        "github-copilot" to "GitHub Copilot",
         "huggingface" to "Hugging Face",
         "kimi-coding" to "Kimi For Coding",
         "minimax" to "MiniMax",

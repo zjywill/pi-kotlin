@@ -11,10 +11,14 @@ import kotlinx.serialization.json.jsonPrimitive
 import works.earendil.pi.ai.BashExecutionMessage
 import works.earendil.pi.ai.FauxProvider
 import works.earendil.pi.ai.FauxResponseStep
+import works.earendil.pi.ai.InMemoryCredentialStore
 import works.earendil.pi.ai.Models
+import works.earendil.pi.ai.OAuthCredential
 import works.earendil.pi.ai.UserMessage
 import works.earendil.pi.ai.contentText
 import works.earendil.pi.ai.fauxAssistantMessage
+import works.earendil.pi.ai.providers.builtInModels
+import works.earendil.pi.ai.providers.githubCopilotProvider
 import works.earendil.pi.codingagent.session.NewSessionOptions
 import works.earendil.pi.codingagent.session.SessionManager
 import kotlin.test.Test
@@ -73,6 +77,40 @@ class CliRuntimeTest {
 
             assertEquals(0, runtime.run(parseArgs(listOf("--list-models", "faux/faux-1"))))
             assertTrue(stdout.toString().contains("faux/faux-1"))
+        }
+
+    @Test
+    fun `list models filters GitHub Copilot to the authenticated account catalog`() =
+        runTest {
+            val catalogModels = builtInModels("github-copilot").take(2)
+            val selected = catalogModels.first()
+            val excluded = catalogModels.last()
+            val stdout = StringWriter()
+            val runtime =
+                CliRuntime(
+                    Models(
+                        providers = listOf(githubCopilotProvider(catalogModels)),
+                        credentials =
+                            InMemoryCredentialStore(
+                                mapOf(
+                                    "github-copilot" to
+                                        OAuthCredential(
+                                            access = "copilot-token",
+                                            refresh = "ghu-refresh",
+                                            expires = Long.MAX_VALUE,
+                                            availableModelIds = listOf(selected.id),
+                                        ),
+                                ),
+                            ),
+                    ),
+                    stdout = PrintWriter(stdout, true),
+                    stderr = PrintWriter(StringWriter(), true),
+                )
+
+            assertEquals(0, runtime.run(parseArgs(listOf("--list-models", "github-copilot"))))
+
+            assertTrue(stdout.toString().contains("github-copilot/${selected.id}"))
+            assertFalse(stdout.toString().contains("github-copilot/${excluded.id}"))
         }
 
     @Test

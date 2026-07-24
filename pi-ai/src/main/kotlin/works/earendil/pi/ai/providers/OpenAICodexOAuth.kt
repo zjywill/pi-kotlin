@@ -12,6 +12,7 @@ import java.net.http.HttpResponse
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.time.Duration
 import java.util.Base64
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
@@ -43,6 +44,7 @@ internal data class OAuthHttpRequest(
     val method: String = "POST",
     val headers: Map<String, String> = emptyMap(),
     val body: String,
+    val timeoutMs: Long? = null,
 )
 
 internal data class OAuthHttpResponse(
@@ -65,6 +67,7 @@ internal class JavaOAuthHttpTransport(
                     .method(request.method, HttpRequest.BodyPublishers.ofString(request.body))
                     .apply {
                         request.headers.forEach(::header)
+                        request.timeoutMs?.let { timeout(Duration.ofMillis(it)) }
                     }.build()
             val response =
                 client.send(

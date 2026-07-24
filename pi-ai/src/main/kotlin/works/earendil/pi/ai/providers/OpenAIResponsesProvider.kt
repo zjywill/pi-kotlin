@@ -71,7 +71,13 @@ class OpenAIResponsesProvider(
             OpenAIResponsesHttpRequest(
                 url = "${model.baseUrl.trimEnd('/')}/responses",
                 modelId = model.id,
-                headers = mapOf("authorization" to "Bearer $apiKey"),
+                headers =
+                    mapOf("authorization" to "Bearer $apiKey") +
+                        if (model.provider == "github-copilot") {
+                            githubCopilotDynamicHeaders(context)
+                        } else {
+                            emptyMap()
+                        },
             )
         }
 

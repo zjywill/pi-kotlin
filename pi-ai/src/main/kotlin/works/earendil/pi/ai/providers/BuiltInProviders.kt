@@ -66,6 +66,15 @@ fun openAICodexProvider(
         models = models,
     )
 
+fun githubCopilotProvider(
+    models: List<Model> = builtInModels("github-copilot"),
+): GitHubCopilotProvider =
+    GitHubCopilotProvider(
+        id = "github-copilot",
+        name = "GitHub Copilot",
+        models = models,
+    )
+
 fun anthropicProvider(
     models: List<Model> =
         builtInModels("anthropic").filter { it.api == "anthropic-messages" },

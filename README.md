@@ -28,20 +28,21 @@ packaging and process internals.
 ./gradlew :pi-coding-agent:run --args="--help"
 ```
 
-## OpenAI Codex login
+## OAuth login
 
 Start the installed `pi` application in interactive mode, then authenticate
-with either a browser callback or a headless device code:
+with OpenAI Codex or GitHub Copilot:
 
 ```text
 /login openai-codex
+/login github-copilot
 ```
 
 Credentials are stored in `~/.pi/agent/auth.json` by default, or under
 `PI_CODING_AGENT_DIR` when configured. Writes are atomic and the credential
 file is owner-readable and owner-writable on POSIX filesystems. Use
-`/logout openai-codex` to remove only the stored Codex credential; environment
-variables are unchanged.
+`/logout openai-codex` or `/logout github-copilot` to remove only that stored
+credential; environment variables are unchanged.
 
 See [migration/MIGRATION.md](migration/MIGRATION.md) for migration rules,
 acceptance gates, current status, and the executable completeness audit.

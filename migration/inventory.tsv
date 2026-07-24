@@ -1,7 +1,7 @@
 area	source	target	status	judge	gap
 AI message and stream contracts	packages/ai/src/types.ts	pi-ai	complete	Gradle tests and provider stream oracle
 Built-in model catalog	packages/ai/src/providers/data	pi-ai	complete	Catalog checksum, runtime tests, and model catalog oracle
-Provider protocols	packages/ai/src/api	pi-ai	partial	Provider payload, stream, and OAuth oracles	GitHub Copilot authentication and remaining provider protocols are missing
+Provider protocols	packages/ai/src/api	pi-ai	partial	Provider payload, stream, and OAuth oracles	Remaining provider protocols are missing
 Agent loop	packages/agent/src	pi-agent-core	complete	Agent loop and session tests
 SQLite session storage	packages/storage/sqlite-node	pi-storage-sqlite	complete	SQLite repository tests
 CLI argument and print modes	packages/coding-agent/src	pi-coding-agent	partial	CLI help oracle and CLI tests	API-key login, package workflows, and several parsed flags remain incomplete

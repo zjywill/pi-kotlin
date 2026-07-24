@@ -28,6 +28,11 @@ interface Provider {
 
     fun getModels(): List<Model>
 
+    fun filterModels(
+        models: List<Model>,
+        credential: Credential?,
+    ): List<Model> = models
+
     val supportsModelRefresh: Boolean
         get() = false
 
@@ -111,6 +116,21 @@ class Models(
         provider: String,
         id: String,
     ): Model? = getModels(provider).firstOrNull { it.id == id }
+
+    suspend fun getAvailable(providerId: String? = null): List<Model> {
+        val providers =
+            if (providerId == null) {
+                providersById.values.toList()
+            } else {
+                listOfNotNull(providersById[providerId])
+            }
+        return providers.flatMap { provider ->
+            val credential = readStoredCredential(provider.id)
+            val providerModels =
+                runCatching(provider::getModels).getOrDefault(emptyList())
+            provider.filterModels(providerModels, credential)
+        }
+    }
 
     suspend fun getAuth(providerId: String): AuthResult? {
         val provider = providersById[providerId] ?: return null
@@ -271,7 +291,8 @@ class Models(
             providersById[model.provider]
                 ?: return errorStream(model, "Unknown provider: ${model.provider}")
         return try {
-            provider.stream(model, context, applyStoredAuth(provider, options))
+            val prepared = prepareStoredAuth(model, provider, options)
+            provider.stream(prepared.model, context, prepared.options)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Throwable) {
@@ -294,10 +315,11 @@ class Models(
             providersById[model.provider]
                 ?: return errorStream(model, "Unknown provider: ${model.provider}")
         return try {
+            val prepared = prepareStoredAuth(model, provider, options.stream)
             provider.streamSimple(
-                model,
+                prepared.model,
                 context,
-                options.copy(stream = applyStoredAuth(provider, options.stream)),
+                options.copy(stream = prepared.options),
             )
         } catch (error: CancellationException) {
             throw error
@@ -312,18 +334,29 @@ class Models(
         options: SimpleStreamOptions = SimpleStreamOptions(),
     ): AssistantMessage = streamSimple(model, context, options).result()
 
-    private suspend fun applyStoredAuth(
+    private suspend fun prepareStoredAuth(
+        model: Model,
         provider: Provider,
         options: StreamOptions,
-    ): StreamOptions {
-        val stored = readStoredCredential(provider.id) ?: return options
+    ): PreparedRequest {
+        val stored = readStoredCredential(provider.id) ?: return PreparedRequest(model, options)
         if (!options.apiKey.isNullOrBlank() && stored !is OAuthCredential) {
-            return options
+            return PreparedRequest(model, options)
         }
-        val resolution = resolveStoredAuth(provider, stored) ?: return options
-        return options.copy(
-            apiKey = resolution.auth.apiKey,
-            headers = mergeAuthHeaders(resolution.auth.headers, options.headers),
+        val resolution =
+            resolveStoredAuth(provider, stored)
+                ?: return PreparedRequest(model, options)
+        return PreparedRequest(
+            model =
+                resolution.auth.baseUrl
+                    ?.takeIf(String::isNotBlank)
+                    ?.let { model.copy(baseUrl = it) }
+                    ?: model,
+            options =
+                options.copy(
+                    apiKey = resolution.auth.apiKey,
+                    headers = mergeAuthHeaders(resolution.auth.headers, options.headers),
+                ),
         )
     }
 
@@ -441,6 +474,11 @@ class Models(
 }
 
 private const val MAX_CONCURRENT_MODEL_REFRESHES = 8
+
+private data class PreparedRequest(
+    val model: Model,
+    val options: StreamOptions,
+)
 
 private fun mergeAuthHeaders(
     auth: Map<String, String?>,
