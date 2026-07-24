@@ -24,6 +24,7 @@ Run the available comparisons from the Kotlin repository:
 ./migration/oracle/compare-github-copilot.sh
 ./migration/oracle/compare-model-catalog-runtime.sh
 ./migration/oracle/compare-openai-codex-oauth.sh
+./migration/oracle/compare-openrouter-oauth.sh
 ./migration/oracle/compare-provider-payloads.sh
 ./migration/oracle/compare-provider-stream-events.sh
 ./migration/oracle/compare-session-jsonl.sh
@@ -38,6 +39,11 @@ authorization-code and refresh-token JSON requests, refresh-token rotation,
 five-minute expiry skew, Claude Code Bearer authentication, content negotiation
 and identity headers, the mandatory system identity, and canonical tool-name
 mapping in requests and responses.
+
+The OpenRouter OAuth comparison covers the random one-shot loopback callback,
+PKCE authorization, permanent API-key exchange, callback response headers,
+no-op refresh, request-auth derivation, and a real local OpenRouter-compatible
+provider request using the stored OAuth credential.
 
 The model catalog runtime comparison covers bundled-versus-remote timestamp
 selection, a newer persisted overlay restored without network access, and

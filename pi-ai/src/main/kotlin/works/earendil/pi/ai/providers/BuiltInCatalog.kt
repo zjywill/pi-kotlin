@@ -18,6 +18,7 @@ import works.earendil.pi.ai.Model
 import works.earendil.pi.ai.Models
 import works.earendil.pi.ai.ModelsRefreshOptions
 import works.earendil.pi.ai.ModelsStore
+import works.earendil.pi.ai.OAuthAuth
 import works.earendil.pi.ai.Provider
 import works.earendil.pi.ai.StreamOptions
 
@@ -92,6 +93,17 @@ fun builtInProviders(): List<Provider> =
                                 oauth = AnthropicOAuth(),
                             )
 
+                        "openrouter" ->
+                            CatalogProvider(
+                                id = providerId,
+                                name = name,
+                                models = it,
+                                apiKeyEnvNames =
+                                    PROVIDER_API_KEY_ENV_NAMES[providerId]
+                                        ?: defaultApiKeyNames(providerId),
+                                oauth = OpenRouterOAuth(),
+                            )
+
                         else ->
                             CatalogProvider(
                                 id = providerId,
@@ -151,6 +163,7 @@ private class CatalogProvider(
     override val name: String,
     private val models: List<Model>,
     apiKeyEnvNames: List<String>,
+    override val oauth: OAuthAuth? = null,
 ) : Provider {
     override val baseUrl: String? = models.firstOrNull()?.baseUrl
 

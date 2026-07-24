@@ -36,6 +36,7 @@ through the commit recorded in `sync-state.tsv`.
 - `./migration/oracle/compare-github-copilot.sh`
 - `./migration/oracle/compare-model-catalog-runtime.sh`
 - `./migration/oracle/compare-openai-codex-oauth.sh`
+- `./migration/oracle/compare-openrouter-oauth.sh`
 - `./migration/oracle/compare-provider-payloads.sh`
 - `./migration/oracle/compare-provider-stream-events.sh`
 - `./migration/oracle/compare-session-jsonl.sh`

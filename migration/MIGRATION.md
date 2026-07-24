@@ -72,7 +72,7 @@ features outside that slice remain migration work.
 | Gradle multi-module build | Functional slice | Six JVM 21 modules; `clean test installDist` passes with warnings as errors |
 | Core AI messages and stream protocol | Functional slice | Message, event-stream, UUIDv7, tool validation, and faux-provider tests |
 | Model catalog | Functional slice | Hydrated schema-v3 manifest and 37 provider files verify by SHA-256; all 1,109 model records are exposed across 37 providers whose current executable protocol paths can be selected, including 28 credential-filtered GitHub Copilot models |
-| Provider HTTP implementations | Partial | Google Generative AI, Google Vertex AI, Anthropic Messages plus Claude Pro/Max OAuth, OpenAI Chat Completions, OpenAI Responses, Azure OpenAI Responses, Mistral Conversations, Amazon Bedrock ConverseStream, OpenAI Codex Responses SSE/WebSocket plus browser/device OAuth, GitHub Copilot device OAuth and Anthropic/OpenAI Chat/OpenAI Responses delegates, Cloudflare Workers AI, and Cloudflare AI Gateway request/stream fixture tests, independent payload/event/auth parity, and multi-protocol catalog dispatch |
+| Provider HTTP implementations | Partial | Google Generative AI, Google Vertex AI, Anthropic Messages plus Claude Pro/Max OAuth, OpenRouter Chat Completions plus browser OAuth, OpenAI Chat Completions, OpenAI Responses, Azure OpenAI Responses, Mistral Conversations, Amazon Bedrock ConverseStream, OpenAI Codex Responses SSE/WebSocket plus browser/device OAuth, GitHub Copilot device OAuth and Anthropic/OpenAI Chat/OpenAI Responses delegates, Cloudflare Workers AI, and Cloudflare AI Gateway request/stream fixture tests, independent payload/event/auth parity, and multi-protocol catalog dispatch |
 | Agent loop | Functional slice | Streaming, tool calls, parallel execution, steering, follow-up, abort, and session tests using the faux provider; coding-message projection has independent parity for bash/custom/branch/compaction messages |
 | CLI argument contract | Partial | Parser tests and byte-for-byte `--help` oracle against the pinned TypeScript CLI; provider-prefixed and slash-containing model IDs, thinking suffixes, and interactive `/login`/`/logout` for OAuth providers are covered |
 | Prompt and context resources | Partial | Global and ancestor `AGENTS.md`/`CLAUDE.md` discovery, `SYSTEM.md`/`APPEND_SYSTEM.md`, CLI overrides, trust gating, and `--no-context-files` tests |
@@ -90,7 +90,7 @@ features outside that slice remain migration work.
 Verified on July 24, 2026 against source commit
 `24bace27cf308c89707cf8005b4795d873e23f17`:
 
-- `./gradlew clean test installDist`: passed, 206 tests, 0 failures, 0 errors,
+- `./gradlew clean test installDist`: passed, 210 tests, 0 failures, 0 errors,
   and 0 skipped.
 - `./migration/oracle/compare-cli-help.sh`: passed with byte-for-byte CLI help
   parity.
@@ -112,6 +112,11 @@ Verified on July 24, 2026 against source commit
   parameters, state handling, authorization-code and refresh-token forms,
   device notification/request payloads, JWT account extraction, credential
   rotation, and request-auth derivation.
+- `./migration/oracle/compare-openrouter-oauth.sh`: passed with an independent
+  random one-shot loopback callback, ephemeral port and UUID path checks, PKCE
+  authorization, permanent API-key exchange, callback response headers,
+  no-op refresh, request-auth derivation, and a real local OpenRouter-compatible
+  provider request consuming the stored OAuth credential.
 - `./migration/oracle/compare-provider-payloads.sh`: passed with exact normalized
   JSON parity for OpenAI Chat Completions, OpenAI Responses, Azure OpenAI
   Responses, Anthropic Messages, Google Generative AI, Google Vertex AI,
@@ -175,6 +180,10 @@ Verified on July 24, 2026 against source commit
   five-minute expiry skew, real local-server Bearer requests, Claude Code beta
   and identity headers, mandatory system identity, and canonical tool names in
   declared, historical, and returned tool calls.
+- OpenRouter OAuth fixture tests cover the real ephemeral loopback callback,
+  PKCE code exchange, permanent credential projection, denial and nested error
+  details, login timeout cleanup, no-op refresh, and catalog/remote-catalog
+  OAuth capability retention.
 - GitHub Copilot fixture tests cover personal and enterprise endpoint
   normalization, trusted verification URLs, wait-before-first-poll,
   pending/slow-down/deadline behavior, five-minute expiry skew, best-effort
@@ -211,6 +220,9 @@ Verified on July 24, 2026 against source commit
 - Installed Anthropic authentication smoke: an isolated OAuth fixture was
   loaded by `/logout anthropic`, removed without touching ambient variables,
   and persisted as `{}` with mode `0600`.
+- Installed OpenRouter authentication smoke: an isolated permanent OAuth-key
+  fixture was loaded by `/logout openrouter`, removed without touching ambient
+  variables, and persisted as `{}` with mode `0600`.
 - Installed `pi-server` process smoke: `serve`, `spawn`, `list`, `status`,
   `rpc set_model`, `rpc set_thinking_level`, `rpc-stream get_state`, and `stop`
   all succeeded.
@@ -241,6 +253,11 @@ Verified on July 24, 2026 against source commit
   `anthropic/claude-sonnet-4-6`. RPC `set_model`,
   `set_thinking_level`, and piped `rpc-stream get_state` preserved provider
   `anthropic`, API `anthropic-messages`, and thinking level `high`.
+- With an isolated OpenRouter OAuth fixture, the installed server exposed all
+  274 OpenRouter models. RPC `set_model`, `set_thinking_level`, and piped
+  `rpc-stream get_state` preserved
+  `openrouter/moonshotai/kimi-k2.6`, API `openai-completions`, and thinking
+  level `high`.
 - Server state read-back preserved the slash-containing model ID
   `moonshotai/kimi-k2.6` and thinking level `high`.
 - Piped `rpc-stream` emitted `rpc_ready` then `response` and exited with status
