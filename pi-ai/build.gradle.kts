@@ -69,3 +69,9 @@ tasks.register<JavaExec>("openRouterOAuthOracle") {
     classpath = sourceSets["test"].runtimeClasspath
     mainClass = "works.earendil.pi.ai.providers.OpenRouterOAuthOracleKt"
 }
+
+tasks.register<JavaExec>("xaiOAuthOracle") {
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass = "works.earendil.pi.ai.providers.XaiOAuthOracleKt"
+}

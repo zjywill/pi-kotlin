@@ -28,6 +28,7 @@ Run the available comparisons from the Kotlin repository:
 ./migration/oracle/compare-provider-payloads.sh
 ./migration/oracle/compare-provider-stream-events.sh
 ./migration/oracle/compare-session-jsonl.sh
+./migration/oracle/compare-xai-oauth.sh
 ```
 
 Normalizers may remove absolute paths, timestamps, and version strings. They
@@ -44,6 +45,11 @@ The OpenRouter OAuth comparison covers the random one-shot loopback callback,
 PKCE authorization, permanent API-key exchange, callback response headers,
 no-op refresh, request-auth derivation, and a real local OpenRouter-compatible
 provider request using the stored OAuth credential.
+
+The xAI OAuth comparison covers device authorization, wait-before-first-poll,
+pending and server-directed slow-down timing, refresh-token preservation,
+default token lifetime, request-auth derivation, and real local Chat
+Completions and Responses SSE requests using the stored OAuth credential.
 
 The model catalog runtime comparison covers bundled-versus-remote timestamp
 selection, a newer persisted overlay restored without network access, and
