@@ -45,3 +45,9 @@ tasks.register<JavaExec>("modelCatalogRuntimeOracle") {
     classpath = sourceSets["test"].runtimeClasspath
     mainClass = "works.earendil.pi.ai.providers.ModelCatalogRuntimeOracleKt"
 }
+
+tasks.register<JavaExec>("openAICodexOAuthOracle") {
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass = "works.earendil.pi.ai.providers.OpenAICodexOAuthOracleKt"
+}

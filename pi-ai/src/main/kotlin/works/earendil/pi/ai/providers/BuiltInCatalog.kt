@@ -11,6 +11,8 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import works.earendil.pi.ai.AssistantMessageEventStream
 import works.earendil.pi.ai.Context
+import works.earendil.pi.ai.CredentialStore
+import works.earendil.pi.ai.InMemoryCredentialStore
 import works.earendil.pi.ai.InMemoryModelsStore
 import works.earendil.pi.ai.Model
 import works.earendil.pi.ai.Models
@@ -93,6 +95,7 @@ fun builtInModelsCollection(): Models = Models(builtInProviders())
 
 data class BuiltInModelsOptions(
     val modelsStore: ModelsStore = InMemoryModelsStore(),
+    val credentialStore: CredentialStore = InMemoryCredentialStore(),
     val catalogBaseUrl: String = "https://pi.dev",
     val allowNetwork: Boolean = false,
     val force: Boolean = false,
@@ -115,7 +118,7 @@ suspend fun builtInModelsCollection(options: BuiltInModelsOptions): Models {
                 client = options.httpClient,
             )
         }
-    return Models(providers, options.modelsStore).also { models ->
+    return Models(providers, options.modelsStore, options.credentialStore).also { models ->
         models.refresh(
             ModelsRefreshOptions(
                 allowNetwork = options.allowNetwork,

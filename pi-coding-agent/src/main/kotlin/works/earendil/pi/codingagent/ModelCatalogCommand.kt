@@ -59,6 +59,7 @@ suspend fun loadBuiltInModels(
     builtInModelsCollection(
         BuiltInModelsOptions(
             modelsStore = JsonFileModelsStore(agentDir.resolve("models-store.json")),
+            credentialStore = JsonFileCredentialStore(agentDir.resolve("auth.json")),
             catalogBaseUrl = catalogBaseUrl,
             allowNetwork = false,
         ),

@@ -21,6 +21,7 @@ Run the available comparisons from the Kotlin repository:
 ./migration/oracle/compare-cli-help.sh
 ./migration/oracle/compare-coding-message-projection.sh
 ./migration/oracle/compare-model-catalog-runtime.sh
+./migration/oracle/compare-openai-codex-oauth.sh
 ./migration/oracle/compare-provider-payloads.sh
 ./migration/oracle/compare-provider-stream-events.sh
 ./migration/oracle/compare-session-jsonl.sh
@@ -76,4 +77,6 @@ compares the actual handshake headers, `response.create` frame, and the same
 public event transcript. Focused Kotlin tests cover connection reuse,
 continuation deltas, idle and age expiry, retry boundaries, pre-output SSE
 fallback, post-output failure, and sticky session fallback. Interactive OAuth
-login remains a separate migration gap.
+adds a separate browser/device/refresh grader that compares PKCE authorization
+parameters, code and refresh exchanges, device events and request payloads,
+JWT account extraction, credential rotation, and request-auth derivation.

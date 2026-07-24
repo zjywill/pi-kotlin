@@ -31,6 +31,7 @@ sealed interface FauxResponseStep {
 class FauxProvider(
     override val id: String = "faux",
     override val name: String = "Faux",
+    override val oauth: OAuthAuth? = null,
     private val api: String = "faux",
     definitions: List<FauxModelDefinition> =
         listOf(

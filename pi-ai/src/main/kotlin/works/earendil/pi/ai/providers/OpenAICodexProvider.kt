@@ -19,6 +19,7 @@ import works.earendil.pi.ai.CacheRetention
 import works.earendil.pi.ai.Context
 import works.earendil.pi.ai.Model
 import works.earendil.pi.ai.ModelThinkingLevel
+import works.earendil.pi.ai.OAuthAuth
 import works.earendil.pi.ai.Provider
 import works.earendil.pi.ai.SimpleStreamOptions
 import works.earendil.pi.ai.StreamOptions
@@ -36,6 +37,8 @@ class OpenAICodexProvider private constructor(
     private val userAgent: () -> String,
     websocketDependencies: OpenAICodexWebSocketDependencies,
 ) : Provider {
+    override val oauth: OAuthAuth = OpenAICodexOAuth()
+
     constructor(
         id: String,
         name: String,

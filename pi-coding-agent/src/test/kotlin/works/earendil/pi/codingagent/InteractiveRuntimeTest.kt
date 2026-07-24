@@ -3,9 +3,17 @@ package works.earendil.pi.codingagent
 import java.nio.file.Files
 import java.util.Base64
 import kotlinx.coroutines.test.runTest
+import works.earendil.pi.ai.AuthInteraction
+import works.earendil.pi.ai.AuthOption
+import works.earendil.pi.ai.AuthPrompt
 import works.earendil.pi.ai.FauxProvider
 import works.earendil.pi.ai.FauxResponseStep
+import works.earendil.pi.ai.InMemoryCredentialStore
+import works.earendil.pi.ai.InMemoryModelsStore
+import works.earendil.pi.ai.ModelAuth
 import works.earendil.pi.ai.Models
+import works.earendil.pi.ai.OAuthAuth
+import works.earendil.pi.ai.OAuthCredential
 import works.earendil.pi.ai.fauxAssistantMessage
 import works.earendil.pi.codingagent.session.SessionManager
 import kotlin.test.Test
@@ -234,6 +242,73 @@ class InteractiveRuntimeTest {
             assertEquals(0, exit)
             assertTrue(picker.output.contains("Saved session"))
             assertTrue(conversation.output.contains("Session: ${session.getSessionId()}"))
+        }
+
+    @Test
+    fun `interactive login persists credentials and logout removes them`() =
+        runTest {
+            val credential =
+                OAuthCredential(
+                    access = "access",
+                    refresh = "refresh",
+                    expires = System.currentTimeMillis() + 60_000,
+                )
+            val oauth =
+                object : OAuthAuth {
+                    override val name: String = "Test OAuth"
+
+                    override suspend fun login(interaction: AuthInteraction): OAuthCredential {
+                        val method =
+                            interaction.prompt(
+                                AuthPrompt.Select(
+                                    "Select test login method:",
+                                    listOf(AuthOption("browser", "Browser login")),
+                                ),
+                            )
+                        assertEquals("browser", method)
+                        return credential
+                    }
+
+                    override suspend fun refresh(credential: OAuthCredential): OAuthCredential = credential
+
+                    override suspend fun toAuth(credential: OAuthCredential): ModelAuth =
+                        ModelAuth(apiKey = credential.access)
+                }
+            val provider = FauxProvider(oauth = oauth)
+            val store = InMemoryCredentialStore()
+            val console =
+                ScriptedConsole(
+                    listOf(
+                        "/login faux",
+                        "",
+                        "/logout faux",
+                        "/exit",
+                    ),
+                )
+            val runtime =
+                InteractiveRuntime(
+                    Models(listOf(provider), InMemoryModelsStore(), store),
+                    cwd = Files.createTempDirectory("pi-kotlin-interactive-auth"),
+                    consoleFactory = { console },
+                )
+
+            val exit =
+                runtime.run(
+                    parseArgs(
+                        listOf(
+                            "--provider",
+                            "faux",
+                            "--model",
+                            "faux-1",
+                            "--no-session",
+                        ),
+                    ),
+                )
+
+            assertEquals(0, exit)
+            assertEquals(null, store.read("faux"))
+            assertTrue(console.output.contains("Logged in to Faux."))
+            assertTrue(console.output.contains("Logged out of Faux."))
         }
 
     private class ScriptedConsole(

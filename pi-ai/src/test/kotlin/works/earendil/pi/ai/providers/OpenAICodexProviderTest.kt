@@ -20,10 +20,14 @@ import kotlinx.serialization.json.put
 import works.earendil.pi.ai.AssistantDone
 import works.earendil.pi.ai.CacheRetention
 import works.earendil.pi.ai.Context
+import works.earendil.pi.ai.InMemoryCredentialStore
+import works.earendil.pi.ai.InMemoryModelsStore
 import works.earendil.pi.ai.Model
 import works.earendil.pi.ai.ModelCost
 import works.earendil.pi.ai.ModelInput
 import works.earendil.pi.ai.ModelThinkingLevel
+import works.earendil.pi.ai.Models
+import works.earendil.pi.ai.OAuthCredential
 import works.earendil.pi.ai.SimpleStreamOptions
 import works.earendil.pi.ai.StopReason
 import works.earendil.pi.ai.StreamOptions
@@ -289,6 +293,73 @@ class OpenAICodexProviderTest {
                     capturedBody.get().getValue("reasoning").jsonObject
                         .getValue("effort").jsonPrimitive.content,
                 )
+            } finally {
+                server.stop(0)
+            }
+        }
+
+    @Test
+    fun `Models consumes stored OAuth in a real Codex provider request`() =
+        runTest {
+            val capturedHeaders = AtomicReference<Map<String, String>>()
+            val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+            server.createContext("/") { exchange ->
+                capturedHeaders.set(
+                    exchange.requestHeaders.entries.associate { (name, values) ->
+                        name.lowercase() to values.joinToString(",")
+                    },
+                )
+                exchange.requestBody.readAllBytes()
+                val response =
+                    """
+                    data: {"type":"response.completed","response":{"id":"resp-auth","status":"completed","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"output":[]}}
+
+                    """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+                exchange.responseHeaders.add("content-type", "text/event-stream")
+                exchange.sendResponseHeaders(200, response.size.toLong())
+                exchange.responseBody.use { it.write(response) }
+            }
+            server.start()
+            try {
+                val token = codexToken("stored-account")
+                val model =
+                    codexModel().copy(
+                        baseUrl = "http://127.0.0.1:${server.address.port}",
+                    )
+                val provider =
+                    OpenAICodexProvider(
+                        id = "openai-codex",
+                        name = "OpenAI Codex",
+                        models = listOf(model),
+                    )
+                val store =
+                    InMemoryCredentialStore(
+                        mapOf(
+                            "openai-codex" to
+                                OAuthCredential(
+                                    access = token,
+                                    refresh = "refresh-token",
+                                    expires = System.currentTimeMillis() + 60_000,
+                                    accountId = "stored-account",
+                                ),
+                        ),
+                    )
+                val models = Models(listOf(provider), InMemoryModelsStore(), store)
+
+                val result =
+                    models.complete(
+                        model,
+                        Context(messages = mutableListOf(UserMessage("hello"))),
+                        StreamOptions(
+                            apiKey = codexToken("explicit-account"),
+                            transport = Transport.SSE,
+                            env = mapOf("OPENAI_CODEX_TOKEN" to codexToken("ambient-account")),
+                        ),
+                    )
+
+                assertEquals(StopReason.STOP, result.stopReason, result.errorMessage)
+                assertEquals("Bearer $token", capturedHeaders.get()["authorization"])
+                assertEquals("stored-account", capturedHeaders.get()["chatgpt-account-id"])
             } finally {
                 server.stop(0)
             }

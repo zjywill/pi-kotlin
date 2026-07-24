@@ -1,10 +1,10 @@
 area	source	target	status	judge	gap
 AI message and stream contracts	packages/ai/src/types.ts	pi-ai	complete	Gradle tests and provider stream oracle
 Built-in model catalog	packages/ai/src/providers/data	pi-ai	complete	Catalog checksum, runtime tests, and model catalog oracle
-Provider protocols	packages/ai/src/api	pi-ai	partial	Provider payload and stream oracles	OpenAI Codex WebSocket transport and OAuth login plus GitHub Copilot authentication are missing
+Provider protocols	packages/ai/src/api	pi-ai	partial	Provider payload, stream, and OAuth oracles	GitHub Copilot authentication and remaining provider protocols are missing
 Agent loop	packages/agent/src	pi-agent-core	complete	Agent loop and session tests
 SQLite session storage	packages/storage/sqlite-node	pi-storage-sqlite	complete	SQLite repository tests
-CLI argument and print modes	packages/coding-agent/src	pi-coding-agent	partial	CLI help oracle and CLI tests	Several parsed flags and login/package workflows are incomplete
+CLI argument and print modes	packages/coding-agent/src	pi-coding-agent	partial	CLI help oracle and CLI tests	API-key login, package workflows, and several parsed flags remain incomplete
 Extensions and resources	packages/coding-agent/src/core/extensions	pi-coding-agent	missing	None	Extensions, skills, prompt templates, themes, packages, reload, and persisted trust are missing
 Interactive terminal	packages/tui packages/coding-agent/src/modes/interactive	pi-tui pi-coding-agent	partial	PTY smoke and utility tests	Full-screen components, overlays, editor, and transcript parity are missing
 HTML export	packages/coding-agent/src/core/export-html	pi-coding-agent	partial	Exporter tests	Theme, Markdown, and syntax highlighting parity are missing

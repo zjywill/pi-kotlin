@@ -33,6 +33,7 @@ through the commit recorded in `sync-state.tsv`.
 - `./migration/oracle/compare-cli-help.sh`
 - `./migration/oracle/compare-coding-message-projection.sh`
 - `./migration/oracle/compare-model-catalog-runtime.sh`
+- `./migration/oracle/compare-openai-codex-oauth.sh`
 - `./migration/oracle/compare-provider-payloads.sh`
 - `./migration/oracle/compare-provider-stream-events.sh`
 - `./migration/oracle/compare-session-jsonl.sh`

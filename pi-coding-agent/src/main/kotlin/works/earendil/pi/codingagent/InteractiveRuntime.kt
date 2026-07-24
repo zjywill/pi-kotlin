@@ -1,11 +1,15 @@
 package works.earendil.pi.codingagent
 
+import java.awt.Desktop
 import java.io.PrintWriter
+import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runInterruptible
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -20,7 +24,12 @@ import org.jline.reader.LineReaderBuilder
 import org.jline.reader.UserInterruptException
 import org.jline.terminal.Terminal
 import org.jline.terminal.TerminalBuilder
+import works.earendil.pi.ai.AuthEvent
+import works.earendil.pi.ai.AuthInteraction
+import works.earendil.pi.ai.AuthPrompt
+import works.earendil.pi.ai.AuthType
 import works.earendil.pi.ai.Models
+import works.earendil.pi.ai.Provider
 import works.earendil.pi.ai.UserMessage
 import works.earendil.pi.codingagent.session.SessionManager
 
@@ -206,6 +215,18 @@ class InteractiveRuntime(
 
                         input == "/model" -> console.println(currentModel(runtime))
                         input.startsWith("/model ") -> setModel(runtime, input.removePrefix("/model ").trim(), console)
+                        input == "/login" || input.startsWith("/login ") ->
+                            login(
+                                input.removePrefix("/login").trim().takeIf(String::isNotEmpty),
+                                console,
+                            )
+
+                        input == "/logout" || input.startsWith("/logout ") ->
+                            logout(
+                                input.removePrefix("/logout").trim().takeIf(String::isNotEmpty),
+                                console,
+                            )
+
                         input.startsWith("/thinking ") ->
                             printCommandResponse(
                                 runtime.handle(
@@ -295,6 +316,125 @@ class InteractiveRuntime(
             console,
             "Model set to $value.",
         )
+    }
+
+    private suspend fun login(
+        providerId: String?,
+        console: InteractiveConsole,
+    ) {
+        val providers = models.getProviders().filter { it.oauth != null }.sortedBy(Provider::id)
+        val provider =
+            selectProvider(
+                requestedId = providerId,
+                providers = providers,
+                prompt = "Login provider:",
+                console = console,
+            ) ?: return
+        try {
+            models.login(
+                provider.id,
+                AuthType.OAUTH,
+                ConsoleAuthInteraction(console),
+            )
+            console.println("Logged in to ${provider.name}.")
+        } catch (error: Exception) {
+            console.error(error.message ?: "Login failed")
+        }
+    }
+
+    private suspend fun logout(
+        providerId: String?,
+        console: InteractiveConsole,
+    ) {
+        val stored =
+            try {
+                models.listCredentials()
+            } catch (error: Exception) {
+                console.error(error.message ?: "Unable to read stored credentials")
+                return
+            }
+        if (stored.isEmpty()) {
+            console.error(
+                "No stored credentials to remove. /logout only removes credentials saved by /login; " +
+                    "environment variables are unchanged.",
+            )
+            return
+        }
+        val selectedId =
+            if (providerId != null) {
+                if (stored.none { it.providerId == providerId }) {
+                    console.error("No stored credentials for provider: $providerId")
+                    return
+                }
+                providerId
+            } else {
+                selectCredential(stored.map { it.providerId }, console) ?: return
+            }
+        try {
+            models.logout(selectedId)
+            val name = models.getProvider(selectedId)?.name ?: selectedId
+            console.println("Logged out of $name.")
+        } catch (error: Exception) {
+            console.error(error.message ?: "Logout failed")
+        }
+    }
+
+    private fun selectProvider(
+        requestedId: String?,
+        providers: List<Provider>,
+        prompt: String,
+        console: InteractiveConsole,
+    ): Provider? {
+        if (requestedId != null) {
+            val provider = providers.firstOrNull { it.id == requestedId }
+            if (provider == null) {
+                console.error("Provider does not support login: $requestedId")
+            }
+            return provider
+        }
+        if (providers.isEmpty()) {
+            console.error("No providers support interactive login.")
+            return null
+        }
+        providers.forEachIndexed { index, provider ->
+            console.println("${index + 1}. ${provider.name} [${provider.id}]")
+        }
+        while (true) {
+            val value = console.readLine("$prompt ")?.trim() ?: return null
+            if (value.isEmpty()) {
+                return null
+            }
+            val index = value.toIntOrNull()
+            if (index != null && index in 1..providers.size) {
+                return providers[index - 1]
+            }
+            providers.firstOrNull { it.id == value }?.let { return it }
+            console.error("Select a provider by number or id.")
+        }
+    }
+
+    private fun selectCredential(
+        providerIds: List<String>,
+        console: InteractiveConsole,
+    ): String? {
+        providerIds.forEachIndexed { index, id ->
+            val name = models.getProvider(id)?.name ?: id
+            console.println("${index + 1}. $name [$id]")
+        }
+        while (true) {
+            val value = console.readLine("Logout provider: ")?.trim() ?: return null
+            if (value.isEmpty()) {
+                return null
+            }
+            val index = value.toIntOrNull()
+            if (index != null && index in 1..providerIds.size) {
+                return providerIds[index - 1]
+            }
+            if (value in providerIds) {
+                return value
+            }
+            console.error("Select a provider by number or id.")
+        }
     }
 
     private suspend fun runBash(
@@ -439,6 +579,77 @@ class InteractiveRuntime(
     }
 }
 
+private class ConsoleAuthInteraction(
+    private val console: InteractiveConsole,
+) : AuthInteraction {
+    override suspend fun prompt(prompt: AuthPrompt): String =
+        runInterruptible(Dispatchers.IO) {
+            when (prompt) {
+                is AuthPrompt.Select -> select(prompt)
+                is AuthPrompt.ManualCode ->
+                    console.readLine("${prompt.message} ")
+                        ?: error("Login cancelled")
+
+                is AuthPrompt.Text ->
+                    console.readLine("${prompt.message} ")
+                        ?: error("Login cancelled")
+            }
+        }
+
+    override fun notify(event: AuthEvent) {
+        when (event) {
+            is AuthEvent.AuthUrl -> {
+                event.instructions?.let(console::println)
+                console.println(event.url)
+                openBrowser(event.url)
+            }
+
+            is AuthEvent.DeviceCode -> {
+                console.println("Open ${event.verificationUri}")
+                console.println("Enter code: ${event.userCode}")
+            }
+
+            is AuthEvent.Info -> {
+                console.println(event.message)
+                event.links.forEach { link ->
+                    console.println(link.label?.let { "$it: ${link.url}" } ?: link.url)
+                }
+            }
+
+            is AuthEvent.Progress -> console.println(event.message)
+        }
+    }
+
+    private fun select(prompt: AuthPrompt.Select): String {
+        console.println(prompt.message)
+        prompt.options.forEachIndexed { index, option ->
+            val description = option.description?.let { " - $it" }.orEmpty()
+            console.println("${index + 1}. ${option.label}$description")
+        }
+        while (true) {
+            val value = console.readLine("Select 1-${prompt.options.size}: ")?.trim()
+                ?: error("Login cancelled")
+            if (value.isEmpty()) {
+                return prompt.options.first().id
+            }
+            val index = value.toIntOrNull()
+            if (index != null && index in 1..prompt.options.size) {
+                return prompt.options[index - 1].id
+            }
+            prompt.options.firstOrNull { it.id == value }?.let { return it.id }
+            console.error("Enter a number from 1 to ${prompt.options.size}.")
+        }
+    }
+}
+
+private fun openBrowser(url: String) {
+    runCatching {
+        if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
+            Desktop.getDesktop().browse(URI.create(url))
+        }
+    }
+}
+
 private class JLineConsole(
     private val terminal: Terminal =
         TerminalBuilder
@@ -498,6 +709,8 @@ private fun printInteractiveHelp(console: InteractiveConsole) {
         /stats                        Show token and cost totals
         /name <name>                  Set the session name
         /model [provider/model]       Show or change the model
+        /login [provider]             Sign in to a provider
+        /logout [provider]            Remove stored provider credentials
         /thinking <level>             Set off|minimal|low|medium|high|xhigh|max
         !<command>                    Run a shell command
         /exit, /quit                  Exit

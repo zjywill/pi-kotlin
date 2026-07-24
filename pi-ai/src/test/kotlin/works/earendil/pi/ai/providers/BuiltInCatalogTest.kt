@@ -106,6 +106,14 @@ class BuiltInCatalogTest {
     }
 
     @Test
+    fun `remote catalog wrapper retains Codex OAuth capability`() =
+        runTest {
+            val models = builtInModelsCollection(BuiltInModelsOptions())
+
+            assertNotNull(models.getProvider("openai-codex")?.oauth)
+        }
+
+    @Test
     fun `multi protocol provider dispatches each model to its catalog api`() =
         runTest {
             val paths = Collections.synchronizedList(mutableListOf<String>())

@@ -72,9 +72,9 @@ features outside that slice remain migration work.
 | Gradle multi-module build | Functional slice | Six JVM 21 modules; `clean test installDist` passes with warnings as errors |
 | Core AI messages and stream protocol | Functional slice | Message, event-stream, UUIDv7, tool validation, and faux-provider tests |
 | Model catalog | Functional slice | Hydrated schema-v3 manifest and 37 provider files verify by SHA-256; 1,109 model records load, with 1,081 models exposed across 36 providers whose current executable protocol paths can be selected |
-| Provider HTTP implementations | Partial | Google Generative AI, Google Vertex AI, Anthropic Messages, OpenAI Chat Completions, OpenAI Responses, Azure OpenAI Responses, Mistral Conversations, Amazon Bedrock ConverseStream, OpenAI Codex Responses SSE/WebSocket, Cloudflare Workers AI, and Cloudflare AI Gateway request/stream fixture tests, independent base/reasoning payload and public stream-transcript parity, provider-auth/request parity, and multi-protocol catalog dispatch |
+| Provider HTTP implementations | Partial | Google Generative AI, Google Vertex AI, Anthropic Messages, OpenAI Chat Completions, OpenAI Responses, Azure OpenAI Responses, Mistral Conversations, Amazon Bedrock ConverseStream, OpenAI Codex Responses SSE/WebSocket plus browser/device OAuth, Cloudflare Workers AI, and Cloudflare AI Gateway request/stream fixture tests, independent payload/event/auth parity, and multi-protocol catalog dispatch |
 | Agent loop | Functional slice | Streaming, tool calls, parallel execution, steering, follow-up, abort, and session tests using the faux provider; coding-message projection has independent parity for bash/custom/branch/compaction messages |
-| CLI argument contract | Partial | Parser tests and byte-for-byte `--help` oracle against the pinned TypeScript CLI; provider-prefixed and slash-containing model IDs plus thinking suffixes are covered |
+| CLI argument contract | Partial | Parser tests and byte-for-byte `--help` oracle against the pinned TypeScript CLI; provider-prefixed and slash-containing model IDs, thinking suffixes, and interactive `/login`/`/logout` for OAuth providers are covered |
 | Prompt and context resources | Partial | Global and ancestor `AGENTS.md`/`CLAUDE.md` discovery, `SYSTEM.md`/`APPEND_SYSTEM.md`, CLI overrides, trust gating, and `--no-context-files` tests |
 | Session JSONL compatibility | Functional slice | Independent TypeScript/Kotlin JSONL parity covers current/v1/v2 parsing, rewrite, migration, branching, compaction, model/thinking state, custom/tool/bash messages, and explicit empty-leaf context |
 | Built-in coding tools | Functional slice | Read, write, edit, bash, grep, find, and ls behavior tests with path and truncation handling |
@@ -90,12 +90,17 @@ features outside that slice remain migration work.
 Verified on July 24, 2026 against source commit
 `24bace27cf308c89707cf8005b4795d873e23f17`:
 
-- `./gradlew clean test installDist`: passed, 172 tests, 0 failures, 0 errors,
+- `./gradlew clean test installDist`: passed, 189 tests, 0 failures, 0 errors,
   and 0 skipped.
 - `./migration/oracle/compare-cli-help.sh`: passed with byte-for-byte CLI help
   parity.
 - `./migration/oracle/compare-model-catalog-runtime.sh`: passed for bundled,
   persisted-newer, remote-newer, and unavailable-catalog selection behavior.
+- `./migration/oracle/compare-openai-codex-oauth.sh`: passed with independent
+  browser, device-code, and refresh flows. It compares PKCE authorization
+  parameters, state handling, authorization-code and refresh-token forms,
+  device notification/request payloads, JWT account extraction, credential
+  rotation, and request-auth derivation.
 - `./migration/oracle/compare-provider-payloads.sh`: passed with exact normalized
   JSON parity for OpenAI Chat Completions, OpenAI Responses, Azure OpenAI
   Responses, Anthropic Messages, Google Generative AI, Google Vertex AI,
@@ -148,7 +153,12 @@ Verified on July 24, 2026 against source commit
   session-cached connections, five-minute idle expiry, the 55-minute connection
   age limit, cached `previous_response_id` input deltas, connection-limit and
   missing-continuation retries, pre-output SSE fallback, post-output failure,
-  sticky session fallback, and exact handshake/frame parity.
+  sticky session fallback, and exact handshake/frame parity. OAuth fixtures
+  additionally cover browser/manual callback parsing, state validation, device
+  pending/slow-down/success polling, token exchange, refresh, double-checked
+  concurrent refresh, atomic owner-only `auth.json` persistence, no ambient
+  fallback after refresh failure, interactive `/login`/`/logout`, and real
+  provider-request consumption of stored tokens.
 - `./migration/oracle/compare-coding-message-projection.sh`: passed with
   normalized JSON parity for ordinary messages, custom messages, branch and
   compaction summaries, bash formatting, and `excludeFromContext` filtering.
@@ -166,6 +176,9 @@ Verified on July 24, 2026 against source commit
 - Installed `pi` PTY smoke: entered interactive mode, rendered `/help`, and
   preserved `openrouter/moonshotai/kimi-k2.6` through `/model`, then exited
   normally through `/exit`.
+- Installed authentication smoke: a fixture OpenAI Codex OAuth credential in a
+  temporary `PI_CODING_AGENT_DIR` was loaded by `/logout openai-codex`, removed
+  without touching ambient variables, and persisted as `{}` with mode `0600`.
 - Installed `pi-server` process smoke: `serve`, `spawn`, `list`, `status`,
   `rpc set_model`, `rpc set_thinking_level`, `rpc-stream get_state`, and `stop`
   all succeeded.
@@ -203,8 +216,8 @@ Verified on July 24, 2026 against source commit
 
 ## Remaining major gaps
 
-- Complete OpenAI Codex interactive OAuth login, then implement GitHub Copilot
-  authentication/OAuth.
+- Implement GitHub Copilot authentication/OAuth and the remaining provider
+  protocols.
 - Extend request/stream parity as the remaining provider protocols land, and add
   opt-in live provider smoke tests.
 - Port extensions, skills, prompt templates, themes, package management,

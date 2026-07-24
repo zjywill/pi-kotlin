@@ -23,6 +23,8 @@ interface Provider {
         get() = null
     val headers: Map<String, String?>
         get() = emptyMap()
+    val oauth: OAuthAuth?
+        get() = null
 
     fun getModels(): List<Model>
 
@@ -71,6 +73,8 @@ data class ModelsRefreshResult(
 class Models(
     providers: Iterable<Provider> = emptyList(),
     private val modelsStore: ModelsStore = InMemoryModelsStore(),
+    private val credentials: CredentialStore = InMemoryCredentialStore(),
+    private val currentTimeMillis: () -> Long = System::currentTimeMillis,
 ) {
     private val providersById = ConcurrentHashMap<String, Provider>()
 
@@ -107,6 +111,76 @@ class Models(
         provider: String,
         id: String,
     ): Model? = getModels(provider).firstOrNull { it.id == id }
+
+    suspend fun getAuth(providerId: String): AuthResult? {
+        val provider = providersById[providerId] ?: return null
+        val stored = readStoredCredential(provider.id) ?: return null
+        return resolveStoredAuth(provider, stored)
+    }
+
+    suspend fun listCredentials(): List<CredentialInfo> =
+        try {
+            credentials.list()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            throw ModelsAuthException(
+                code = "auth",
+                message = "Credential store list failed",
+                cause = error,
+            )
+        }
+
+    suspend fun login(
+        providerId: String,
+        type: AuthType,
+        interaction: AuthInteraction,
+    ): Credential {
+        val provider =
+            providersById[providerId]
+                ?: throw ModelsAuthException("provider", "Unknown provider: $providerId")
+        val credential =
+            when (type) {
+                AuthType.OAUTH ->
+                    provider.oauth?.login(interaction)
+                        ?: throw ModelsAuthException(
+                            "auth",
+                            "${provider.name} does not support oauth login",
+                        )
+
+                AuthType.API_KEY ->
+                    throw ModelsAuthException(
+                        "auth",
+                        "${provider.name} does not support api_key login",
+                    )
+            }
+        try {
+            credentials.modify(providerId) { credential }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            throw ModelsAuthException(
+                code = "auth",
+                message = "Credential store modify failed for $providerId",
+                cause = error,
+            )
+        }
+        return credential
+    }
+
+    suspend fun logout(providerId: String) {
+        try {
+            credentials.delete(providerId)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            throw ModelsAuthException(
+                code = "auth",
+                message = "Credential store delete failed for $providerId",
+                cause = error,
+            )
+        }
+    }
 
     suspend fun refresh(options: ModelsRefreshOptions = ModelsRefreshOptions()): ModelsRefreshResult {
         val errors = ConcurrentHashMap<String, Throwable>()
@@ -196,9 +270,11 @@ class Models(
         val provider =
             providersById[model.provider]
                 ?: return errorStream(model, "Unknown provider: ${model.provider}")
-        return runCatching {
-            provider.stream(model, context, options)
-        }.getOrElse { error ->
+        return try {
+            provider.stream(model, context, applyStoredAuth(provider, options))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
             errorStream(model, error.message ?: error::class.simpleName.orEmpty())
         }
     }
@@ -217,9 +293,15 @@ class Models(
         val provider =
             providersById[model.provider]
                 ?: return errorStream(model, "Unknown provider: ${model.provider}")
-        return runCatching {
-            provider.streamSimple(model, context, options)
-        }.getOrElse { error ->
+        return try {
+            provider.streamSimple(
+                model,
+                context,
+                options.copy(stream = applyStoredAuth(provider, options.stream)),
+            )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
             errorStream(model, error.message ?: error::class.simpleName.orEmpty())
         }
     }
@@ -229,6 +311,115 @@ class Models(
         context: Context,
         options: SimpleStreamOptions = SimpleStreamOptions(),
     ): AssistantMessage = streamSimple(model, context, options).result()
+
+    private suspend fun applyStoredAuth(
+        provider: Provider,
+        options: StreamOptions,
+    ): StreamOptions {
+        val stored = readStoredCredential(provider.id) ?: return options
+        if (!options.apiKey.isNullOrBlank() && stored !is OAuthCredential) {
+            return options
+        }
+        val resolution = resolveStoredAuth(provider, stored) ?: return options
+        return options.copy(
+            apiKey = resolution.auth.apiKey,
+            headers = mergeAuthHeaders(resolution.auth.headers, options.headers),
+        )
+    }
+
+    private suspend fun readStoredCredential(providerId: String): Credential? =
+        try {
+            credentials.read(providerId)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            throw ModelsAuthException(
+                code = "auth",
+                message = "Credential store read failed for $providerId",
+                cause = error,
+            )
+        }
+
+    private suspend fun resolveStoredAuth(
+        provider: Provider,
+        stored: Credential,
+    ): AuthResult? {
+        return when (stored) {
+            is ApiKeyCredential ->
+                AuthResult(
+                    auth =
+                        ModelAuth(
+                            apiKey = stored.key,
+                        ),
+                    source = "Stored API key",
+                )
+
+            is OAuthCredential ->
+                provider.oauth?.let { resolveStoredOAuth(provider, stored, it) }
+                    ?: throw ModelsAuthException(
+                        code = "auth",
+                        message = "Stored OAuth credential is not supported by ${provider.id}",
+                    )
+        }
+    }
+
+    private suspend fun resolveStoredOAuth(
+        provider: Provider,
+        stored: OAuthCredential,
+        oauth: OAuthAuth,
+    ): AuthResult? {
+        var credential = stored
+        if (currentTimeMillis() >= credential.expires) {
+            val post =
+                try {
+                    credentials.modify(provider.id) { current ->
+                        if (current !is OAuthCredential || currentTimeMillis() < current.expires) {
+                            null
+                        } else {
+                            try {
+                                oauth.refresh(current)
+                            } catch (error: CancellationException) {
+                                throw error
+                            } catch (error: Throwable) {
+                                throw ModelsAuthException(
+                                    code = "oauth",
+                                    message = "OAuth refresh failed for ${provider.id}",
+                                    cause = error,
+                                )
+                            }
+                        }
+                    }
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: ModelsAuthException) {
+                    throw error
+                } catch (error: Throwable) {
+                    throw ModelsAuthException(
+                        code = "auth",
+                        message = "Credential store modify failed for ${provider.id}",
+                        cause = error,
+                    )
+                }
+            if (post !is OAuthCredential) {
+                return null
+            }
+            credential = post
+        }
+        return try {
+            AuthResult(
+                auth = oauth.toAuth(credential),
+                source = "OAuth",
+            )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            throw ModelsAuthException(
+                code = "oauth",
+                message = "OAuth auth derivation failed for ${provider.id}",
+                cause = error,
+            )
+        }
+    }
 
     private fun errorStream(
         model: Model,
@@ -250,3 +441,21 @@ class Models(
 }
 
 private const val MAX_CONCURRENT_MODEL_REFRESHES = 8
+
+private fun mergeAuthHeaders(
+    auth: Map<String, String?>,
+    request: Map<String, String?>,
+): Map<String, String?> {
+    if (auth.isEmpty()) {
+        return request
+    }
+    val result = linkedMapOf<String, String?>()
+    auth.forEach { (name, value) ->
+        result[name] = value
+    }
+    request.forEach { (name, value) ->
+        result.keys.firstOrNull { it.equals(name, ignoreCase = true) }?.let(result::remove)
+        result[name] = value
+    }
+    return result
+}
