@@ -128,7 +128,8 @@ sealed interface ContentBlock
 data class TextContent(
     val text: String,
     val textSignature: String? = null,
-) : ContentBlock
+) : ContentBlock,
+    ImagesContent
 
 @Serializable
 @SerialName("thinking")
@@ -143,7 +144,8 @@ data class ThinkingContent(
 data class ImageContent(
     val data: String,
     val mimeType: String,
-) : ContentBlock
+) : ContentBlock,
+    ImagesContent
 
 @Serializable
 @SerialName("toolCall")

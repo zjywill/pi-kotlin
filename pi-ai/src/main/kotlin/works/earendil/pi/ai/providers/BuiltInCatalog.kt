@@ -14,6 +14,8 @@ import works.earendil.pi.ai.Context
 import works.earendil.pi.ai.CredentialStore
 import works.earendil.pi.ai.InMemoryCredentialStore
 import works.earendil.pi.ai.InMemoryModelsStore
+import works.earendil.pi.ai.ImagesModels
+import works.earendil.pi.ai.ImagesProvider
 import works.earendil.pi.ai.Model
 import works.earendil.pi.ai.Models
 import works.earendil.pi.ai.ModelsRefreshOptions
@@ -141,6 +143,16 @@ fun builtInProviders(): List<Provider> =
     ).sortedBy(Provider::id)
 
 fun builtInModelsCollection(): Models = Models(builtInProviders())
+
+fun builtInImagesProviders(): List<ImagesProvider> = listOf(openRouterImagesProvider())
+
+fun builtInImagesModelsCollection(
+    credentialStore: CredentialStore = InMemoryCredentialStore(),
+): ImagesModels =
+    ImagesModels(
+        providers = builtInImagesProviders(),
+        credentials = credentialStore,
+    )
 
 data class BuiltInModelsOptions(
     val modelsStore: ModelsStore = InMemoryModelsStore(),

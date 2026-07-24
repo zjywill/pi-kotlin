@@ -25,6 +25,7 @@ Run the available comparisons from the Kotlin repository:
 ./migration/oracle/compare-kimi-coding-oauth.sh
 ./migration/oracle/compare-model-catalog-runtime.sh
 ./migration/oracle/compare-openai-codex-oauth.sh
+./migration/oracle/compare-openrouter-images.sh
 ./migration/oracle/compare-openrouter-oauth.sh
 ./migration/oracle/compare-provider-payloads.sh
 ./migration/oracle/compare-provider-stream-events.sh
@@ -47,6 +48,12 @@ The OpenRouter OAuth comparison covers the random one-shot loopback callback,
 PKCE authorization, permanent API-key exchange, callback response headers,
 no-op refresh, request-auth derivation, and a real local OpenRouter-compatible
 provider request using the stored OAuth credential.
+
+The OpenRouter Images comparison covers the exact 39-model generated catalog
+and checksum, final `/chat/completions` URL/headers/payload, text and data-URL
+image parsing, invalid image filtering, response ID, cache-aware usage and
+cost, payload/response callbacks, retry behavior, HTTP error-body passthrough,
+missing-key errors, stored OAuth consumption, and explicit API-key precedence.
 
 The xAI OAuth comparison covers device authorization, wait-before-first-poll,
 pending and server-directed slow-down timing, refresh-token preservation,

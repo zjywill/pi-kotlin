@@ -101,6 +101,7 @@ data class ModelAuth(
 data class AuthResult(
     val auth: ModelAuth,
     val source: String,
+    val env: Map<String, String> = emptyMap(),
 )
 
 data class AuthOption(

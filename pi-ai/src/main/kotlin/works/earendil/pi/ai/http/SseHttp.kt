@@ -26,7 +26,67 @@ class ProviderHttpException(
     val status: Int,
     val headers: Map<String, List<String>>,
     message: String,
+    val body: String? = null,
 ) : IllegalStateException(message)
+
+internal data class ProviderHttpResponse(
+    val status: Int,
+    val headers: Map<String, List<String>>,
+    val body: String,
+)
+
+internal suspend fun postJson(
+    client: HttpClient,
+    url: String,
+    body: String,
+    headers: Map<String, String>,
+    timeoutMs: Long?,
+    maxRetries: Int? = null,
+    maxRetryDelayMs: Long? = null,
+): ProviderHttpResponse =
+    withContext(Dispatchers.IO) {
+        val requestHeaders =
+            linkedMapOf(
+                "accept" to "application/json",
+                "content-type" to "application/json",
+            )
+        headers.forEach { (name, value) ->
+            requestHeaders.keys
+                .firstOrNull { it.equals(name, ignoreCase = true) }
+                ?.let(requestHeaders::remove)
+            requestHeaders[name] = value
+        }
+        val builder =
+            HttpRequest
+                .newBuilder(URI.create(url))
+                .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
+        timeoutMs?.let { builder.timeout(Duration.ofMillis(it)) }
+        requestHeaders.forEach(builder::header)
+        val request = builder.build()
+        val response =
+            retryProviderRequest(maxRetries, maxRetryDelayMs) {
+                val candidate =
+                    client.send(
+                        request,
+                        HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8),
+                    )
+                if (candidate.statusCode() !in 200..299) {
+                    val errorBody = candidate.body()
+                    throw ProviderHttpException(
+                        status = candidate.statusCode(),
+                        headers = candidate.headers().map(),
+                        message = "Provider returned HTTP ${candidate.statusCode()}: ${errorBody.take(4000)}",
+                        body = errorBody,
+                    )
+                }
+                candidate
+            }
+        ProviderHttpResponse(
+            status = response.statusCode(),
+            headers = response.headers().map(),
+            body = response.body(),
+        )
+    }
 
 internal suspend fun postSse(
     client: HttpClient,
@@ -89,9 +149,10 @@ internal suspend fun postSse(
                 if (candidate.statusCode() !in 200..299) {
                     val errorBody = candidate.body().readBytes().toString(StandardCharsets.UTF_8)
                     throw ProviderHttpException(
-                        candidate.statusCode(),
-                        candidate.headers().map(),
-                        "Provider returned HTTP ${candidate.statusCode()}: ${errorBody.take(4000)}",
+                        status = candidate.statusCode(),
+                        headers = candidate.headers().map(),
+                        message = "Provider returned HTTP ${candidate.statusCode()}: ${errorBody.take(4000)}",
+                        body = errorBody,
                     )
                 }
                 candidate
@@ -128,7 +189,7 @@ internal suspend fun postSse(
         response.headers().map()
     }
 
-private suspend fun <T> retryProviderRequest(
+internal suspend fun <T> retryProviderRequest(
     maxRetries: Int?,
     maxRetryDelayMs: Long?,
     request: suspend () -> T,

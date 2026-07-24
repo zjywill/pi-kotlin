@@ -52,5 +52,10 @@ file is owner-readable and owner-writable on POSIX filesystems. Use
 `/logout xai` to remove only that stored credential; environment variables are
 unchanged.
 
+The `pi-ai` module also exposes the upstream OpenRouter image-generation API,
+including its 39-model catalog and shared OpenRouter API-key/OAuth
+authentication. This remains a library-level API because the upstream coding
+agent and server do not currently expose a separate image-generation command.
+
 See [migration/MIGRATION.md](migration/MIGRATION.md) for migration rules,
 acceptance gates, current status, and the executable completeness audit.

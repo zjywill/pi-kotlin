@@ -70,9 +70,9 @@ features outside that slice remain migration work.
 | Area | Status | Executable evidence |
 | --- | --- | --- |
 | Gradle multi-module build | Functional slice | Six JVM 21 modules; `clean test installDist` passes with warnings as errors |
-| Core AI messages and stream protocol | Functional slice | Message, event-stream, UUIDv7, tool validation, and faux-provider tests |
-| Model catalog | Functional slice | Hydrated schema-v3 manifest and 37 static provider files verify by SHA-256; all 1,109 static model records plus the credential-backed dynamic Radius catalog are exposed through 38 executable providers, including 28 credential-filtered GitHub Copilot models |
-| Provider HTTP implementations | Partial | Google Generative AI, Google Vertex AI, Anthropic Messages plus Claude Pro/Max OAuth, OpenRouter Chat Completions plus browser OAuth, xAI Chat Completions/Responses plus device OAuth, Kimi Coding Anthropic Messages plus device OAuth, Radius `pi-messages` plus discovered browser/device OAuth and dynamic models, OpenAI Chat Completions, OpenAI Responses, Azure OpenAI Responses, Mistral Conversations, Amazon Bedrock ConverseStream, OpenAI Codex Responses SSE/WebSocket plus browser/device OAuth, GitHub Copilot device OAuth and Anthropic/OpenAI Chat/OpenAI Responses delegates, Cloudflare Workers AI, and Cloudflare AI Gateway request/stream fixture tests, independent payload/event/auth parity, and multi-protocol catalog dispatch |
+| Core AI messages and stream protocol | Functional slice | Message, event-stream, image-generation result, UUIDv7, tool validation, and faux-provider tests |
+| Model catalog | Functional slice | Hydrated schema-v3 manifest and 37 chat-provider files verify by SHA-256; all 1,109 static chat model records plus the credential-backed dynamic Radius catalog are exposed through 38 executable chat providers, including 28 credential-filtered GitHub Copilot models; a separate immutable catalog exposes all 39 OpenRouter image models with an independent checksum |
+| Provider HTTP implementations | Functional slice | All 10 upstream chat API families plus `openrouter-images` have executable Kotlin paths. Coverage includes Google Generative AI, Google Vertex AI, Anthropic Messages plus Claude Pro/Max OAuth, OpenRouter Chat Completions and Images plus shared browser OAuth, xAI Chat Completions/Responses plus device OAuth, Kimi Coding Anthropic Messages plus device OAuth, Radius `pi-messages` plus discovered browser/device OAuth and dynamic models, OpenAI Chat Completions, OpenAI Responses, Azure OpenAI Responses, Mistral Conversations, Amazon Bedrock ConverseStream, OpenAI Codex Responses SSE/WebSocket plus browser/device OAuth, GitHub Copilot device OAuth and Anthropic/OpenAI Chat/OpenAI Responses delegates, Cloudflare Workers AI, and Cloudflare AI Gateway with independent payload/event/auth/image parity |
 | Agent loop | Functional slice | Streaming, tool calls, parallel execution, steering, follow-up, abort, and session tests using the faux provider; coding-message projection has independent parity for bash/custom/branch/compaction messages |
 | CLI argument contract | Partial | Parser tests and byte-for-byte `--help` oracle against the pinned TypeScript CLI; provider-prefixed and slash-containing model IDs, thinking suffixes, and interactive `/login`/`/logout` for OAuth providers are covered |
 | Prompt and context resources | Partial | Global and ancestor `AGENTS.md`/`CLAUDE.md` discovery, `SYSTEM.md`/`APPEND_SYSTEM.md`, CLI overrides, trust gating, and `--no-context-files` tests |
@@ -90,7 +90,7 @@ features outside that slice remain migration work.
 Verified on July 24, 2026 against source commit
 `24bace27cf308c89707cf8005b4795d873e23f17`:
 
-- `./gradlew clean test installDist`: passed, 240 tests, 0 failures, 0 errors,
+- `./gradlew clean test installDist`: passed, 251 tests, 0 failures, 0 errors,
   and 0 skipped.
 - `./migration/oracle/compare-cli-help.sh`: passed with byte-for-byte CLI help
   parity.
@@ -122,6 +122,12 @@ Verified on July 24, 2026 against source commit
   authorization, permanent API-key exchange, callback response headers,
   no-op refresh, request-auth derivation, and a real local OpenRouter-compatible
   provider request consuming the stored OAuth credential.
+- `./migration/oracle/compare-openrouter-images.sh`: passed with exact parity
+  for the 39-model image catalog and checksum, final `/chat/completions`
+  URL/headers/payload, text and valid/invalid data-URL image parsing, response
+  IDs, cache-aware usage/cost, payload and response callbacks, retry behavior,
+  HTTP status/body errors, missing-key results, stored OpenRouter OAuth
+  consumption, and explicit API-key precedence.
 - `./migration/oracle/compare-radius.sh`: passed with independent dynamic OAuth
   discovery, browser PKCE and device authorization, pending and server-directed
   slow-down timing, token refresh and expiry skew, credentialed dynamic model
@@ -199,6 +205,12 @@ Verified on July 24, 2026 against source commit
   PKCE code exchange, permanent credential projection, denial and nested error
   details, login timeout cleanup, no-op refresh, and catalog/remote-catalog
   OAuth capability retention.
+- OpenRouter Images fixture tests cover mutable provider registration,
+  best-effort model listing, in-flight dynamic refresh deduplication and
+  cancellation recovery, API-key/OAuth resolution, base URL/header/environment
+  merging, non-throwing terminal errors, request retries, callback replacement,
+  Unicode sanitization, mixed text/image input, valid and invalid image output,
+  cache-write-aware usage, and error-body passthrough.
 - xAI OAuth fixture tests cover form headers and fields, trusted HTTPS
   verification URLs, complete-URL preference, RFC default and minimum poll
   intervals, pending/slow-down/denial/expiry behavior, rotated and preserved
@@ -257,6 +269,9 @@ Verified on July 24, 2026 against source commit
 - Installed OpenRouter authentication smoke: an isolated permanent OAuth-key
   fixture was loaded by `/logout openrouter`, removed without touching ambient
   variables, and persisted as `{}` with mode `0600`.
+- Installed image-catalog smoke loaded the distributed `pi-ai` JAR through the
+  `pi-server` installation and exposed one OpenRouter image provider with all
+  39 bundled models and OAuth support.
 - Installed xAI authentication smoke: an isolated OAuth fixture was loaded by
   `/logout xai`, removed without touching ambient variables, and persisted as
   `{}` with mode `0600`.
@@ -329,9 +344,6 @@ Verified on July 24, 2026 against source commit
 
 ## Remaining major gaps
 
-- Implement the remaining provider protocols.
-- Extend request/stream parity as the remaining provider protocols land, and add
-  opt-in live provider smoke tests.
 - Port extensions, skills, prompt templates, themes, package management,
   persisted project trust, resource reload, and related CLI commands.
 - Port the full-screen terminal component and rendering model, then compare
