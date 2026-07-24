@@ -104,6 +104,17 @@ fun builtInProviders(): List<Provider> =
                                 oauth = OpenRouterOAuth(),
                             )
 
+                        "kimi-coding" ->
+                            CatalogProvider(
+                                id = providerId,
+                                name = name,
+                                models = it,
+                                apiKeyEnvNames =
+                                    PROVIDER_API_KEY_ENV_NAMES[providerId]
+                                        ?: defaultApiKeyNames(providerId),
+                                oauth = KimiCodingOAuth(),
+                            )
+
                         "xai" ->
                             CatalogProvider(
                                 id = providerId,

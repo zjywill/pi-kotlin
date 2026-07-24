@@ -22,6 +22,7 @@ Run the available comparisons from the Kotlin repository:
 ./migration/oracle/compare-cli-help.sh
 ./migration/oracle/compare-coding-message-projection.sh
 ./migration/oracle/compare-github-copilot.sh
+./migration/oracle/compare-kimi-coding-oauth.sh
 ./migration/oracle/compare-model-catalog-runtime.sh
 ./migration/oracle/compare-openai-codex-oauth.sh
 ./migration/oracle/compare-openrouter-oauth.sh
@@ -50,6 +51,12 @@ The xAI OAuth comparison covers device authorization, wait-before-first-poll,
 pending and server-directed slow-down timing, refresh-token preservation,
 default token lifetime, request-auth derivation, and real local Chat
 Completions and Responses SSE requests using the stored OAuth credential.
+
+The Kimi Code OAuth comparison covers device authorization,
+wait-before-first-poll, pending and server-directed slow-down timing,
+exponential refresh retries, unauthorized refresh short-circuiting,
+Bearer-header derivation, and a real local Anthropic Messages SSE request using
+the stored OAuth credential.
 
 The model catalog runtime comparison covers bundled-versus-remote timestamp
 selection, a newer persisted overlay restored without network access, and

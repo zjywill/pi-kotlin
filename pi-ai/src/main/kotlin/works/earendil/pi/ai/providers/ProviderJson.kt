@@ -54,12 +54,19 @@ internal fun resolveApiKey(
     explicit: String?,
     env: Map<String, String>,
     names: List<String>,
-): String {
+): String =
+    resolveApiKeyOrNull(explicit, env, names)
+        ?: error("No API key for provider: $provider")
+
+internal fun resolveApiKeyOrNull(
+    explicit: String?,
+    env: Map<String, String>,
+    names: List<String>,
+): String? {
     explicit?.takeIf(String::isNotBlank)?.let { return it }
-    names.firstNotNullOfOrNull { name ->
+    return names.firstNotNullOfOrNull { name ->
         env[name]?.takeIf(String::isNotBlank) ?: System.getenv(name)?.takeIf(String::isNotBlank)
-    }?.let { return it }
-    error("No API key for provider: $provider")
+    }
 }
 
 internal fun mergedHeaders(

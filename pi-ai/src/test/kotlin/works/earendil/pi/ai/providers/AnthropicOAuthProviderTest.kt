@@ -217,6 +217,62 @@ class AnthropicOAuthProviderTest {
             }
         }
 
+    @Test
+    fun `header owned auth sends bearer token without an empty api key`() =
+        runTest {
+            val fixture = anthropicOAuthFixture()
+            try {
+                val model =
+                    model(
+                        id = "kimi-for-coding",
+                        api = "anthropic-messages",
+                        provider = "kimi-coding",
+                        baseUrl = fixture.baseUrl,
+                    ).copy(
+                        headers = mapOf("User-Agent" to "KimiCLI/1.5"),
+                    )
+                val provider =
+                    AnthropicProvider(
+                        id = "kimi-coding",
+                        name = "Kimi For Coding",
+                        baseUrl = fixture.baseUrl,
+                        models = listOf(model),
+                        apiKeyEnvNames = listOf("UNUSED"),
+                    )
+
+                val result =
+                    provider
+                        .stream(
+                            model,
+                            Context(
+                                systemPrompt = "Project instructions",
+                                messages = mutableListOf(UserMessage("Run the tool", 1)),
+                            ),
+                            StreamOptions(
+                                headers = mapOf("Authorization" to "Bearer kimi-oauth-token"),
+                                cacheRetention = CacheRetention.NONE,
+                            ),
+                        ).result()
+
+                assertEquals(StopReason.TOOL_USE, result.stopReason)
+                val request = fixture.requests.single()
+                assertEquals("Bearer kimi-oauth-token", request.header("authorization"))
+                assertNull(request.header("x-api-key"))
+                assertEquals("KimiCLI/1.5", request.header("user-agent"))
+                assertEquals(
+                    listOf("Project instructions"),
+                    providerJson
+                        .parseToJsonElement(request.body)
+                        .jsonObject
+                        .getValue("system")
+                        .jsonArray
+                        .map { it.jsonObject.getValue("text").jsonPrimitive.content },
+                )
+            } finally {
+                fixture.close()
+            }
+        }
+
     private fun anthropicOAuthFixture(): AnthropicFixture {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         val fixture = AnthropicFixture(server)

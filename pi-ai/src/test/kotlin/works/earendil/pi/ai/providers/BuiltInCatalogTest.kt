@@ -102,6 +102,8 @@ class BuiltInCatalogTest {
         assertNotNull(providers.single { it.id == "anthropic" }.oauth)
         val openRouter = providers.single { it.id == "openrouter" }
         assertEquals("Sign in with OpenRouter", assertNotNull(openRouter.oauth).loginLabel)
+        val kimiCoding = providers.single { it.id == "kimi-coding" }
+        assertEquals("Sign in with Kimi Code", assertNotNull(kimiCoding.oauth).loginLabel)
         val xai = providers.single { it.id == "xai" }
         assertEquals("Sign in with SuperGrok or X Premium", assertNotNull(xai.oauth).loginLabel)
         assertTrue(providers.flatMap(works.earendil.pi.ai.Provider::getModels).all { it.api in SUPPORTED_TEST_APIS })
@@ -129,6 +131,7 @@ class BuiltInCatalogTest {
 
             assertNotNull(models.getProvider("openai-codex")?.oauth)
             assertNotNull(models.getProvider("openrouter")?.oauth)
+            assertNotNull(models.getProvider("kimi-coding")?.oauth)
             assertNotNull(models.getProvider("xai")?.oauth)
         }
 

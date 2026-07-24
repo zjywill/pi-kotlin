@@ -72,7 +72,7 @@ features outside that slice remain migration work.
 | Gradle multi-module build | Functional slice | Six JVM 21 modules; `clean test installDist` passes with warnings as errors |
 | Core AI messages and stream protocol | Functional slice | Message, event-stream, UUIDv7, tool validation, and faux-provider tests |
 | Model catalog | Functional slice | Hydrated schema-v3 manifest and 37 provider files verify by SHA-256; all 1,109 model records are exposed across 37 providers whose current executable protocol paths can be selected, including 28 credential-filtered GitHub Copilot models |
-| Provider HTTP implementations | Partial | Google Generative AI, Google Vertex AI, Anthropic Messages plus Claude Pro/Max OAuth, OpenRouter Chat Completions plus browser OAuth, xAI Chat Completions/Responses plus device OAuth, OpenAI Chat Completions, OpenAI Responses, Azure OpenAI Responses, Mistral Conversations, Amazon Bedrock ConverseStream, OpenAI Codex Responses SSE/WebSocket plus browser/device OAuth, GitHub Copilot device OAuth and Anthropic/OpenAI Chat/OpenAI Responses delegates, Cloudflare Workers AI, and Cloudflare AI Gateway request/stream fixture tests, independent payload/event/auth parity, and multi-protocol catalog dispatch |
+| Provider HTTP implementations | Partial | Google Generative AI, Google Vertex AI, Anthropic Messages plus Claude Pro/Max OAuth, OpenRouter Chat Completions plus browser OAuth, xAI Chat Completions/Responses plus device OAuth, Kimi Coding Anthropic Messages plus device OAuth, OpenAI Chat Completions, OpenAI Responses, Azure OpenAI Responses, Mistral Conversations, Amazon Bedrock ConverseStream, OpenAI Codex Responses SSE/WebSocket plus browser/device OAuth, GitHub Copilot device OAuth and Anthropic/OpenAI Chat/OpenAI Responses delegates, Cloudflare Workers AI, and Cloudflare AI Gateway request/stream fixture tests, independent payload/event/auth parity, and multi-protocol catalog dispatch |
 | Agent loop | Functional slice | Streaming, tool calls, parallel execution, steering, follow-up, abort, and session tests using the faux provider; coding-message projection has independent parity for bash/custom/branch/compaction messages |
 | CLI argument contract | Partial | Parser tests and byte-for-byte `--help` oracle against the pinned TypeScript CLI; provider-prefixed and slash-containing model IDs, thinking suffixes, and interactive `/login`/`/logout` for OAuth providers are covered |
 | Prompt and context resources | Partial | Global and ancestor `AGENTS.md`/`CLAUDE.md` discovery, `SYSTEM.md`/`APPEND_SYSTEM.md`, CLI overrides, trust gating, and `--no-context-files` tests |
@@ -90,7 +90,7 @@ features outside that slice remain migration work.
 Verified on July 24, 2026 against source commit
 `24bace27cf308c89707cf8005b4795d873e23f17`:
 
-- `./gradlew clean test installDist`: passed, 217 tests, 0 failures, 0 errors,
+- `./gradlew clean test installDist`: passed, 226 tests, 0 failures, 0 errors,
   and 0 skipped.
 - `./migration/oracle/compare-cli-help.sh`: passed with byte-for-byte CLI help
   parity.
@@ -107,6 +107,11 @@ Verified on July 24, 2026 against source commit
   policy enablement, account model filtering, credential-specific
   `proxy-ep` base URL derivation, 9 Anthropic/7 Chat Completions/12 Responses
   model counts, and user/agent/vision dynamic headers.
+- `./migration/oracle/compare-kimi-coding-oauth.sh`: passed with independent
+  device authorization, wait-before-first-poll, pending and server-directed
+  slow-down timing, exponential refresh retry, unauthorized refresh
+  short-circuiting, Bearer-header derivation, and a real local Anthropic
+  Messages SSE request consuming the stored OAuth credential.
 - `./migration/oracle/compare-openai-codex-oauth.sh`: passed with independent
   browser, device-code, and refresh flows. It compares PKCE authorization
   parameters, state handling, authorization-code and refresh-token forms,
@@ -195,6 +200,13 @@ Verified on July 24, 2026 against source commit
   refresh tokens, default token lifetime, invalid fields and JSON, upstream
   error details, catalog/remote-catalog OAuth retention, and stored-credential
   requests through both xAI protocol delegates.
+- Kimi Code OAuth fixture tests cover form headers and fields, request
+  timeouts, default and overridden OAuth hosts, trusted HTTP(S) verification
+  URLs, default/minimum poll timing, pending/slow-down/denial/expiry/server
+  failures, complete token validation, four-attempt exponential refresh retry,
+  unauthorized refresh short-circuiting, transport failures, Bearer-header
+  derivation, catalog/remote-catalog OAuth retention, and header-owned
+  Anthropic requests without an empty API key.
 - GitHub Copilot fixture tests cover personal and enterprise endpoint
   normalization, trusted verification URLs, wait-before-first-poll,
   pending/slow-down/deadline behavior, five-minute expiry skew, best-effort
@@ -237,6 +249,9 @@ Verified on July 24, 2026 against source commit
 - Installed xAI authentication smoke: an isolated OAuth fixture was loaded by
   `/logout xai`, removed without touching ambient variables, and persisted as
   `{}` with mode `0600`.
+- Installed Kimi Code authentication smoke: an isolated OAuth fixture was
+  loaded by `/logout kimi-coding`, removed without touching ambient variables,
+  and persisted as `{}` with mode `0600`.
 - Installed `pi-server` process smoke: `serve`, `spawn`, `list`, `status`,
   `rpc set_model`, `rpc set_thinking_level`, `rpc-stream get_state`, and `stop`
   all succeeded.
@@ -276,6 +291,10 @@ Verified on July 24, 2026 against source commit
   models and 1,109 models total. RPC `set_model`, `set_thinking_level`, and
   piped `rpc-stream get_state` preserved `xai/grok-4.5`, API
   `openai-responses`, and thinking level `high`.
+- With an isolated Kimi Code OAuth fixture, the installed server exposed all 3
+  Kimi Coding models and 1,109 models total. RPC `set_model`,
+  `set_thinking_level`, and piped `rpc-stream get_state` preserved
+  `kimi-coding/k3`, API `anthropic-messages`, and thinking level `high`.
 - Server state read-back preserved the slash-containing model ID
   `moonshotai/kimi-k2.6` and thinking level `high`.
 - Piped `rpc-stream` emitted `rpc_ready` then `response` and exited with status

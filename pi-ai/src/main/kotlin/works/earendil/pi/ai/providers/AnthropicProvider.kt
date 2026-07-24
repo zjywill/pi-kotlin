@@ -83,10 +83,11 @@ class AnthropicProvider(
         options: StreamOptions,
         stream: AssistantMessageEventStream,
     ) {
-        val apiKey = resolveApiKey(id, options.apiKey, options.env, apiKeyEnvNames)
+        val apiKey = resolveApiKeyOrNull(options.apiKey, options.env, apiKeyEnvNames)
+        requireAnthropicRequestAuth(id, apiKey, options.headers)
         val isOAuthToken =
             model.provider != "github-copilot" &&
-                isAnthropicOAuthToken(apiKey)
+                apiKey?.let(::isAnthropicOAuthToken) == true
         val body = requestBody(model, context, options, isOAuthToken)
         val blocks = mutableListOf<works.earendil.pi.ai.ContentBlock>()
         val providerIndexes = mutableMapOf<Int, Int>()
@@ -444,13 +445,13 @@ private fun anthropicRequestHeaders(
     model: Model,
     context: Context,
     options: StreamOptions,
-    apiKey: String,
+    apiKey: String?,
     isOAuthToken: Boolean,
 ): Map<String, String> {
     val betaFeatures = anthropicBetaFeatures(model, context, options)
     if (model.provider == "github-copilot") {
         return buildMap {
-            put("authorization", "Bearer $apiKey")
+            apiKey?.let { put("authorization", "Bearer $it") }
             put("anthropic-version", "2023-06-01")
             put("accept", "application/json")
             put("anthropic-dangerous-direct-browser-access", "true")
@@ -462,7 +463,7 @@ private fun anthropicRequestHeaders(
     }
     if (isOAuthToken) {
         return buildMap {
-            put("authorization", "Bearer $apiKey")
+            put("authorization", "Bearer ${requireNotNull(apiKey)}")
             put("anthropic-version", "2023-06-01")
             put("accept", "application/json")
             put("anthropic-dangerous-direct-browser-access", "true")
@@ -478,7 +479,7 @@ private fun anthropicRequestHeaders(
         }
     }
     return buildMap {
-        put("x-api-key", apiKey)
+        apiKey?.let { put("x-api-key", it) }
         put("anthropic-version", "2023-06-01")
         put("accept", "application/json")
         put("anthropic-dangerous-direct-browser-access", "true")
@@ -486,6 +487,27 @@ private fun anthropicRequestHeaders(
             put("anthropic-beta", betaFeatures.joinToString(","))
         }
     }
+}
+
+private fun requireAnthropicRequestAuth(
+    provider: String,
+    apiKey: String?,
+    headers: Map<String, String?>,
+) {
+    if (!apiKey.isNullOrBlank()) {
+        return
+    }
+    if (
+        listOf("authorization", "x-api-key", "cf-aig-authorization")
+            .any { expected ->
+                headers.entries.any { (name, value) ->
+                    name.equals(expected, ignoreCase = true) && !value.isNullOrBlank()
+                }
+            }
+    ) {
+        return
+    }
+    error("No API key for provider: $provider")
 }
 
 private fun anthropicBetaFeatures(
