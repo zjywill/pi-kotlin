@@ -36,12 +36,7 @@ class BuiltInCatalogTest {
         assertEquals(128_000, sol.maxTokens)
         assertEquals(5.0, sol.cost.input)
         assertEquals("max", sol.thinkingLevelMap[works.earendil.pi.ai.ModelThinkingLevel.MAX])
-        assertEquals(
-            setOf(
-                "openai-codex-responses",
-            ),
-            catalog.unsupportedApis,
-        )
+        assertTrue(catalog.unsupportedApis.isEmpty())
     }
 
     @Test
@@ -49,8 +44,8 @@ class BuiltInCatalogTest {
         val providers = builtInProviders()
         val ids = providers.map { it.id }.toSet()
 
-        assertEquals(35, providers.size)
-        assertEquals(1_074, providers.sumOf { it.getModels().size })
+        assertEquals(36, providers.size)
+        assertEquals(1_081, providers.sumOf { it.getModels().size })
         assertTrue(
             ids.containsAll(
                 setOf(
@@ -64,13 +59,13 @@ class BuiltInCatalogTest {
                     "google-vertex",
                     "mistral",
                     "openai",
+                    "openai-codex",
                     "openrouter",
                     "xai",
                 ),
             ),
         )
         assertFalse("github-copilot" in ids)
-        assertFalse("openai-codex" in ids)
         val azure = providers.single { it.id == "azure-openai-responses" }
         assertEquals("Azure OpenAI", azure.name)
         assertEquals(46, azure.getModels().size)
@@ -89,6 +84,9 @@ class BuiltInCatalogTest {
         val bedrock = providers.single { it.id == "amazon-bedrock" }
         assertEquals("Amazon Bedrock", bedrock.name)
         assertEquals(109, bedrock.getModels().size)
+        val codex = providers.single { it.id == "openai-codex" }
+        assertEquals("OpenAI Codex", codex.name)
+        assertEquals(7, codex.getModels().size)
         assertTrue(providers.flatMap(works.earendil.pi.ai.Provider::getModels).all { it.api in SUPPORTED_TEST_APIS })
     }
 
@@ -176,6 +174,7 @@ class BuiltInCatalogTest {
                 "google-vertex",
                 "mistral-conversations",
                 "openai-completions",
+                "openai-codex-responses",
                 "openai-responses",
             )
     }

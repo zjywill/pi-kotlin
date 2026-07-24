@@ -1,5 +1,6 @@
 package works.earendil.pi.ai.providers
 
+import com.github.luben.zstd.Zstd
 import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
 import java.net.InetAddress
@@ -7,6 +8,7 @@ import java.net.ServerSocket
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.Base64
 import kotlin.concurrent.thread
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
@@ -41,6 +43,7 @@ import works.earendil.pi.ai.ToolCallDelta
 import works.earendil.pi.ai.ToolCallEnd
 import works.earendil.pi.ai.ToolCallStart
 import works.earendil.pi.ai.UserMessage
+import works.earendil.pi.ai.Transport
 
 private val streamOracleJson =
     Json {
@@ -77,6 +80,9 @@ fun main(args: Array<String>) =
                 val bedrock = captureBedrockEvents()
                 put("bedrock-converse-stream", bedrock.events)
                 put("bedrock-converse-stream-request", bedrock.request)
+                val codex = captureEvents("openai-codex-responses", fixtureDir)
+                put("openai-codex-responses", codex.events)
+                put("openai-codex-responses-request", codex.request)
                 put("cloudflare-auth-resolution", captureCloudflareAuthResolution())
                 put(
                     "cloudflare-workers-ai-request",
@@ -386,6 +392,7 @@ private suspend fun captureEvents(
         when (api) {
             "azure-openai-responses" -> "openai-responses"
             "google-vertex" -> "google-generative-ai"
+            "openai-codex-responses" -> "openai-responses"
             else -> api
         }
     val response = Files.readString(fixtureDir.resolve("$fixture.sse")) + "\n"
@@ -407,15 +414,34 @@ private suspend fun captureEvents(
                         ),
                 ),
                 StreamOptions(
-                    apiKey = "test",
-                    cacheRetention = works.earendil.pi.ai.CacheRetention.NONE,
+                    apiKey =
+                        if (api == "openai-codex-responses") {
+                            codexToken("fixture-account")
+                        } else {
+                            "test"
+                        },
+                    cacheRetention =
+                        if (api == "openai-codex-responses") {
+                            works.earendil.pi.ai.CacheRetention.SHORT
+                        } else {
+                            works.earendil.pi.ai.CacheRetention.NONE
+                        },
                     maxRetries = 0,
+                    transport =
+                        if (api == "openai-codex-responses") {
+                            Transport.SSE
+                        } else {
+                            Transport.AUTO
+                        },
                     azureBaseUrl =
                         "${fixture.baseUrl}/proxy?tenant=one"
                             .takeIf { api == "azure-openai-responses" },
                     azureApiVersion = "2026-07-01-preview".takeIf { api == "azure-openai-responses" },
                     azureDeploymentName = "fixture-deployment".takeIf { api == "azure-openai-responses" },
-                    sessionId = "session-123".takeIf { api == "mistral-conversations" },
+                    sessionId =
+                        "session-123".takeIf {
+                            api == "mistral-conversations" || api == "openai-codex-responses"
+                        },
                 ),
             )
         val events =
@@ -427,26 +453,40 @@ private suspend fun captureEvents(
         StreamCapture(
             events = JsonArray(events),
             request =
-                buildJsonObject {
-                    put("url", fixture.requestUrl)
-                    val apiKey = fixture.apiKey
-                    if (apiKey == null) {
-                        put("apiKey", JsonNull)
-                    } else {
-                        put("apiKey", apiKey)
+                if (api == "openai-codex-responses") {
+                    buildJsonObject {
+                        put("url", fixture.requestUrl)
+                        putNullableString("authorization", fixture.authorization)
+                        putNullableString("chatgptAccountId", fixture.chatgptAccountId)
+                        putNullableString("originator", fixture.originator)
+                        putNullableString("openAIBeta", fixture.openAIBeta)
+                        putNullableString("contentEncoding", fixture.contentEncoding)
+                        putNullableString("sessionId", fixture.codexSessionId)
+                        putNullableString("xClientRequestId", fixture.xClientRequestId)
+                        put("body", fixture.requestBody)
                     }
-                    put("hasAuthorization", fixture.hasAuthorization)
-                    val authorization = fixture.authorization
-                    if (authorization == null) {
-                        put("authorization", JsonNull)
-                    } else {
-                        put("authorization", authorization)
-                    }
-                    val xAffinity = fixture.xAffinity
-                    if (xAffinity == null) {
-                        put("xAffinity", JsonNull)
-                    } else {
-                        put("xAffinity", xAffinity)
+                } else {
+                    buildJsonObject {
+                        put("url", fixture.requestUrl)
+                        val apiKey = fixture.apiKey
+                        if (apiKey == null) {
+                            put("apiKey", JsonNull)
+                        } else {
+                            put("apiKey", apiKey)
+                        }
+                        put("hasAuthorization", fixture.hasAuthorization)
+                        val authorization = fixture.authorization
+                        if (authorization == null) {
+                            put("authorization", JsonNull)
+                        } else {
+                            put("authorization", authorization)
+                        }
+                        val xAffinity = fixture.xAffinity
+                        if (xAffinity == null) {
+                            put("xAffinity", JsonNull)
+                        } else {
+                            put("xAffinity", xAffinity)
+                        }
                     }
                 },
             xGoogApiKey = fixture.xGoogApiKey,
@@ -597,6 +637,14 @@ private fun fixtureProvider(
         "mistral-conversations" ->
             MistralProvider("mistral", "Mistral", baseUrl, listOf(model), listOf("UNUSED"))
 
+        "openai-codex-responses" ->
+            OpenAICodexProvider(
+                id = "openai-codex",
+                name = "OpenAI Codex",
+                models = listOf(model),
+                userAgent = { "pi (fixture)" },
+            )
+
         else -> error("Unsupported fixture API: $api")
     }
 
@@ -613,6 +661,7 @@ private fun fixtureModel(
                 "azure-openai-responses" -> "azure-openai-responses"
                 "mistral-conversations" -> "mistral"
                 "google-vertex" -> "google-vertex"
+                "openai-codex-responses" -> "openai-codex"
                 else -> "fixture"
             },
         baseUrl = if (api == "azure-openai-responses") "" else baseUrl,
@@ -690,6 +739,21 @@ private class FixtureServer(
     var xGoogApiKey: String? = null
 
     @Volatile
+    var chatgptAccountId: String? = null
+
+    @Volatile
+    var originator: String? = null
+
+    @Volatile
+    var openAIBeta: String? = null
+
+    @Volatile
+    var contentEncoding: String? = null
+
+    @Volatile
+    var codexSessionId: String? = null
+
+    @Volatile
     var requestBody: JsonElement = JsonNull
 
     @Volatile
@@ -730,12 +794,22 @@ private class FixtureServer(
             xClientRequestId = headers["x-client-request-id"]
             xSessionAffinity = headers["x-session-affinity"]
             xGoogApiKey = headers["x-goog-api-key"]
-            val body =
+            chatgptAccountId = headers["chatgpt-account-id"]
+            originator = headers["originator"]
+            openAIBeta = headers["openai-beta"]
+            contentEncoding = headers["content-encoding"]
+            codexSessionId = headers["session-id"]
+            val rawBody =
                 headers["content-length"]
                     ?.toIntOrNull()
                     ?.let(input::readNBytes)
-                    ?.toString(StandardCharsets.UTF_8)
-                    .orEmpty()
+                    ?: ByteArray(0)
+            val body =
+                if (contentEncoding == "zstd" && rawBody.isNotEmpty()) {
+                    Zstd.decompress(rawBody).toString(StandardCharsets.UTF_8)
+                } else {
+                    rawBody.toString(StandardCharsets.UTF_8)
+                }
             requestBody =
                 body
                     .takeIf(String::isNotEmpty)
@@ -779,4 +853,24 @@ private fun BufferedInputStream.readHttpLine(): String? {
             output.write(byte)
         }
     }
+}
+
+private fun codexToken(accountId: String): String {
+    val payload =
+        providerJson.encodeToString(
+            JsonObject.serializer(),
+            buildJsonObject {
+                put(
+                    "https://api.openai.com/auth",
+                    buildJsonObject {
+                        put("chatgpt_account_id", accountId)
+                    },
+                )
+            },
+        )
+    val encoded =
+        Base64.getUrlEncoder()
+            .withoutPadding()
+            .encodeToString(payload.toByteArray(StandardCharsets.UTF_8))
+    return "aaa.$encoded.bbb"
 }

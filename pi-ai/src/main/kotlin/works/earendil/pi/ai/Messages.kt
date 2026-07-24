@@ -411,6 +411,8 @@ data class StreamOptions(
     val reasoning: ThinkingLevel? = null,
     val reasoningEffort: String? = null,
     val reasoningSummary: String? = null,
+    val serviceTier: String? = null,
+    val textVerbosity: String? = null,
     val promptMode: String? = null,
     val toolChoice: JsonElement? = null,
     val thinkingBudgets: ThinkingBudgets? = null,

@@ -69,6 +69,13 @@ fun builtInProviders(): List<Provider> =
                                 models = it,
                             )
 
+                        "openai-codex" ->
+                            OpenAICodexProvider(
+                                id = providerId,
+                                name = name,
+                                models = it,
+                            )
+
                         else ->
                             CatalogProvider(
                                 id = providerId,
@@ -284,6 +291,7 @@ private val SUPPORTED_APIS =
         "google-vertex",
         "mistral-conversations",
         "openai-completions",
+        "openai-codex-responses",
         "openai-responses",
     )
 private val SPECIAL_AUTH_PROVIDERS =
@@ -313,6 +321,7 @@ private val PROVIDER_NAMES =
         "moonshotai-cn" to "Moonshot AI CN",
         "nvidia" to "NVIDIA",
         "openai" to "OpenAI",
+        "openai-codex" to "OpenAI Codex",
         "opencode" to "OpenCode Zen",
         "opencode-go" to "OpenCode Zen Go",
         "openrouter" to "OpenRouter",

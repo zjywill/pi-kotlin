@@ -13,6 +13,7 @@ import works.earendil.pi.ai.StreamOptions
 import works.earendil.pi.ai.ThinkingBudgets
 import works.earendil.pi.ai.ThinkingLevel
 import works.earendil.pi.ai.ToolDefinition
+import works.earendil.pi.ai.Transport
 import works.earendil.pi.ai.UserMessage
 
 fun main() {
@@ -109,6 +110,17 @@ fun main() {
                     context,
                     options,
                     { null },
+                ),
+            )
+            put(
+                "openai-codex-responses",
+                buildOpenAICodexRequestBody(
+                    fixtureModel(
+                        "openai-codex-responses",
+                        provider = "openai-codex",
+                    ),
+                    context,
+                    options,
                 ),
             )
             put(
@@ -304,6 +316,58 @@ fun main() {
                         ),
                     ),
                     { null },
+                ),
+            )
+            val codexModel =
+                fixtureModel(
+                    "openai-codex-responses",
+                    provider = "openai-codex",
+                ).copy(
+                    id = "gpt-5.5",
+                    name = "GPT-5.5",
+                    reasoning = true,
+                    thinkingLevelMap =
+                        mapOf(
+                            ModelThinkingLevel.MINIMAL to "low",
+                            ModelThinkingLevel.XHIGH to "xhigh",
+                        ),
+                )
+            put(
+                "openai-codex-responses-reasoning",
+                buildOpenAICodexRequestBody(
+                    codexModel,
+                    context,
+                    options.copy(
+                        temperature = null,
+                        maxTokens = null,
+                        cacheRetention = CacheRetention.SHORT,
+                        sessionId = "session-123",
+                        transport = Transport.SSE,
+                        reasoningEffort = "xhigh",
+                        reasoningSummary = "detailed",
+                        serviceTier = "priority",
+                        textVerbosity = "high",
+                        toolChoice = JsonPrimitive("required"),
+                    ),
+                ),
+            )
+            put(
+                "openai-codex-responses-simple-minimal",
+                buildOpenAICodexRequestBody(
+                    codexModel,
+                    context,
+                    openAICodexSimpleStreamOptions(
+                        codexModel,
+                        SimpleStreamOptions(
+                            stream =
+                                options.copy(
+                                    temperature = null,
+                                    maxTokens = null,
+                                    transport = Transport.SSE,
+                                ),
+                            reasoning = ThinkingLevel.MINIMAL,
+                        ),
+                    ),
                 ),
             )
         }

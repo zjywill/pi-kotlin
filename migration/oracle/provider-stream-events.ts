@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { zstdDecompressSync } from "node:zlib";
 
 const sourceRoot = process.env.PI_TYPESCRIPT_ROOT ?? "/Users/junyizhang/Git/pi";
 const fixtureDir = join(import.meta.dirname, "provider-stream-fixtures");
@@ -19,6 +20,7 @@ const apiNames = [
 	"google-vertex",
 	"mistral-conversations",
 	"bedrock-converse-stream",
+	"openai-codex-responses",
 ] as const;
 const modules = new Map(
 	await Promise.all(
@@ -51,6 +53,19 @@ for (const api of apiNames) {
 	}
 	if (api === "mistral-conversations") {
 		output["mistral-conversations-request"] = baseRequestProjection(capture.request);
+	}
+	if (api === "openai-codex-responses") {
+		output["openai-codex-responses-request"] = {
+			url: capture.request.url,
+			authorization: capture.request.authorization,
+			chatgptAccountId: capture.request.chatgptAccountId,
+			originator: capture.request.originator,
+			openAIBeta: capture.request.openAIBeta,
+			contentEncoding: capture.request.contentEncoding,
+			sessionId: capture.request.codexSessionId,
+			xClientRequestId: capture.request.xClientRequestId,
+			body: capture.request.body,
+		};
 	}
 	if (api === "google-vertex") {
 		output["google-vertex-request"] = {
@@ -172,15 +187,24 @@ async function captureEvents(
 			? "openai-responses"
 			: api === "google-vertex"
 				? "google-generative-ai"
+				: api === "openai-codex-responses"
+					? "openai-responses"
 				: api;
 	const response = readFileSync(join(fixtureDir, `${fixture}.sse`), "utf8") + "\n";
 	return withFixtureServer(response, async (baseUrl) => {
 		const module = modules.get(api)!;
 		const model = fixtureModel(api, baseUrl);
 		const stream = module.stream(model, fixtureContext(), {
-			apiKey: "test",
+			apiKey: api === "openai-codex-responses" ? codexToken("fixture-account") : "test",
 			cacheRetention: "none",
 			maxRetries: 0,
+			...(api === "openai-codex-responses"
+				? {
+						cacheRetention: "short",
+						sessionId: "session-123",
+						transport: "sse",
+					}
+				: {}),
 			...(api === "azure-openai-responses"
 				? {
 						azureBaseUrl: `${baseUrl}/proxy?tenant=one`,
@@ -211,6 +235,11 @@ interface FixtureRequest {
 	xClientRequestId: string | null;
 	xSessionAffinity: string | null;
 	xGoogApiKey: string | null;
+	chatgptAccountId: string | null;
+	originator: string | null;
+	openAIBeta: string | null;
+	contentEncoding: string | null;
+	codexSessionId: string | null;
 	body: unknown;
 }
 
@@ -390,6 +419,8 @@ function fixtureModel(api: string, baseUrl: string): Record<string, unknown> {
 							? "google-vertex"
 							: api === "bedrock-converse-stream"
 								? "amazon-bedrock"
+								: api === "openai-codex-responses"
+									? "openai-codex"
 						: "fixture",
 		baseUrl: api === "azure-openai-responses" ? "" : baseUrl,
 		reasoning: false,
@@ -441,7 +472,11 @@ async function withFixtureServer<T>(
 		for await (const chunk of request) {
 			chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
 		}
-		const bodyText = Buffer.concat(chunks).toString("utf8");
+		const rawBody = Buffer.concat(chunks);
+		const bodyText =
+			request.headers["content-encoding"] === "zstd"
+				? zstdDecompressSync(rawBody).toString("utf8")
+				: rawBody.toString("utf8");
 		capturedRequest = {
 			url: request.url ?? "",
 			apiKey: typeof request.headers["api-key"] === "string" ? request.headers["api-key"] : null,
@@ -461,6 +496,15 @@ async function withFixtureServer<T>(
 			xSessionAffinity:
 				typeof request.headers["x-session-affinity"] === "string" ? request.headers["x-session-affinity"] : null,
 			xGoogApiKey: typeof request.headers["x-goog-api-key"] === "string" ? request.headers["x-goog-api-key"] : null,
+			chatgptAccountId:
+				typeof request.headers["chatgpt-account-id"] === "string"
+					? request.headers["chatgpt-account-id"]
+					: null,
+			originator: typeof request.headers.originator === "string" ? request.headers.originator : null,
+			openAIBeta: typeof request.headers["openai-beta"] === "string" ? request.headers["openai-beta"] : null,
+			contentEncoding:
+				typeof request.headers["content-encoding"] === "string" ? request.headers["content-encoding"] : null,
+			codexSessionId: typeof request.headers["session-id"] === "string" ? request.headers["session-id"] : null,
 			body: bodyText ? JSON.parse(bodyText) : null,
 		};
 		reply.writeHead(200, {
@@ -488,4 +532,11 @@ async function withFixtureServer<T>(
 			server.close((error) => (error ? reject(error) : resolve()));
 		});
 	}
+}
+
+function codexToken(accountId: string): string {
+	const payload = Buffer.from(
+		JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } }),
+	).toString("base64url");
+	return `aaa.${payload}.bbb`;
 }

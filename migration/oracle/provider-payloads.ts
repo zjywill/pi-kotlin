@@ -11,6 +11,7 @@ const apiNames = [
 	"google-vertex",
 	"mistral-conversations",
 	"bedrock-converse-stream",
+	"openai-codex-responses",
 ] as const;
 
 const modules = new Map(
@@ -55,6 +56,8 @@ for (const api of apiNames) {
 						? "mistral"
 						: api === "bedrock-converse-stream"
 							? "amazon-bedrock"
+							: api === "openai-codex-responses"
+								? "openai-codex"
 					: "fixture",
 		baseUrl: api === "azure-openai-responses" ? "" : "https://fixture.invalid/v1",
 		reasoning: false,
@@ -64,10 +67,11 @@ for (const api of apiNames) {
 		maxTokens: 16384,
 	};
 	payloads[api] = await capturePayload(api, model, {
-		apiKey: "test",
+		apiKey: api === "openai-codex-responses" ? codexToken("fixture-account") : "test",
 		cacheRetention: "none",
 		maxTokens: 123,
 		temperature: 0.25,
+		...(api === "openai-codex-responses" ? { transport: "sse" } : {}),
 		...(api === "azure-openai-responses"
 			? {
 					azureBaseUrl: "https://fixture.invalid/v1",
@@ -243,6 +247,44 @@ payloads["bedrock-converse-stream-simple-fixed-thinking"] = await capturePayload
 	},
 	true,
 );
+payloads["openai-codex-responses-reasoning"] = await capturePayload(
+	"openai-codex-responses",
+	{
+		...fixtureModel("openai-codex-responses", "openai-codex"),
+		id: "gpt-5.5",
+		name: "GPT-5.5",
+		reasoning: true,
+		thinkingLevelMap: { minimal: "low", xhigh: "xhigh" },
+	},
+	{
+		apiKey: codexToken("fixture-account"),
+		cacheRetention: "short",
+		sessionId: "session-123",
+		transport: "sse",
+		reasoningEffort: "xhigh",
+		reasoningSummary: "detailed",
+		serviceTier: "priority",
+		textVerbosity: "high",
+		toolChoice: "required",
+	},
+);
+payloads["openai-codex-responses-simple-minimal"] = await capturePayload(
+	"openai-codex-responses",
+	{
+		...fixtureModel("openai-codex-responses", "openai-codex"),
+		id: "gpt-5.5",
+		name: "GPT-5.5",
+		reasoning: true,
+		thinkingLevelMap: { minimal: "low", xhigh: "xhigh" },
+	},
+	{
+		apiKey: codexToken("fixture-account"),
+		cacheRetention: "none",
+		transport: "sse",
+		reasoning: "minimal",
+	},
+	true,
+);
 
 console.log(JSON.stringify(payloads));
 
@@ -283,6 +325,13 @@ function fixtureModel(api: string, provider = "fixture"): Record<string, unknown
 		contextWindow: 128000,
 		maxTokens: 16384,
 	};
+}
+
+function codexToken(accountId: string): string {
+	const payload = Buffer.from(
+		JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } }),
+	).toString("base64url");
+	return `aaa.${payload}.bbb`;
 }
 
 function normalizeGooglePayload(value: unknown): unknown {

@@ -42,7 +42,8 @@ timing.
 
 Provider payload and stream comparisons cover OpenAI Chat Completions, OpenAI
 Responses, Azure OpenAI Responses, Anthropic Messages, Google Generative AI,
-Google Vertex AI, Mistral Conversations, and Amazon Bedrock ConverseStream.
+Google Vertex AI, Mistral Conversations, Amazon Bedrock ConverseStream, and
+OpenAI Codex Responses over SSE.
 Vertex independently compares SDK
 parameters, public stream events, the collection-scoped request URL, and
 `x-goog-api-key`; Kotlin unit fixtures additionally cover ADC bearer tokens and
@@ -64,3 +65,11 @@ fixed-budget thinking requests. Its SDK-boundary fixture compares Bearer auth,
 region and endpoint selection, reserved-header filtering, the final Converse
 request, and public reasoning/text/tool/usage stream events without requiring
 live AWS credentials.
+
+OpenAI Codex adds independent payload cases for the base request, reasoning,
+service tiers, verbosity, required tool choice, cache affinity, and
+`streamSimple` thinking-level clamping. Its SSE fixture compares zstd request
+compression, ChatGPT account and session headers, the final
+`/codex/responses` request, terminal `response.done` handling, and the shared
+Responses public event transcript. WebSocket transport and interactive OAuth
+login remain separate migration gaps.

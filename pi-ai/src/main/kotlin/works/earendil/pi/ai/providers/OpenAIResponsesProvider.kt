@@ -1,6 +1,7 @@
 package works.earendil.pi.ai.providers
 
 import java.net.http.HttpClient
+import java.nio.charset.StandardCharsets
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -115,13 +116,14 @@ class OpenAIResponsesProvider(
         val grammarToolInputProperties =
             createGrammarToolInputProperties(context.tools, supportsOpenAIGrammarTools)
         val body =
-            requestBody(
-                model,
-                context,
-                options,
-                request.modelId,
-                request.promptCacheWhenDisabled,
-            )
+            request.body
+                ?: requestBody(
+                    model,
+                    context,
+                    options,
+                    request.modelId,
+                    request.promptCacheWhenDisabled,
+                )
 
         val blocks = mutableListOf<works.earendil.pi.ai.ContentBlock>()
         val slots = mutableMapOf<Int, Slot>()
@@ -206,18 +208,25 @@ class OpenAIResponsesProvider(
         }
 
         stream.push(AssistantStart(snapshot()))
+        val bodyJson = providerJson.encodeToString(JsonObject.serializer(), body)
         postSse(
             client,
             request.url,
-            providerJson.encodeToString(JsonObject.serializer(), body),
-            mergedHeaders(
-                request.headers,
-                model.headers,
-                options.headers,
-            ),
+            request.encodeBody?.invoke(bodyJson)
+                ?: bodyJson.toByteArray(StandardCharsets.UTF_8),
+            if (request.headersAreFinal) {
+                request.headers
+            } else {
+                mergedHeaders(
+                    request.headers,
+                    model.headers,
+                    options.headers,
+                )
+            },
             options.timeoutMs,
             options.maxRetries,
             options.maxRetryDelayMs,
+            shouldStop = { request.stopAfterTerminal && sawTerminal },
         ) { sse ->
             if (sse.data.isBlank() || sse.data == "[DONE]") {
                 return@postSse
@@ -421,6 +430,7 @@ class OpenAIResponsesProvider(
 
                 "response.completed",
                 "response.incomplete",
+                "response.done",
                 -> {
                     sawTerminal = true
                     val response = event.obj("response") ?: JsonObject(emptyMap())
@@ -464,6 +474,22 @@ class OpenAIResponsesProvider(
                         calculatedUsage.copy(
                             totalTokens = rawUsage?.int("total_tokens") ?: calculatedUsage.totalTokens,
                         )
+                    request.usageCostMultiplier(response)
+                        .takeIf { it != 1.0 }
+                        ?.let { multiplier ->
+                            val cost = usage.cost
+                            usage =
+                                usage.copy(
+                                    cost =
+                                        cost.copy(
+                                            input = cost.input * multiplier,
+                                            output = cost.output * multiplier,
+                                            cacheRead = cost.cacheRead * multiplier,
+                                            cacheWrite = cost.cacheWrite * multiplier,
+                                            total = cost.total * multiplier,
+                                        ),
+                                )
+                        }
                     stopReason =
                         when (response.string("status")) {
                             "incomplete" -> StopReason.LENGTH
@@ -517,13 +543,14 @@ class OpenAIResponsesProvider(
             promptCacheWhenDisabled,
         )
 
-    private fun responseInput(
+    internal fun responseInput(
         model: Model,
         context: Context,
         grammarToolInputProperties: Map<String, String>,
+        includeSystemPrompt: Boolean = true,
     ): JsonArray =
         buildJsonArray {
-            context.systemPrompt?.let { system ->
+            context.systemPrompt?.takeIf { includeSystemPrompt }?.let { system ->
                 add(
                     buildJsonObject {
                         val supportsDeveloperRole =
@@ -722,6 +749,11 @@ internal data class OpenAIResponsesHttpRequest(
     val modelId: String,
     val headers: Map<String, String>,
     val promptCacheWhenDisabled: Boolean = false,
+    val body: JsonObject? = null,
+    val headersAreFinal: Boolean = false,
+    val stopAfterTerminal: Boolean = false,
+    val encodeBody: ((String) -> ByteArray)? = null,
+    val usageCostMultiplier: (JsonObject) -> Double = { 1.0 },
 )
 
 internal fun buildOpenAIResponsesRequestBody(

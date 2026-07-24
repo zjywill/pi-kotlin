@@ -38,13 +38,35 @@ internal suspend fun postSse(
     maxRetryDelayMs: Long? = null,
     onEvent: (SseEvent) -> Unit,
 ): Map<String, List<String>> =
+    postSse(
+        client = client,
+        url = url,
+        body = body.toByteArray(StandardCharsets.UTF_8),
+        headers = headers,
+        timeoutMs = timeoutMs,
+        maxRetries = maxRetries,
+        maxRetryDelayMs = maxRetryDelayMs,
+        onEvent = onEvent,
+    )
+
+internal suspend fun postSse(
+    client: HttpClient,
+    url: String,
+    body: ByteArray,
+    headers: Map<String, String>,
+    timeoutMs: Long?,
+    maxRetries: Int? = null,
+    maxRetryDelayMs: Long? = null,
+    shouldStop: () -> Boolean = { false },
+    onEvent: (SseEvent) -> Unit,
+): Map<String, List<String>> =
     withContext(Dispatchers.IO) {
         val builder =
             HttpRequest
                 .newBuilder(URI.create(url))
                 .header("accept", "text/event-stream")
                 .header("content-type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body))
         timeoutMs?.let { builder.timeout(Duration.ofMillis(it)) }
         headers.forEach(builder::header)
         val request = builder.build()
@@ -81,13 +103,18 @@ internal suspend fun postSse(
             while (true) {
                 val line = reader.readLine() ?: break
                 when {
-                    line.isEmpty() -> flush()
+                    line.isEmpty() -> {
+                        flush()
+                        if (shouldStop()) break
+                    }
                     line.startsWith(":") -> Unit
                     line.startsWith("event:") -> eventName = line.removePrefix("event:").trimStart()
                     line.startsWith("data:") -> data += line.removePrefix("data:").trimStart()
                 }
             }
-            flush()
+            if (!shouldStop()) {
+                flush()
+            }
         }
         response.headers().map()
     }

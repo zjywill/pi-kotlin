@@ -71,8 +71,8 @@ features outside that slice remain migration work.
 | --- | --- | --- |
 | Gradle multi-module build | Functional slice | Six JVM 21 modules; `clean test installDist` passes with warnings as errors |
 | Core AI messages and stream protocol | Functional slice | Message, event-stream, UUIDv7, tool validation, and faux-provider tests |
-| Model catalog | Functional slice | Hydrated schema-v3 manifest and 37 provider files verify by SHA-256; 1,109 model records load, with 1,074 models exposed across 35 providers whose protocols and authentication are currently executable |
-| Provider HTTP implementations | Partial | Google Generative AI, Google Vertex AI, Anthropic Messages, OpenAI Chat Completions, OpenAI Responses, Azure OpenAI Responses, Mistral Conversations, Amazon Bedrock ConverseStream, Cloudflare Workers AI, and Cloudflare AI Gateway request/stream fixture tests, independent base/reasoning payload and public stream-transcript parity, provider-auth/request parity, and multi-protocol catalog dispatch |
+| Model catalog | Functional slice | Hydrated schema-v3 manifest and 37 provider files verify by SHA-256; 1,109 model records load, with 1,081 models exposed across 36 providers whose current executable protocol paths can be selected |
+| Provider HTTP implementations | Partial | Google Generative AI, Google Vertex AI, Anthropic Messages, OpenAI Chat Completions, OpenAI Responses, Azure OpenAI Responses, Mistral Conversations, Amazon Bedrock ConverseStream, OpenAI Codex Responses SSE, Cloudflare Workers AI, and Cloudflare AI Gateway request/stream fixture tests, independent base/reasoning payload and public stream-transcript parity, provider-auth/request parity, and multi-protocol catalog dispatch |
 | Agent loop | Functional slice | Streaming, tool calls, parallel execution, steering, follow-up, abort, and session tests using the faux provider; coding-message projection has independent parity for bash/custom/branch/compaction messages |
 | CLI argument contract | Partial | Parser tests and byte-for-byte `--help` oracle against the pinned TypeScript CLI; provider-prefixed and slash-containing model IDs plus thinking suffixes are covered |
 | Prompt and context resources | Partial | Global and ancestor `AGENTS.md`/`CLAUDE.md` discovery, `SYSTEM.md`/`APPEND_SYSTEM.md`, CLI overrides, trust gating, and `--no-context-files` tests |
@@ -87,27 +87,30 @@ features outside that slice remain migration work.
 
 ## Verification snapshot
 
-Verified on July 23, 2026 against source commit
-`9b3a2059171bcc74ad9d2cadeea6d186776cf2db`:
+Verified on July 24, 2026 against source commit
+`24bace27cf308c89707cf8005b4795d873e23f17`:
 
-- `./gradlew clean test installDist`: passed, 149 tests, 0 failures, 0 errors,
+- `./gradlew clean test installDist`: passed, 162 tests, 0 failures, 0 errors,
   and 0 skipped.
 - `./migration/oracle/compare-cli-help.sh`: passed with byte-for-byte CLI help
   parity.
+- `./migration/oracle/compare-model-catalog-runtime.sh`: passed for bundled,
+  persisted-newer, remote-newer, and unavailable-catalog selection behavior.
 - `./migration/oracle/compare-provider-payloads.sh`: passed with exact normalized
   JSON parity for OpenAI Chat Completions, OpenAI Responses, Azure OpenAI
   Responses, Anthropic Messages, Google Generative AI, Google Vertex AI,
   Mistral Conversations, and Amazon Bedrock ConverseStream base and reasoning
-  requests, including Azure deployment names, Vertex thinking controls,
-  Mistral reasoning/cache controls, and Bedrock adaptive/fixed thinking,
-  including `streamSimple` thinking-budget reservation.
+  requests plus OpenAI Codex Responses SSE, including Azure deployment names,
+  Vertex thinking controls, Mistral reasoning/cache controls, Bedrock
+  adaptive/fixed thinking and `streamSimple` thinking-budget reservation, and
+  Codex reasoning, service tiers, verbosity, tool choice, and cache affinity.
 - `./migration/oracle/compare-provider-stream-events.sh`: passed with normalized
   public transcript parity for event ordering, text/thinking/tool deltas and
   endings, terminal messages, usage, stop reasons, and replay signatures across
   the same provider protocols, including Vertex request-path/API-key parity,
   Bedrock SDK client/final-request parity, plus independent Cloudflare
   auth-resolution and final-request parity across Workers AI and all three AI
-  Gateway delegates.
+  Gateway delegates, and Codex zstd/auth/session/final-request parity.
 - Azure OpenAI fixture tests cover API-key authentication, API-version query
   handling, endpoint normalization, resource/base/model precedence, deployment
   maps, and reasoning-signature replay through the shared Responses state
@@ -135,6 +138,13 @@ Verified on July 23, 2026 against source commit
   GovCloud payloads, reasoning/text/tool EventStream state, usage, stop reasons,
   and synthetic tool results. Independent graders compare final Converse
   payloads plus the SDK client/request projection and public stream transcript.
+- OpenAI Codex fixture tests cover ChatGPT account extraction from OAuth access
+  tokens, mandatory authorization/header precedence, 64-character cache
+  affinity, zstd-compressed SSE requests, `/codex/responses` URL normalization,
+  reasoning and verbosity controls, strict and grammar tools, service-tier
+  pricing, `response.done` termination, and `streamSimple` thinking-level
+  clamping. Explicit WebSocket transport remains disabled until its connection
+  reuse and continuation contract is ported.
 - `./migration/oracle/compare-coding-message-projection.sh`: passed with
   normalized JSON parity for ordinary messages, custom messages, branch and
   compaction summaries, bash formatting, and `excludeFromContext` filtering.
@@ -167,10 +177,13 @@ Verified on July 23, 2026 against source commit
 - The installed server exposed all 12 Google Vertex AI models. State read-back
   preserved `google-vertex/gemini-3-flash-preview`, API `google-vertex`, and
   thinking level `high`.
-- The installed server exposed all 109 Amazon Bedrock models and 1,074 models
+- The installed server exposed all 109 Amazon Bedrock models and 1,081 models
   total. State read-back preserved
   `amazon-bedrock/us.anthropic.claude-opus-4-8`, API
   `bedrock-converse-stream`, and thinking level `high`.
+- The installed server exposed all 7 OpenAI Codex models and 1,081 models
+  total. State read-back preserved `openai-codex/gpt-5.5`, API
+  `openai-codex-responses`, and thinking level `high`.
 - Server state read-back preserved the slash-containing model ID
   `moonshotai/kimi-k2.6` and thinking level `high`.
 - Piped `rpc-stream` emitted `rpc_ready` then `response` and exited with status
@@ -186,8 +199,8 @@ Verified on July 23, 2026 against source commit
 
 ## Remaining major gaps
 
-- Implement the remaining provider protocols and authentication wrappers:
-  OpenAI Codex and GitHub Copilot/OAuth.
+- Complete OpenAI Codex WebSocket transport and interactive OAuth login, then
+  implement GitHub Copilot authentication/OAuth.
 - Extend request/stream parity as the remaining provider protocols land, and add
   opt-in live provider smoke tests.
 - Port extensions, skills, prompt templates, themes, package management,

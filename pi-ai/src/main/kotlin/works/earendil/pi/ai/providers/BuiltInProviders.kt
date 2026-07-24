@@ -57,6 +57,15 @@ fun amazonBedrockProvider(
         models = models,
     )
 
+fun openAICodexProvider(
+    models: List<Model> = builtInModels("openai-codex"),
+): OpenAICodexProvider =
+    OpenAICodexProvider(
+        id = "openai-codex",
+        name = "OpenAI Codex",
+        models = models,
+    )
+
 fun anthropicProvider(
     models: List<Model> =
         builtInModels("anthropic").filter { it.api == "anthropic-messages" },
