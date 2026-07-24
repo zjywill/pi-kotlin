@@ -20,6 +20,7 @@ Run the available comparisons from the Kotlin repository:
 ```bash
 ./migration/oracle/compare-cli-help.sh
 ./migration/oracle/compare-coding-message-projection.sh
+./migration/oracle/compare-model-catalog-runtime.sh
 ./migration/oracle/compare-provider-payloads.sh
 ./migration/oracle/compare-provider-stream-events.sh
 ./migration/oracle/compare-session-jsonl.sh
@@ -28,6 +29,10 @@ Run the available comparisons from the Kotlin repository:
 Normalizers may remove absolute paths, timestamps, and version strings. They
 must not remove flags, event ordering, message content, error categories, or
 serialized fields.
+
+The model catalog runtime comparison covers bundled-versus-remote timestamp
+selection, a newer persisted overlay restored without network access, and
+404/501-style unavailable catalog fallback.
 
 The provider stream comparison projects the documented public event transcript:
 event type, index, delta/end content, tool calls, and terminal messages. It does

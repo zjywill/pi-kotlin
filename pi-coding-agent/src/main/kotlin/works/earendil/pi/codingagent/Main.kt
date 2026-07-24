@@ -1,11 +1,21 @@
 package works.earendil.pi.codingagent
 
 import kotlinx.coroutines.runBlocking
-import works.earendil.pi.ai.providers.builtInModelsCollection
 
 private const val VERSION = "0.1.0-SNAPSHOT"
 
 fun main(rawArguments: Array<String>) {
+    val catalogCommandExitCode =
+        runBlocking {
+            runModelCatalogCommand(rawArguments.toList())
+        }
+    if (catalogCommandExitCode != null) {
+        if (catalogCommandExitCode != 0) {
+            kotlin.system.exitProcess(catalogCommandExitCode)
+        }
+        return
+    }
+
     val arguments = parseArgs(rawArguments.toList())
     when {
         arguments.version -> println(VERSION)
@@ -28,7 +38,7 @@ fun main(rawArguments: Array<String>) {
 
         else ->
             runBlocking {
-                val models = builtInModelsCollection()
+                val models = loadBuiltInModels()
                 when {
                     arguments.mode == OutputMode.RPC ->
                         runRpcJsonLines(

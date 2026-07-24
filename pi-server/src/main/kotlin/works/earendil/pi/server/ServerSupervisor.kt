@@ -9,12 +9,12 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import works.earendil.pi.ai.providers.builtInModelsCollection
 import works.earendil.pi.codingagent.RpcRuntime
 import works.earendil.pi.codingagent.RpcRuntimeOptions
+import works.earendil.pi.codingagent.loadBuiltInModels
 
 fun interface RpcRuntimeFactory {
-    fun create(
+    suspend fun create(
         cwd: Path,
         provider: String?,
         model: String?,
@@ -178,7 +178,7 @@ class ServerSupervisor(
         private fun defaultRuntimeFactory(): RpcRuntimeFactory =
             RpcRuntimeFactory { cwd, provider, model ->
                 RpcRuntime(
-                    builtInModelsCollection(),
+                    loadBuiltInModels(),
                     RpcRuntimeOptions(
                         cwd = cwd,
                         provider = provider,

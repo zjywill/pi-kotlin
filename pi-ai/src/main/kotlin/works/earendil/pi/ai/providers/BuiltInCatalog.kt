@@ -1,6 +1,8 @@
 package works.earendil.pi.ai.providers
 
 import java.security.MessageDigest
+import java.net.http.HttpClient
+import java.time.Instant
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -9,8 +11,11 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import works.earendil.pi.ai.AssistantMessageEventStream
 import works.earendil.pi.ai.Context
+import works.earendil.pi.ai.InMemoryModelsStore
 import works.earendil.pi.ai.Model
 import works.earendil.pi.ai.Models
+import works.earendil.pi.ai.ModelsRefreshOptions
+import works.earendil.pi.ai.ModelsStore
 import works.earendil.pi.ai.Provider
 import works.earendil.pi.ai.StreamOptions
 
@@ -78,6 +83,40 @@ fun builtInProviders(): List<Provider> =
         .sortedBy(Provider::id)
 
 fun builtInModelsCollection(): Models = Models(builtInProviders())
+
+data class BuiltInModelsOptions(
+    val modelsStore: ModelsStore = InMemoryModelsStore(),
+    val catalogBaseUrl: String = "https://pi.dev",
+    val allowNetwork: Boolean = false,
+    val force: Boolean = false,
+    val userAgent: String = "pi/0.1.0-SNAPSHOT",
+    val httpClient: HttpClient = defaultRemoteCatalogHttpClient(),
+)
+
+suspend fun builtInModelsCollection(options: BuiltInModelsOptions): Models {
+    val generatedAt =
+        builtInCatalog()
+            .generatedAt
+            ?.let(Instant::parse)
+            ?.toEpochMilli()
+    val providers =
+        builtInProviders().map { provider ->
+            provider.withRemoteCatalog(
+                catalogBaseUrl = options.catalogBaseUrl,
+                localGeneratedAt = generatedAt,
+                userAgent = options.userAgent,
+                client = options.httpClient,
+            )
+        }
+    return Models(providers, options.modelsStore).also { models ->
+        models.refresh(
+            ModelsRefreshOptions(
+                allowNetwork = options.allowNetwork,
+                force = options.force,
+            ),
+        )
+    }
+}
 
 private object CatalogHolder {
     val snapshot: BuiltInCatalogSnapshot by lazy(::loadCatalog)

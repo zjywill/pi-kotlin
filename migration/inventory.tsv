@@ -1,6 +1,6 @@
 area	source	target	status	judge	gap
 AI message and stream contracts	packages/ai/src/types.ts	pi-ai	complete	Gradle tests and provider stream oracle
-Built-in model catalog	packages/ai/src/providers/data	pi-ai	partial	Catalog checksum tests	Remote refresh and bundled-versus-remote selection are missing
+Built-in model catalog	packages/ai/src/providers/data	pi-ai	complete	Catalog checksum, runtime tests, and model catalog oracle
 Provider protocols	packages/ai/src/api	pi-ai	partial	Provider payload and stream oracles	OpenAI Codex and GitHub Copilot authentication are missing
 Agent loop	packages/agent/src	pi-agent-core	complete	Agent loop and session tests
 SQLite session storage	packages/storage/sqlite-node	pi-storage-sqlite	complete	SQLite repository tests
