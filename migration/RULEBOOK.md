@@ -30,6 +30,7 @@ through the commit recorded in `sync-state.tsv`.
 ## Required judges
 
 - `./gradlew clean test installDist`
+- `./migration/oracle/compare-anthropic-oauth.sh`
 - `./migration/oracle/compare-cli-help.sh`
 - `./migration/oracle/compare-coding-message-projection.sh`
 - `./migration/oracle/compare-github-copilot.sh`

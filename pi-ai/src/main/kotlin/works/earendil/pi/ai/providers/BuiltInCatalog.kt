@@ -80,6 +80,18 @@ fun builtInProviders(): List<Provider> =
                                 models = it,
                             )
 
+                        "anthropic" ->
+                            AnthropicProvider(
+                                id = providerId,
+                                name = name,
+                                baseUrl = it.first().baseUrl,
+                                models = it,
+                                apiKeyEnvNames =
+                                    PROVIDER_API_KEY_ENV_NAMES[providerId]
+                                        ?: defaultApiKeyNames(providerId),
+                                oauth = AnthropicOAuth(),
+                            )
+
                         else ->
                             CatalogProvider(
                                 id = providerId,

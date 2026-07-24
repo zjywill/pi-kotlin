@@ -5,6 +5,7 @@ import java.net.InetSocketAddress
 import java.net.http.HttpClient
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
@@ -14,6 +15,42 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class SseHttpTest {
+    @Test
+    fun `explicit headers replace SSE defaults case insensitively`() =
+        runTest {
+            val captured = AtomicReference<Map<String, List<String>>>()
+            fixtureServer { exchange ->
+                captured.set(
+                    exchange.requestHeaders.entries.associate { (name, values) ->
+                        name.lowercase() to values
+                    },
+                )
+                exchange.requestBody.readAllBytes()
+                val body = "data: ok\n\n".toByteArray(StandardCharsets.UTF_8)
+                exchange.sendResponseHeaders(200, body.size.toLong())
+                exchange.responseBody.use { it.write(body) }
+            }.use { server ->
+                postSse(
+                    client = HttpClient.newHttpClient(),
+                    url = server.url,
+                    body = "{}",
+                    headers =
+                        mapOf(
+                            "Accept" to "application/json",
+                            "CONTENT-TYPE" to "application/custom+json",
+                        ),
+                    timeoutMs = null,
+                    onEvent = {},
+                )
+
+                assertEquals(listOf("application/json"), captured.get().getValue("accept"))
+                assertEquals(
+                    listOf("application/custom+json"),
+                    captured.get().getValue("content-type"),
+                )
+            }
+        }
+
     @Test
     fun `retries retryable provider responses`() =
         runTest {

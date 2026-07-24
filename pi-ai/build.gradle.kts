@@ -57,3 +57,9 @@ tasks.register<JavaExec>("githubCopilotOracle") {
     classpath = sourceSets["test"].runtimeClasspath
     mainClass = "works.earendil.pi.ai.providers.GitHubCopilotOracleKt"
 }
+
+tasks.register<JavaExec>("anthropicOAuthOracle") {
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass = "works.earendil.pi.ai.providers.AnthropicOAuthOracleKt"
+}

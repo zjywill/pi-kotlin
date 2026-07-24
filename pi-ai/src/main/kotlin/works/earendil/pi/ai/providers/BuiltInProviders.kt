@@ -85,6 +85,7 @@ fun anthropicProvider(
         baseUrl = "https://api.anthropic.com",
         models = models,
         apiKeyEnvNames = listOf("ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"),
+        oauth = AnthropicOAuth(),
     )
 
 fun mistralProvider(

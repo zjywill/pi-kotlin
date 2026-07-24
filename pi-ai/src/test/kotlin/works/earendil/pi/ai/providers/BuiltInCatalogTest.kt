@@ -99,6 +99,7 @@ class BuiltInCatalogTest {
         val codex = providers.single { it.id == "openai-codex" }
         assertEquals("OpenAI Codex", codex.name)
         assertEquals(7, codex.getModels().size)
+        assertNotNull(providers.single { it.id == "anthropic" }.oauth)
         assertTrue(providers.flatMap(works.earendil.pi.ai.Provider::getModels).all { it.api in SUPPORTED_TEST_APIS })
     }
 

@@ -61,14 +61,23 @@ internal suspend fun postSse(
     onEvent: (SseEvent) -> Unit,
 ): Map<String, List<String>> =
     withContext(Dispatchers.IO) {
+        val requestHeaders =
+            linkedMapOf(
+                "accept" to "text/event-stream",
+                "content-type" to "application/json",
+            )
+        headers.forEach { (name, value) ->
+            requestHeaders.keys
+                .firstOrNull { it.equals(name, ignoreCase = true) }
+                ?.let(requestHeaders::remove)
+            requestHeaders[name] = value
+        }
         val builder =
             HttpRequest
                 .newBuilder(URI.create(url))
-                .header("accept", "text/event-stream")
-                .header("content-type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
         timeoutMs?.let { builder.timeout(Duration.ofMillis(it)) }
-        headers.forEach(builder::header)
+        requestHeaders.forEach(builder::header)
         val request = builder.build()
         val response =
             retryProviderRequest(maxRetries, maxRetryDelayMs) {

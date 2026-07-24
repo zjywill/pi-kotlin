@@ -19,6 +19,7 @@ import works.earendil.pi.ai.Context
 import works.earendil.pi.ai.ImageContent
 import works.earendil.pi.ai.MessageContent
 import works.earendil.pi.ai.Model
+import works.earendil.pi.ai.OAuthAuth
 import works.earendil.pi.ai.Provider
 import works.earendil.pi.ai.StopReason
 import works.earendil.pi.ai.StreamOptions
@@ -47,6 +48,7 @@ class AnthropicProvider(
     private val models: List<Model>,
     private val apiKeyEnvNames: List<String>,
     private val client: HttpClient = HttpClient.newHttpClient(),
+    override val oauth: OAuthAuth? = null,
 ) : Provider {
     override fun getModels(): List<Model> = models
 
@@ -82,7 +84,10 @@ class AnthropicProvider(
         stream: AssistantMessageEventStream,
     ) {
         val apiKey = resolveApiKey(id, options.apiKey, options.env, apiKeyEnvNames)
-        val body = requestBody(model, context, options)
+        val isOAuthToken =
+            model.provider != "github-copilot" &&
+                isAnthropicOAuthToken(apiKey)
+        val body = requestBody(model, context, options, isOAuthToken)
         val blocks = mutableListOf<works.earendil.pi.ai.ContentBlock>()
         val providerIndexes = mutableMapOf<Int, Int>()
         val toolArguments = mutableMapOf<Int, String>()
@@ -108,7 +113,7 @@ class AnthropicProvider(
             body = providerJson.encodeToString(JsonObject.serializer(), body),
             headers =
                 mergedHeaders(
-                    anthropicRequestHeaders(model, context, options, apiKey),
+                    anthropicRequestHeaders(model, context, options, apiKey, isOAuthToken),
                     model.headers,
                     options.headers,
                 ),
@@ -176,7 +181,15 @@ class AnthropicProvider(
                             blocks +=
                                 ToolCall(
                                     id = block.string("id").orEmpty(),
-                                    name = block.string("name").orEmpty(),
+                                    name =
+                                        if (isOAuthToken) {
+                                            fromClaudeCodeToolName(
+                                                block.string("name").orEmpty(),
+                                                context,
+                                            )
+                                        } else {
+                                            block.string("name").orEmpty()
+                                        },
                                     arguments = block.obj("input") ?: JsonObject(emptyMap()),
                                 )
                             stream.push(ToolCallStart(contentIndex, snapshot()))
@@ -278,15 +291,20 @@ class AnthropicProvider(
         model: Model,
         context: Context,
         options: StreamOptions,
+        isOAuthToken: Boolean = false,
     ): JsonObject =
         buildAnthropicRequestBodyFromMessages(
             model,
             context,
             options,
-            anthropicMessages(context),
+            anthropicMessages(context, isOAuthToken),
+            isOAuthToken,
         )
 
-    private fun anthropicMessages(context: Context): JsonArray =
+    private fun anthropicMessages(
+        context: Context,
+        isOAuthToken: Boolean,
+    ): JsonArray =
         buildJsonArray {
             context.messages.forEach { message ->
                 when (message) {
@@ -329,7 +347,10 @@ class AnthropicProvider(
                                                         buildJsonObject {
                                                             put("type", "tool_use")
                                                             put("id", block.id)
-                                                            put("name", block.name)
+                                                            put(
+                                                                "name",
+                                                                anthropicToolName(block.name, isOAuthToken),
+                                                            )
                                                             put("input", block.arguments)
                                                         },
                                                     )
@@ -424,40 +445,115 @@ private fun anthropicRequestHeaders(
     context: Context,
     options: StreamOptions,
     apiKey: String,
+    isOAuthToken: Boolean,
 ): Map<String, String> {
-    if (model.provider != "github-copilot") {
-        return mapOf(
-            "x-api-key" to apiKey,
-            "anthropic-version" to "2023-06-01",
-        )
+    val betaFeatures = anthropicBetaFeatures(model, context, options)
+    if (model.provider == "github-copilot") {
+        return buildMap {
+            put("authorization", "Bearer $apiKey")
+            put("anthropic-version", "2023-06-01")
+            put("accept", "application/json")
+            put("anthropic-dangerous-direct-browser-access", "true")
+            if (betaFeatures.isNotEmpty()) {
+                put("anthropic-beta", betaFeatures.joinToString(","))
+            }
+            putAll(githubCopilotDynamicHeaders(context))
+        }
     }
-    val betaFeatures = mutableListOf<String>()
-    val supportsEagerToolInputStreaming =
-        model.compat?.get("supportsEagerToolInputStreaming")
-            ?.let { it as? kotlinx.serialization.json.JsonPrimitive }
-            ?.booleanOrNull
-            ?: true
-    if (context.tools.isNotEmpty() && !supportsEagerToolInputStreaming) {
-        betaFeatures += "fine-grained-tool-streaming-2025-05-14"
-    }
-    val forceAdaptiveThinking =
-        model.compat?.get("forceAdaptiveThinking")
-            ?.let { it as? kotlinx.serialization.json.JsonPrimitive }
-            ?.booleanOrNull == true
-    if (options.interleavedThinking != false && !forceAdaptiveThinking) {
-        betaFeatures += "interleaved-thinking-2025-05-14"
+    if (isOAuthToken) {
+        return buildMap {
+            put("authorization", "Bearer $apiKey")
+            put("anthropic-version", "2023-06-01")
+            put("accept", "application/json")
+            put("anthropic-dangerous-direct-browser-access", "true")
+            put(
+                "anthropic-beta",
+                (
+                    listOf("claude-code-20250219", "oauth-2025-04-20") +
+                        betaFeatures
+                ).joinToString(","),
+            )
+            put("user-agent", "claude-cli/$ANTHROPIC_CLAUDE_CODE_VERSION")
+            put("x-app", "cli")
+        }
     }
     return buildMap {
-        put("authorization", "Bearer $apiKey")
+        put("x-api-key", apiKey)
         put("anthropic-version", "2023-06-01")
         put("accept", "application/json")
         put("anthropic-dangerous-direct-browser-access", "true")
         if (betaFeatures.isNotEmpty()) {
             put("anthropic-beta", betaFeatures.joinToString(","))
         }
-        putAll(githubCopilotDynamicHeaders(context))
     }
 }
+
+private fun anthropicBetaFeatures(
+    model: Model,
+    context: Context,
+    options: StreamOptions,
+): List<String> =
+    buildList {
+        val supportsEagerToolInputStreaming =
+            model.compat?.get("supportsEagerToolInputStreaming")
+                ?.let { it as? kotlinx.serialization.json.JsonPrimitive }
+                ?.booleanOrNull
+                ?: true
+        if (context.tools.isNotEmpty() && !supportsEagerToolInputStreaming) {
+            add("fine-grained-tool-streaming-2025-05-14")
+        }
+        val forceAdaptiveThinking =
+            model.compat?.get("forceAdaptiveThinking")
+                ?.let { it as? kotlinx.serialization.json.JsonPrimitive }
+                ?.booleanOrNull == true
+        if (options.interleavedThinking != false && !forceAdaptiveThinking) {
+            add("interleaved-thinking-2025-05-14")
+        }
+    }
+
+private fun isAnthropicOAuthToken(apiKey: String): Boolean = "sk-ant-oat" in apiKey
+
+private fun anthropicToolName(
+    name: String,
+    isOAuthToken: Boolean,
+): String =
+    if (isOAuthToken) {
+        CLAUDE_CODE_TOOL_NAMES[name.lowercase()] ?: name
+    } else {
+        name
+    }
+
+private fun fromClaudeCodeToolName(
+    name: String,
+    context: Context,
+): String =
+    context.tools
+        .firstOrNull { it.name.equals(name, ignoreCase = true) }
+        ?.name
+        ?: name
+
+private val CLAUDE_CODE_TOOL_NAMES =
+    listOf(
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Grep",
+        "Glob",
+        "AskUserQuestion",
+        "EnterPlanMode",
+        "ExitPlanMode",
+        "KillShell",
+        "NotebookEdit",
+        "Skill",
+        "Task",
+        "TaskOutput",
+        "TodoWrite",
+        "WebFetch",
+        "WebSearch",
+    ).associateBy(String::lowercase)
+
+private const val ANTHROPIC_CLAUDE_CODE_VERSION = "2.1.75"
 
 internal fun buildAnthropicRequestBody(
     model: Model,
@@ -480,6 +576,7 @@ private fun buildAnthropicRequestBodyFromMessages(
     context: Context,
     options: StreamOptions,
     messages: JsonArray,
+    isOAuthToken: Boolean,
 ): JsonObject {
     val forceAdaptiveThinking =
         model.compat?.get("forceAdaptiveThinking")
@@ -523,19 +620,43 @@ private fun buildAnthropicRequestBodyFromMessages(
         put("messages", messages)
         put("max_tokens", maxTokens)
         put("stream", true)
-        context.systemPrompt?.let { system ->
+        if (isOAuthToken) {
             put(
                 "system",
                 buildJsonArray {
                     add(
                         buildJsonObject {
                             put("type", "text")
-                            put("text", system)
+                            put("text", "You are Claude Code, Anthropic's official CLI for Claude.")
                             cacheControl?.let { put("cache_control", it) }
                         },
                     )
+                    context.systemPrompt?.let { system ->
+                        add(
+                            buildJsonObject {
+                                put("type", "text")
+                                put("text", system)
+                                cacheControl?.let { put("cache_control", it) }
+                            },
+                        )
+                    }
                 },
             )
+        } else {
+            context.systemPrompt?.let { system ->
+                put(
+                    "system",
+                    buildJsonArray {
+                        add(
+                            buildJsonObject {
+                                put("type", "text")
+                                put("text", system)
+                                cacheControl?.let { put("cache_control", it) }
+                            },
+                        )
+                    },
+                )
+            }
         }
         val supportsTemperature =
             model.compat?.get("supportsTemperature")
@@ -570,7 +691,7 @@ private fun buildAnthropicRequestBodyFromMessages(
                             }
                         add(
                             buildJsonObject {
-                                put("name", tool.name)
+                                put("name", anthropicToolName(tool.name, isOAuthToken))
                                 put("description", tool.description)
                                 put("eager_input_streaming", true)
                                 if (strict == true) {

@@ -18,6 +18,7 @@ missing.
 Run the available comparisons from the Kotlin repository:
 
 ```bash
+./migration/oracle/compare-anthropic-oauth.sh
 ./migration/oracle/compare-cli-help.sh
 ./migration/oracle/compare-coding-message-projection.sh
 ./migration/oracle/compare-github-copilot.sh
@@ -31,6 +32,12 @@ Run the available comparisons from the Kotlin repository:
 Normalizers may remove absolute paths, timestamps, and version strings. They
 must not remove flags, event ordering, message content, error categories, or
 serialized fields.
+
+The Anthropic OAuth comparison covers browser/manual PKCE authorization,
+authorization-code and refresh-token JSON requests, refresh-token rotation,
+five-minute expiry skew, Claude Code Bearer authentication, content negotiation
+and identity headers, the mandatory system identity, and canonical tool-name
+mapping in requests and responses.
 
 The model catalog runtime comparison covers bundled-versus-remote timestamp
 selection, a newer persisted overlay restored without network access, and
