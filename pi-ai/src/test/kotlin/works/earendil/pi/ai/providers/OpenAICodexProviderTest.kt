@@ -295,7 +295,7 @@ class OpenAICodexProviderTest {
         }
 
     @Test
-    fun `rejects invalid tokens and explicit websocket transport`() =
+    fun `rejects invalid tokens`() =
         runTest {
             val model = codexModel()
             val provider =
@@ -310,17 +310,9 @@ class OpenAICodexProviderTest {
                     Context(messages = mutableListOf(UserMessage("hello"))),
                     StreamOptions(apiKey = "invalid", transport = Transport.SSE),
                 ).result()
-            val websocket =
-                provider.stream(
-                    model,
-                    Context(messages = mutableListOf(UserMessage("hello"))),
-                    StreamOptions(apiKey = codexToken("acc"), transport = Transport.WEBSOCKET),
-                ).result()
 
             assertEquals(StopReason.ERROR, invalid.stopReason)
             assertEquals("Failed to extract accountId from token", invalid.errorMessage)
-            assertEquals(StopReason.ERROR, websocket.stopReason)
-            assertTrue(websocket.errorMessage.orEmpty().contains("WebSocket transport has not been migrated"))
         }
 
     private fun codexFixtureServer(capturedBody: AtomicReference<JsonObject>): HttpServer {

@@ -124,400 +124,47 @@ class OpenAIResponsesProvider(
                     request.modelId,
                     request.promptCacheWhenDisabled,
                 )
-
-        val blocks = mutableListOf<works.earendil.pi.ai.ContentBlock>()
-        val slots = mutableMapOf<Int, Slot>()
-        val reasoningBlocksById = mutableMapOf<String, Int>()
-        var responseId: String? = null
-        var usage = Usage()
-        var stopReason = StopReason.STOP
-        var sawTerminal = false
-
-        fun snapshot(): AssistantMessage =
-            AssistantMessage(
-                content = copyBlocks(blocks),
-                api = model.api,
-                provider = model.provider,
-                model = model.id,
-                responseId = responseId,
-                usage = usage,
-                stopReason = stopReason,
+        val state =
+            OpenAIResponsesEventState(
+                model = model,
+                stream = stream,
+                grammarToolInputProperties = grammarToolInputProperties,
+                usageCostMultiplier = request.usageCostMultiplier,
             )
-
-        fun createSlot(
-            outputIndex: Int,
-            item: JsonObject,
-        ): Slot? {
-            slots[outputIndex]?.let { return it }
-            val contentIndex = blocks.size
-            val slot =
-                when (item.string("type")) {
-                    "reasoning" -> {
-                        blocks += ThinkingContent("")
-                        stream.push(ThinkingStart(contentIndex, snapshot()))
-                        Slot.Thinking(contentIndex)
-                    }
-
-                    "message" -> {
-                        blocks += TextContent("")
-                        stream.push(TextStart(contentIndex, snapshot()))
-                        Slot.Text(contentIndex)
-                    }
-
-                    "function_call" -> {
-                        val callId = item.string("call_id").orEmpty()
-                        val itemId = item.string("id").orEmpty()
-                        val tool =
-                            Slot.Tool(
-                                contentIndex,
-                                id = listOf(callId, itemId).filter(String::isNotEmpty).joinToString("|"),
-                                name = item.string("name").orEmpty(),
-                                arguments = item.string("arguments").orEmpty(),
-                            )
-                        blocks += ToolCall(tool.id, tool.name, tool.argumentsJson())
-                        stream.push(ToolCallStart(contentIndex, snapshot()))
-                        tool
-                    }
-
-                    "custom_tool_call" -> {
-                        val callId = item.string("call_id").orEmpty()
-                        val itemId = item.string("id").orEmpty()
-                        val name = item.string("name").orEmpty()
-                        val inputProperty = grammarToolInputProperties[name] ?: "input"
-                        val input = item.string("input").orEmpty()
-                        val tool =
-                            Slot.Tool(
-                                contentIndex,
-                                id = listOf(callId, itemId).filter(String::isNotEmpty).joinToString("|"),
-                                name = name,
-                                customInputProperty = inputProperty,
-                                customInput = input,
-                                grammarBuffer = GrammarToolInputJsonBuffer(),
-                            )
-                        blocks += ToolCall(tool.id, tool.name, tool.argumentsJson())
-                        stream.push(ToolCallStart(contentIndex, snapshot()))
-                        tool
-                    }
-
-                    else -> null
-                }
-            if (slot != null) {
-                slots[outputIndex] = slot
-            }
-            return slot
-        }
-
-        stream.push(AssistantStart(snapshot()))
         val bodyJson = providerJson.encodeToString(JsonObject.serializer(), body)
-        postSse(
-            client,
-            request.url,
-            request.encodeBody?.invoke(bodyJson)
-                ?: bodyJson.toByteArray(StandardCharsets.UTF_8),
-            if (request.headersAreFinal) {
-                request.headers
-            } else {
-                mergedHeaders(
-                    request.headers,
-                    model.headers,
-                    options.headers,
-                )
-            },
-            options.timeoutMs,
-            options.maxRetries,
-            options.maxRetryDelayMs,
-            shouldStop = { request.stopAfterTerminal && sawTerminal },
-        ) { sse ->
-            if (sse.data.isBlank() || sse.data == "[DONE]") {
-                return@postSse
-            }
-            val event = providerJson.parseToJsonElement(sse.data).jsonObject
-            val type = event.string("type") ?: sse.event
-            when (type) {
-                "response.created" -> responseId = event.obj("response")?.string("id")
-                "response.output_item.added" -> {
-                    val outputIndex = event.int("output_index") ?: return@postSse
-                    val item = event.obj("item") ?: return@postSse
-                    createSlot(outputIndex, item)
-                }
-
-                "response.reasoning_summary_text.delta",
-                "response.reasoning_text.delta",
-                -> {
-                    val outputIndex = event.int("output_index") ?: return@postSse
-                    val slot = slots[outputIndex] as? Slot.Thinking ?: return@postSse
-                    val delta = event.string("delta").orEmpty()
-                    val current = blocks[slot.contentIndex] as ThinkingContent
-                    blocks[slot.contentIndex] = current.copy(thinking = current.thinking + delta)
-                    stream.push(ThinkingDelta(slot.contentIndex, delta, snapshot()))
-                }
-
-                "response.reasoning_summary_part.done" -> {
-                    val outputIndex = event.int("output_index") ?: return@postSse
-                    val slot = slots[outputIndex] as? Slot.Thinking ?: return@postSse
-                    val current = blocks[slot.contentIndex] as ThinkingContent
-                    blocks[slot.contentIndex] = current.copy(thinking = current.thinking + "\n\n")
-                    stream.push(ThinkingDelta(slot.contentIndex, "\n\n", snapshot()))
-                }
-
-                "response.output_text.delta",
-                "response.refusal.delta",
-                -> {
-                    val outputIndex = event.int("output_index") ?: return@postSse
-                    val slot = slots[outputIndex] as? Slot.Text ?: return@postSse
-                    val delta = event.string("delta").orEmpty()
-                    val current = blocks[slot.contentIndex] as TextContent
-                    blocks[slot.contentIndex] = current.copy(text = current.text + delta)
-                    stream.push(TextDelta(slot.contentIndex, delta, snapshot()))
-                }
-
-                "response.function_call_arguments.delta" -> {
-                    val outputIndex = event.int("output_index") ?: return@postSse
-                    val slot = slots[outputIndex] as? Slot.Tool ?: return@postSse
-                    if (slot.customInputProperty != null) {
-                        return@postSse
-                    }
-                    val delta = event.string("delta").orEmpty()
-                    slot.arguments += delta
-                    blocks[slot.contentIndex] =
-                        ToolCall(slot.id, slot.name, slot.argumentsJson())
-                    stream.push(ToolCallDelta(slot.contentIndex, delta, snapshot()))
-                }
-
-                "response.function_call_arguments.done" -> {
-                    val outputIndex = event.int("output_index") ?: return@postSse
-                    val slot = slots[outputIndex] as? Slot.Tool ?: return@postSse
-                    if (slot.customInputProperty != null) {
-                        return@postSse
-                    }
-                    val previous = slot.arguments
-                    slot.arguments = event.string("arguments") ?: previous
-                    blocks[slot.contentIndex] =
-                        ToolCall(slot.id, slot.name, slot.argumentsJson())
-                    if (slot.arguments.startsWith(previous)) {
-                        val delta = slot.arguments.removePrefix(previous)
-                        if (delta.isNotEmpty()) {
-                            stream.push(ToolCallDelta(slot.contentIndex, delta, snapshot()))
-                        }
-                    }
-                }
-
-                "response.custom_tool_call_input.delta" -> {
-                    val outputIndex = event.int("output_index") ?: return@postSse
-                    val slot = slots[outputIndex] as? Slot.Tool ?: return@postSse
-                    val inputProperty = slot.customInputProperty ?: return@postSse
-                    val nextInput = slot.customInput + event.string("delta").orEmpty()
-                    val delta =
-                        appendGrammarToolInputJsonDelta(
-                            requireNotNull(slot.grammarBuffer),
-                            inputProperty,
-                            nextInput,
-                            close = false,
-                        )
-                    slot.customInput = nextInput
-                    blocks[slot.contentIndex] = ToolCall(slot.id, slot.name, slot.argumentsJson())
-                    delta?.let { stream.push(ToolCallDelta(slot.contentIndex, it, snapshot())) }
-                }
-
-                "response.custom_tool_call_input.done" -> {
-                    val outputIndex = event.int("output_index") ?: return@postSse
-                    val slot = slots[outputIndex] as? Slot.Tool ?: return@postSse
-                    val inputProperty = slot.customInputProperty ?: return@postSse
-                    val nextInput = event.string("input") ?: slot.customInput
-                    val delta =
-                        appendGrammarToolInputJsonDelta(
-                            requireNotNull(slot.grammarBuffer),
-                            inputProperty,
-                            nextInput,
-                            close = true,
-                        )
-                    slot.customInput = nextInput
-                    blocks[slot.contentIndex] = ToolCall(slot.id, slot.name, slot.argumentsJson())
-                    delta?.let { stream.push(ToolCallDelta(slot.contentIndex, it, snapshot())) }
-                }
-
-                "response.output_item.done" -> {
-                    val outputIndex = event.int("output_index") ?: return@postSse
-                    val item = event.obj("item") ?: return@postSse
-                    when (val slot = slots[outputIndex] ?: createSlot(outputIndex, item)) {
-                        is Slot.Text -> {
-                            val text =
-                                item.array("content")
-                                    ?.joinToString("") { content ->
-                                        content.jsonObject.string("text")
-                                            ?: content.jsonObject.string("refusal").orEmpty()
-                                    }.orEmpty()
-                            if (text.isNotEmpty()) {
-                                blocks[slot.contentIndex] =
-                                    TextContent(
-                                        text = text,
-                                        textSignature =
-                                            buildJsonObject {
-                                                put("v", 1)
-                                                put("id", item.string("id").orEmpty())
-                                                item.string("phase")?.let { put("phase", it) }
-                                            }.let {
-                                                providerJson.encodeToString(JsonObject.serializer(), it)
-                                            },
-                                    )
-                            }
-                            stream.push(
-                                TextEnd(
-                                    slot.contentIndex,
-                                    (blocks[slot.contentIndex] as TextContent).text,
-                                    snapshot(),
-                                ),
-                            )
-                        }
-
-                        is Slot.Thinking -> {
-                            val summary =
-                                item.array("summary")
-                                    ?.joinToString("\n\n") { it.jsonObject.string("text").orEmpty() }
-                                    .orEmpty()
-                            val content =
-                                item.array("content")
-                                    ?.joinToString("\n\n") { it.jsonObject.string("text").orEmpty() }
-                                    .orEmpty()
-                            val current = blocks[slot.contentIndex] as ThinkingContent
-                            blocks[slot.contentIndex] =
-                                current.copy(
-                                    thinking = summary.ifEmpty { content }.ifEmpty { current.thinking },
-                                    thinkingSignature =
-                                        providerJson.encodeToString(JsonObject.serializer(), item),
-                                )
-                            item.string("id")?.let { reasoningBlocksById[it] = slot.contentIndex }
-                            stream.push(
-                                ThinkingEnd(
-                                    slot.contentIndex,
-                                    (blocks[slot.contentIndex] as ThinkingContent).thinking,
-                                    snapshot(),
-                                ),
-                            )
-                        }
-
-                        is Slot.Tool -> {
-                            if (slot.customInputProperty != null) {
-                                val nextInput = item.string("input") ?: slot.customInput
-                                appendGrammarToolInputJsonDelta(
-                                    requireNotNull(slot.grammarBuffer),
-                                    requireNotNull(slot.customInputProperty),
-                                    nextInput,
-                                    close = true,
-                                )?.let { delta ->
-                                    slot.customInput = nextInput
-                                    blocks[slot.contentIndex] =
-                                        ToolCall(slot.id, slot.name, slot.argumentsJson())
-                                    stream.push(ToolCallDelta(slot.contentIndex, delta, snapshot()))
-                                }
-                            } else {
-                                slot.arguments = item.string("arguments") ?: slot.arguments
-                            }
-                            val call =
-                                ToolCall(
-                                    slot.id,
-                                    item.string("name") ?: slot.name,
-                                    slot.argumentsJson(),
-                                )
-                            blocks[slot.contentIndex] = call
-                            stream.push(ToolCallEnd(slot.contentIndex, call, snapshot()))
-                        }
-
-                        null -> Unit
-                    }
-                    slots.remove(outputIndex)
-                }
-
-                "response.completed",
-                "response.incomplete",
-                "response.done",
-                -> {
-                    sawTerminal = true
-                    val response = event.obj("response") ?: JsonObject(emptyMap())
-                    responseId = response.string("id") ?: responseId
-                    response.array("output")
-                        ?.mapNotNull { it as? JsonObject }
-                        ?.filter { it.string("type") == "reasoning" }
-                        ?.forEach { item ->
-                            val encryptedContent = item.string("encrypted_content") ?: return@forEach
-                            val contentIndex = reasoningBlocksById[item.string("id")] ?: return@forEach
-                            val current = blocks[contentIndex] as? ThinkingContent ?: return@forEach
-                            val signature =
-                                current.thinkingSignature
-                                    ?.let { runCatching { providerJson.parseToJsonElement(it).jsonObject }.getOrNull() }
-                                    ?: return@forEach
-                            if (signature.string("encrypted_content") == null) {
-                                blocks[contentIndex] =
-                                    current.copy(
-                                        thinkingSignature =
-                                            providerJson.encodeToString(
-                                                JsonObject.serializer(),
-                                                JsonObject(signature + ("encrypted_content" to kotlinx.serialization.json.JsonPrimitive(encryptedContent))),
-                                            ),
-                                    )
-                            }
-                        }
-                    val rawUsage = response.obj("usage")
-                    val details = rawUsage?.obj("input_tokens_details")
-                    val cached = details?.int("cached_tokens") ?: 0
-                    val cacheWrite = details?.int("cache_write_tokens") ?: 0
-                    val calculatedUsage =
-                        calculateUsageCost(
-                            model,
-                            ((rawUsage?.int("input_tokens") ?: 0) - cached - cacheWrite).coerceAtLeast(0),
-                            rawUsage?.int("output_tokens") ?: 0,
-                            cached,
-                            cacheWrite,
-                            rawUsage?.obj("output_tokens_details")?.int("reasoning_tokens"),
-                        )
-                    usage =
-                        calculatedUsage.copy(
-                            totalTokens = rawUsage?.int("total_tokens") ?: calculatedUsage.totalTokens,
-                        )
-                    request.usageCostMultiplier(response)
-                        .takeIf { it != 1.0 }
-                        ?.let { multiplier ->
-                            val cost = usage.cost
-                            usage =
-                                usage.copy(
-                                    cost =
-                                        cost.copy(
-                                            input = cost.input * multiplier,
-                                            output = cost.output * multiplier,
-                                            cacheRead = cost.cacheRead * multiplier,
-                                            cacheWrite = cost.cacheWrite * multiplier,
-                                            total = cost.total * multiplier,
-                                        ),
-                                )
-                        }
-                    stopReason =
-                        when (response.string("status")) {
-                            "incomplete" -> StopReason.LENGTH
-                            "failed", "cancelled" -> StopReason.ERROR
-                            else -> StopReason.STOP
-                        }
-                    if (blocks.any { it is ToolCall } && stopReason == StopReason.STOP) {
-                        stopReason = StopReason.TOOL_USE
-                    }
-                }
-
-                "response.failed" -> {
-                    sawTerminal = true
-                    val response = event.obj("response")
-                    val error = response?.obj("error")
-                    error("${error?.string("code") ?: "unknown"}: ${error?.string("message") ?: "no message"}")
-                }
-
-                "error" -> error("${event.string("code") ?: "unknown"}: ${event.string("message") ?: "Unknown error"}")
-            }
-        }
-        check(sawTerminal) { "OpenAI Responses stream ended before a terminal response event" }
-        val final = snapshot()
-        if (stopReason == StopReason.ERROR) {
-            stream.push(AssistantError(StopReason.ERROR, final.copy(errorMessage = "OpenAI response failed")))
+        if (request.eventStream != null) {
+            request.eventStream.invoke(body, state::handle)
         } else {
-            stream.push(AssistantDone(stopReason, final))
+            state.start()
+            postSse(
+                client,
+                request.url,
+                request.encodeBody?.invoke(bodyJson)
+                    ?: bodyJson.toByteArray(StandardCharsets.UTF_8),
+                if (request.headersAreFinal) {
+                    request.headers
+                } else {
+                    mergedHeaders(
+                        request.headers,
+                        model.headers,
+                        options.headers,
+                    )
+                },
+                options.timeoutMs,
+                options.maxRetries,
+                options.maxRetryDelayMs,
+                shouldStop = { request.stopAfterTerminal && state.sawTerminal },
+            ) { sse ->
+                if (sse.data.isBlank() || sse.data == "[DONE]") {
+                    return@postSse
+                }
+                state.handle(
+                    providerJson.parseToJsonElement(sse.data).jsonObject,
+                    sse.event,
+                )
+            }
         }
+        state.finish()
     }
 
     internal fun requestBody(
@@ -716,6 +363,419 @@ class OpenAIResponsesProvider(
             }
         }
 
+}
+
+internal class OpenAIResponsesEventState(
+    private val model: Model,
+    private val stream: AssistantMessageEventStream,
+    private val grammarToolInputProperties: Map<String, String>,
+    private val usageCostMultiplier: (JsonObject) -> Double = { 1.0 },
+) {
+    private val blocks = mutableListOf<works.earendil.pi.ai.ContentBlock>()
+    private val slots = mutableMapOf<Int, Slot>()
+    private val reasoningBlocksById = mutableMapOf<String, Int>()
+    private var responseId: String? = null
+    private var usage = Usage()
+    private var stopReason = StopReason.STOP
+    private var started = false
+
+    var sawTerminal: Boolean = false
+        private set
+
+    private fun snapshot(): AssistantMessage =
+        AssistantMessage(
+            content = copyBlocks(blocks),
+            api = model.api,
+            provider = model.provider,
+            model = model.id,
+            responseId = responseId,
+            usage = usage,
+            stopReason = stopReason,
+        )
+
+    private fun createSlot(
+        outputIndex: Int,
+        item: JsonObject,
+    ): Slot? {
+        slots[outputIndex]?.let { return it }
+        val contentIndex = blocks.size
+        val slot =
+            when (item.string("type")) {
+                "reasoning" -> {
+                    blocks += ThinkingContent("")
+                    stream.push(ThinkingStart(contentIndex, snapshot()))
+                    Slot.Thinking(contentIndex)
+                }
+
+                "message" -> {
+                    blocks += TextContent("")
+                    stream.push(TextStart(contentIndex, snapshot()))
+                    Slot.Text(contentIndex)
+                }
+
+                "function_call" -> {
+                    val callId = item.string("call_id").orEmpty()
+                    val itemId = item.string("id").orEmpty()
+                    val tool =
+                        Slot.Tool(
+                            contentIndex,
+                            id = listOf(callId, itemId).filter(String::isNotEmpty).joinToString("|"),
+                            name = item.string("name").orEmpty(),
+                            arguments = item.string("arguments").orEmpty(),
+                        )
+                    blocks += ToolCall(tool.id, tool.name, tool.argumentsJson())
+                    stream.push(ToolCallStart(contentIndex, snapshot()))
+                    tool
+                }
+
+                "custom_tool_call" -> {
+                    val callId = item.string("call_id").orEmpty()
+                    val itemId = item.string("id").orEmpty()
+                    val name = item.string("name").orEmpty()
+                    val inputProperty = grammarToolInputProperties[name] ?: "input"
+                    val input = item.string("input").orEmpty()
+                    val tool =
+                        Slot.Tool(
+                            contentIndex,
+                            id = listOf(callId, itemId).filter(String::isNotEmpty).joinToString("|"),
+                            name = name,
+                            customInputProperty = inputProperty,
+                            customInput = input,
+                            grammarBuffer = GrammarToolInputJsonBuffer(),
+                        )
+                    blocks += ToolCall(tool.id, tool.name, tool.argumentsJson())
+                    stream.push(ToolCallStart(contentIndex, snapshot()))
+                    tool
+                }
+
+                else -> null
+            }
+        if (slot != null) {
+            slots[outputIndex] = slot
+        }
+        return slot
+    }
+
+    fun start() {
+        if (!started) {
+            started = true
+            stream.push(AssistantStart(snapshot()))
+        }
+    }
+
+    fun handle(
+        event: JsonObject,
+        fallbackType: String? = null,
+    ) {
+        start()
+        when (event.string("type") ?: fallbackType) {
+            "response.created" -> responseId = event.obj("response")?.string("id")
+            "response.output_item.added" -> {
+                val outputIndex = event.int("output_index") ?: return
+                val item = event.obj("item") ?: return
+                createSlot(outputIndex, item)
+            }
+
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_text.delta",
+            -> {
+                val outputIndex = event.int("output_index") ?: return
+                val slot = slots[outputIndex] as? Slot.Thinking ?: return
+                val delta = event.string("delta").orEmpty()
+                val current = blocks[slot.contentIndex] as ThinkingContent
+                blocks[slot.contentIndex] = current.copy(thinking = current.thinking + delta)
+                stream.push(ThinkingDelta(slot.contentIndex, delta, snapshot()))
+            }
+
+            "response.reasoning_summary_part.done" -> {
+                val outputIndex = event.int("output_index") ?: return
+                val slot = slots[outputIndex] as? Slot.Thinking ?: return
+                val current = blocks[slot.contentIndex] as ThinkingContent
+                blocks[slot.contentIndex] = current.copy(thinking = current.thinking + "\n\n")
+                stream.push(ThinkingDelta(slot.contentIndex, "\n\n", snapshot()))
+            }
+
+            "response.output_text.delta",
+            "response.refusal.delta",
+            -> {
+                val outputIndex = event.int("output_index") ?: return
+                val slot = slots[outputIndex] as? Slot.Text ?: return
+                val delta = event.string("delta").orEmpty()
+                val current = blocks[slot.contentIndex] as TextContent
+                blocks[slot.contentIndex] = current.copy(text = current.text + delta)
+                stream.push(TextDelta(slot.contentIndex, delta, snapshot()))
+            }
+
+            "response.function_call_arguments.delta" -> {
+                val outputIndex = event.int("output_index") ?: return
+                val slot = slots[outputIndex] as? Slot.Tool ?: return
+                if (slot.customInputProperty != null) {
+                    return
+                }
+                val delta = event.string("delta").orEmpty()
+                slot.arguments += delta
+                blocks[slot.contentIndex] = ToolCall(slot.id, slot.name, slot.argumentsJson())
+                stream.push(ToolCallDelta(slot.contentIndex, delta, snapshot()))
+            }
+
+            "response.function_call_arguments.done" -> {
+                val outputIndex = event.int("output_index") ?: return
+                val slot = slots[outputIndex] as? Slot.Tool ?: return
+                if (slot.customInputProperty != null) {
+                    return
+                }
+                val previous = slot.arguments
+                slot.arguments = event.string("arguments") ?: previous
+                blocks[slot.contentIndex] = ToolCall(slot.id, slot.name, slot.argumentsJson())
+                if (slot.arguments.startsWith(previous)) {
+                    val delta = slot.arguments.removePrefix(previous)
+                    if (delta.isNotEmpty()) {
+                        stream.push(ToolCallDelta(slot.contentIndex, delta, snapshot()))
+                    }
+                }
+            }
+
+            "response.custom_tool_call_input.delta" -> {
+                val outputIndex = event.int("output_index") ?: return
+                val slot = slots[outputIndex] as? Slot.Tool ?: return
+                val inputProperty = slot.customInputProperty ?: return
+                val nextInput = slot.customInput + event.string("delta").orEmpty()
+                val delta =
+                    appendGrammarToolInputJsonDelta(
+                        requireNotNull(slot.grammarBuffer),
+                        inputProperty,
+                        nextInput,
+                        close = false,
+                    )
+                slot.customInput = nextInput
+                blocks[slot.contentIndex] = ToolCall(slot.id, slot.name, slot.argumentsJson())
+                delta?.let { stream.push(ToolCallDelta(slot.contentIndex, it, snapshot())) }
+            }
+
+            "response.custom_tool_call_input.done" -> {
+                val outputIndex = event.int("output_index") ?: return
+                val slot = slots[outputIndex] as? Slot.Tool ?: return
+                val inputProperty = slot.customInputProperty ?: return
+                val nextInput = event.string("input") ?: slot.customInput
+                val delta =
+                    appendGrammarToolInputJsonDelta(
+                        requireNotNull(slot.grammarBuffer),
+                        inputProperty,
+                        nextInput,
+                        close = true,
+                    )
+                slot.customInput = nextInput
+                blocks[slot.contentIndex] = ToolCall(slot.id, slot.name, slot.argumentsJson())
+                delta?.let { stream.push(ToolCallDelta(slot.contentIndex, it, snapshot())) }
+            }
+
+            "response.output_item.done" -> {
+                val outputIndex = event.int("output_index") ?: return
+                val item = event.obj("item") ?: return
+                when (val slot = slots[outputIndex] ?: createSlot(outputIndex, item)) {
+                    is Slot.Text -> {
+                        val text =
+                            item.array("content")
+                                ?.joinToString("") { content ->
+                                    content.jsonObject.string("text")
+                                        ?: content.jsonObject.string("refusal").orEmpty()
+                                }.orEmpty()
+                        if (text.isNotEmpty()) {
+                            blocks[slot.contentIndex] =
+                                TextContent(
+                                    text = text,
+                                    textSignature =
+                                        buildJsonObject {
+                                            put("v", 1)
+                                            put("id", item.string("id").orEmpty())
+                                            item.string("phase")?.let { put("phase", it) }
+                                        }.let {
+                                            providerJson.encodeToString(JsonObject.serializer(), it)
+                                        },
+                                )
+                        }
+                        stream.push(
+                            TextEnd(
+                                slot.contentIndex,
+                                (blocks[slot.contentIndex] as TextContent).text,
+                                snapshot(),
+                            ),
+                        )
+                    }
+
+                    is Slot.Thinking -> {
+                        val summary =
+                            item.array("summary")
+                                ?.joinToString("\n\n") { it.jsonObject.string("text").orEmpty() }
+                                .orEmpty()
+                        val content =
+                            item.array("content")
+                                ?.joinToString("\n\n") { it.jsonObject.string("text").orEmpty() }
+                                .orEmpty()
+                        val current = blocks[slot.contentIndex] as ThinkingContent
+                        blocks[slot.contentIndex] =
+                            current.copy(
+                                thinking = summary.ifEmpty { content }.ifEmpty { current.thinking },
+                                thinkingSignature =
+                                    providerJson.encodeToString(JsonObject.serializer(), item),
+                            )
+                        item.string("id")?.let { reasoningBlocksById[it] = slot.contentIndex }
+                        stream.push(
+                            ThinkingEnd(
+                                slot.contentIndex,
+                                (blocks[slot.contentIndex] as ThinkingContent).thinking,
+                                snapshot(),
+                            ),
+                        )
+                    }
+
+                    is Slot.Tool -> {
+                        if (slot.customInputProperty != null) {
+                            val nextInput = item.string("input") ?: slot.customInput
+                            appendGrammarToolInputJsonDelta(
+                                requireNotNull(slot.grammarBuffer),
+                                requireNotNull(slot.customInputProperty),
+                                nextInput,
+                                close = true,
+                            )?.let { delta ->
+                                slot.customInput = nextInput
+                                blocks[slot.contentIndex] =
+                                    ToolCall(slot.id, slot.name, slot.argumentsJson())
+                                stream.push(ToolCallDelta(slot.contentIndex, delta, snapshot()))
+                            }
+                        } else {
+                            slot.arguments = item.string("arguments") ?: slot.arguments
+                        }
+                        val call =
+                            ToolCall(
+                                slot.id,
+                                item.string("name") ?: slot.name,
+                                slot.argumentsJson(),
+                            )
+                        blocks[slot.contentIndex] = call
+                        stream.push(ToolCallEnd(slot.contentIndex, call, snapshot()))
+                    }
+
+                    null -> Unit
+                }
+                slots.remove(outputIndex)
+            }
+
+            "response.completed",
+            "response.incomplete",
+            "response.done",
+            -> {
+                sawTerminal = true
+                val response = event.obj("response") ?: JsonObject(emptyMap())
+                responseId = response.string("id") ?: responseId
+                response.array("output")
+                    ?.mapNotNull { it as? JsonObject }
+                    ?.filter { it.string("type") == "reasoning" }
+                    ?.forEach { item ->
+                        val encryptedContent = item.string("encrypted_content") ?: return@forEach
+                        val contentIndex = reasoningBlocksById[item.string("id")] ?: return@forEach
+                        val current = blocks[contentIndex] as? ThinkingContent ?: return@forEach
+                        val signature =
+                            current.thinkingSignature
+                                ?.let {
+                                    runCatching {
+                                        providerJson.parseToJsonElement(it).jsonObject
+                                    }.getOrNull()
+                                } ?: return@forEach
+                        if (signature.string("encrypted_content") == null) {
+                            blocks[contentIndex] =
+                                current.copy(
+                                    thinkingSignature =
+                                        providerJson.encodeToString(
+                                            JsonObject.serializer(),
+                                            JsonObject(
+                                                signature +
+                                                    (
+                                                        "encrypted_content" to
+                                                            kotlinx.serialization.json.JsonPrimitive(
+                                                                encryptedContent,
+                                                            )
+                                                    ),
+                                            ),
+                                        ),
+                                )
+                        }
+                    }
+                val rawUsage = response.obj("usage")
+                val details = rawUsage?.obj("input_tokens_details")
+                val cached = details?.int("cached_tokens") ?: 0
+                val cacheWrite = details?.int("cache_write_tokens") ?: 0
+                val calculatedUsage =
+                    calculateUsageCost(
+                        model,
+                        ((rawUsage?.int("input_tokens") ?: 0) - cached - cacheWrite)
+                            .coerceAtLeast(0),
+                        rawUsage?.int("output_tokens") ?: 0,
+                        cached,
+                        cacheWrite,
+                        rawUsage?.obj("output_tokens_details")?.int("reasoning_tokens"),
+                    )
+                usage =
+                    calculatedUsage.copy(
+                        totalTokens = rawUsage?.int("total_tokens") ?: calculatedUsage.totalTokens,
+                    )
+                usageCostMultiplier(response)
+                    .takeIf { it != 1.0 }
+                    ?.let { multiplier ->
+                        val cost = usage.cost
+                        usage =
+                            usage.copy(
+                                cost =
+                                    cost.copy(
+                                        input = cost.input * multiplier,
+                                        output = cost.output * multiplier,
+                                        cacheRead = cost.cacheRead * multiplier,
+                                        cacheWrite = cost.cacheWrite * multiplier,
+                                        total = cost.total * multiplier,
+                                    ),
+                            )
+                    }
+                stopReason =
+                    when (response.string("status")) {
+                        "incomplete" -> StopReason.LENGTH
+                        "failed", "cancelled" -> StopReason.ERROR
+                        else -> StopReason.STOP
+                    }
+                if (blocks.any { it is ToolCall } && stopReason == StopReason.STOP) {
+                    stopReason = StopReason.TOOL_USE
+                }
+            }
+
+            "response.failed" -> {
+                sawTerminal = true
+                val response = event.obj("response")
+                val error = response?.obj("error")
+                error("${error?.string("code") ?: "unknown"}: ${error?.string("message") ?: "no message"}")
+            }
+
+            "error" ->
+                error(
+                    "${event.string("code") ?: "unknown"}: " +
+                        (event.string("message") ?: "Unknown error"),
+                )
+        }
+    }
+
+    fun finish() {
+        check(sawTerminal) { "OpenAI Responses stream ended before a terminal response event" }
+        val final = snapshot()
+        if (stopReason == StopReason.ERROR) {
+            stream.push(
+                AssistantError(
+                    StopReason.ERROR,
+                    final.copy(errorMessage = "OpenAI response failed"),
+                ),
+            )
+        } else {
+            stream.push(AssistantDone(stopReason, final))
+        }
+    }
+
     private sealed interface Slot {
         val contentIndex: Int
 
@@ -754,6 +814,7 @@ internal data class OpenAIResponsesHttpRequest(
     val stopAfterTerminal: Boolean = false,
     val encodeBody: ((String) -> ByteArray)? = null,
     val usageCostMultiplier: (JsonObject) -> Double = { 1.0 },
+    val eventStream: (suspend (JsonObject, (JsonObject) -> Unit) -> Unit)? = null,
 )
 
 internal fun buildOpenAIResponsesRequestBody(

@@ -72,7 +72,7 @@ features outside that slice remain migration work.
 | Gradle multi-module build | Functional slice | Six JVM 21 modules; `clean test installDist` passes with warnings as errors |
 | Core AI messages and stream protocol | Functional slice | Message, event-stream, UUIDv7, tool validation, and faux-provider tests |
 | Model catalog | Functional slice | Hydrated schema-v3 manifest and 37 provider files verify by SHA-256; 1,109 model records load, with 1,081 models exposed across 36 providers whose current executable protocol paths can be selected |
-| Provider HTTP implementations | Partial | Google Generative AI, Google Vertex AI, Anthropic Messages, OpenAI Chat Completions, OpenAI Responses, Azure OpenAI Responses, Mistral Conversations, Amazon Bedrock ConverseStream, OpenAI Codex Responses SSE, Cloudflare Workers AI, and Cloudflare AI Gateway request/stream fixture tests, independent base/reasoning payload and public stream-transcript parity, provider-auth/request parity, and multi-protocol catalog dispatch |
+| Provider HTTP implementations | Partial | Google Generative AI, Google Vertex AI, Anthropic Messages, OpenAI Chat Completions, OpenAI Responses, Azure OpenAI Responses, Mistral Conversations, Amazon Bedrock ConverseStream, OpenAI Codex Responses SSE/WebSocket, Cloudflare Workers AI, and Cloudflare AI Gateway request/stream fixture tests, independent base/reasoning payload and public stream-transcript parity, provider-auth/request parity, and multi-protocol catalog dispatch |
 | Agent loop | Functional slice | Streaming, tool calls, parallel execution, steering, follow-up, abort, and session tests using the faux provider; coding-message projection has independent parity for bash/custom/branch/compaction messages |
 | CLI argument contract | Partial | Parser tests and byte-for-byte `--help` oracle against the pinned TypeScript CLI; provider-prefixed and slash-containing model IDs plus thinking suffixes are covered |
 | Prompt and context resources | Partial | Global and ancestor `AGENTS.md`/`CLAUDE.md` discovery, `SYSTEM.md`/`APPEND_SYSTEM.md`, CLI overrides, trust gating, and `--no-context-files` tests |
@@ -90,7 +90,7 @@ features outside that slice remain migration work.
 Verified on July 24, 2026 against source commit
 `24bace27cf308c89707cf8005b4795d873e23f17`:
 
-- `./gradlew clean test installDist`: passed, 162 tests, 0 failures, 0 errors,
+- `./gradlew clean test installDist`: passed, 172 tests, 0 failures, 0 errors,
   and 0 skipped.
 - `./migration/oracle/compare-cli-help.sh`: passed with byte-for-byte CLI help
   parity.
@@ -110,7 +110,8 @@ Verified on July 24, 2026 against source commit
   the same provider protocols, including Vertex request-path/API-key parity,
   Bedrock SDK client/final-request parity, plus independent Cloudflare
   auth-resolution and final-request parity across Workers AI and all three AI
-  Gateway delegates, and Codex zstd/auth/session/final-request parity.
+  Gateway delegates, Codex zstd/auth/session/final-request parity, and Codex
+  WebSocket handshake/`response.create` frame parity.
 - Azure OpenAI fixture tests cover API-key authentication, API-version query
   handling, endpoint normalization, resource/base/model precedence, deployment
   maps, and reasoning-signature replay through the shared Responses state
@@ -143,8 +144,11 @@ Verified on July 24, 2026 against source commit
   affinity, zstd-compressed SSE requests, `/codex/responses` URL normalization,
   reasoning and verbosity controls, strict and grammar tools, service-tier
   pricing, `response.done` termination, and `streamSimple` thinking-level
-  clamping. Explicit WebSocket transport remains disabled until its connection
-  reuse and continuation contract is ported.
+  clamping. WebSocket fixtures cover Java `HttpClient` transport, one-shot and
+  session-cached connections, five-minute idle expiry, the 55-minute connection
+  age limit, cached `previous_response_id` input deltas, connection-limit and
+  missing-continuation retries, pre-output SSE fallback, post-output failure,
+  sticky session fallback, and exact handshake/frame parity.
 - `./migration/oracle/compare-coding-message-projection.sh`: passed with
   normalized JSON parity for ordinary messages, custom messages, branch and
   compaction summaries, bash formatting, and `excludeFromContext` filtering.
@@ -199,8 +203,8 @@ Verified on July 24, 2026 against source commit
 
 ## Remaining major gaps
 
-- Complete OpenAI Codex WebSocket transport and interactive OAuth login, then
-  implement GitHub Copilot authentication/OAuth.
+- Complete OpenAI Codex interactive OAuth login, then implement GitHub Copilot
+  authentication/OAuth.
 - Extend request/stream parity as the remaining provider protocols land, and add
   opt-in live provider smoke tests.
 - Port extensions, skills, prompt templates, themes, package management,

@@ -20,6 +20,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import works.earendil.pi.ai.AssistantDone
 import works.earendil.pi.ai.AssistantError
@@ -83,6 +84,12 @@ fun main(args: Array<String>) =
                 val codex = captureEvents("openai-codex-responses", fixtureDir)
                 put("openai-codex-responses", codex.events)
                 put("openai-codex-responses-request", codex.request)
+                val codexWebSocket = captureCodexWebSocketEvents(fixtureDir)
+                put("openai-codex-responses-websocket", codexWebSocket.events)
+                put(
+                    "openai-codex-responses-websocket-request",
+                    codexWebSocket.request,
+                )
                 put("cloudflare-auth-resolution", captureCloudflareAuthResolution())
                 put(
                     "cloudflare-workers-ai-request",
@@ -198,6 +205,131 @@ private data class BedrockStreamCapture(
     val events: JsonArray,
     val request: JsonObject,
 )
+
+private suspend fun captureCodexWebSocketEvents(
+    fixtureDir: Path,
+): StreamCapture {
+    val fixtureEvents =
+        Files
+            .readAllLines(fixtureDir.resolve("openai-responses.sse"))
+            .filter { it.startsWith("data:") }
+            .map { line ->
+                providerJson
+                    .parseToJsonElement(line.removePrefix("data:").trim())
+                    .jsonObject
+            }
+    lateinit var capturedUrl: String
+    lateinit var capturedHeaders: Map<String, String>
+    lateinit var capturedBody: JsonObject
+    val connection =
+        object : OpenAICodexWebSocketConnection {
+            private val events = ArrayDeque<JsonObject>()
+            private var open = true
+
+            override val isOpen: Boolean
+                get() = open
+
+            override suspend fun send(text: String) {
+                capturedBody = providerJson.parseToJsonElement(text).jsonObject
+                events.addAll(fixtureEvents)
+            }
+
+            override suspend fun receive(timeoutMs: Long?): JsonObject =
+                events.removeFirstOrNull() ?: error("Codex WebSocket fixture exhausted")
+
+            override fun close(
+                code: Int,
+                reason: String,
+            ) {
+                open = false
+            }
+        }
+    val connector =
+        OpenAICodexWebSocketConnector { url, headers, _ ->
+            capturedUrl = url
+            capturedHeaders = headers
+            connection
+        }
+    val model =
+        fixtureModel(
+            "openai-codex-responses",
+            "https://fixture.invalid/backend-api",
+        )
+    val provider =
+        OpenAICodexProvider(
+            id = "openai-codex",
+            name = "OpenAI Codex",
+            models = listOf(model),
+            userAgent = { "pi (fixture)" },
+            websocketConnector = connector,
+        )
+    try {
+        val stream =
+            provider.stream(
+                model,
+                Context(
+                    messages = mutableListOf(UserMessage("hi", timestamp = 1)),
+                    tools =
+                        listOf(
+                            ToolDefinition(
+                                name = "echo",
+                                description = "Echo",
+                                parameters = buildJsonObject { put("type", "object") },
+                            ),
+                        ),
+                ),
+                StreamOptions(
+                    apiKey = codexToken("fixture-account"),
+                    cacheRetention = works.earendil.pi.ai.CacheRetention.SHORT,
+                    maxRetries = 0,
+                    transport = Transport.WEBSOCKET,
+                    sessionId = "session-websocket",
+                ),
+            )
+        val events = stream.events.toList().map(::canonicalEvent)
+        stream.result()
+        return StreamCapture(
+            events = JsonArray(events),
+            request =
+                buildJsonObject {
+                    put("url", capturedUrl)
+                    putNullableString(
+                        "authorization",
+                        capturedHeaders.caseInsensitive("authorization"),
+                    )
+                    putNullableString(
+                        "chatgptAccountId",
+                        capturedHeaders.caseInsensitive("chatgpt-account-id"),
+                    )
+                    putNullableString(
+                        "originator",
+                        capturedHeaders.caseInsensitive("originator"),
+                    )
+                    putNullableString(
+                        "openAIBeta",
+                        capturedHeaders.caseInsensitive("openai-beta"),
+                    )
+                    putNullableString(
+                        "contentEncoding",
+                        capturedHeaders.caseInsensitive("content-encoding"),
+                    )
+                    putNullableString(
+                        "sessionId",
+                        capturedHeaders.caseInsensitive("session-id"),
+                    )
+                    putNullableString(
+                        "xClientRequestId",
+                        capturedHeaders.caseInsensitive("x-client-request-id"),
+                    )
+                    put("body", capturedBody)
+                },
+            xGoogApiKey = null,
+            requestBody = capturedBody,
+        )
+    } finally {
+        provider.closeWebSocketSessions("session-websocket")
+    }
+}
 
 private fun captureCloudflareAuthResolution(): JsonObject {
     val ambient =
@@ -874,3 +1006,6 @@ private fun codexToken(accountId: String): String {
             .encodeToString(payload.toByteArray(StandardCharsets.UTF_8))
     return "aaa.$encoded.bbb"
 }
+
+private fun Map<String, String>.caseInsensitive(name: String): String? =
+    entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value

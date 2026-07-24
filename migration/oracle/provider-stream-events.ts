@@ -76,6 +76,9 @@ for (const api of apiNames) {
 		};
 	}
 }
+const codexWebSocket = await captureCodexWebSocketEvents();
+output["openai-codex-responses-websocket"] = codexWebSocket.events;
+output["openai-codex-responses-websocket-request"] = codexWebSocket.request;
 output["cloudflare-auth-resolution"] = await captureCloudflareAuthResolution();
 for (const fixture of [
 	{ name: "cloudflare-workers-ai", provider: "workers" as const, api: "openai-completions" as const },
@@ -221,6 +224,117 @@ async function captureEvents(
 		await stream.result();
 		return events;
 	});
+}
+
+async function captureCodexWebSocketEvents(): Promise<{
+	events: unknown[];
+	request: Record<string, unknown>;
+}> {
+	const runtime = globalThis as typeof globalThis & { WebSocket?: unknown };
+	const previousWebSocket = runtime.WebSocket;
+	const fixtureEvents = readFileSync(join(fixtureDir, "openai-responses.sse"), "utf8")
+		.split(/\r?\n/)
+		.filter((line) => line.startsWith("data:"))
+		.map((line) => JSON.parse(line.slice("data:".length).trim()) as Record<string, unknown>);
+	let capturedUrl = "";
+	let capturedHeaders: Record<string, string> = {};
+	let capturedBody: Record<string, unknown> | undefined;
+
+	class MockWebSocket {
+		static readonly OPEN = 1;
+		static readonly CLOSED = 3;
+		readyState = MockWebSocket.OPEN;
+		private readonly listeners = new Map<string, Set<(event: unknown) => void>>();
+
+		constructor(url: string, options?: string | string[] | { headers?: Record<string, string> }) {
+			capturedUrl = url;
+			if (options && typeof options === "object" && !Array.isArray(options)) {
+				capturedHeaders = options.headers ?? {};
+			}
+			queueMicrotask(() => this.dispatch("open", {}));
+		}
+
+		addEventListener(type: string, listener: (event: unknown) => void): void {
+			let listeners = this.listeners.get(type);
+			if (!listeners) {
+				listeners = new Set();
+				this.listeners.set(type, listeners);
+			}
+			listeners.add(listener);
+		}
+
+		removeEventListener(type: string, listener: (event: unknown) => void): void {
+			this.listeners.get(type)?.delete(listener);
+		}
+
+		send(data: string): void {
+			capturedBody = JSON.parse(data) as Record<string, unknown>;
+			queueMicrotask(() => {
+				for (const event of fixtureEvents) {
+					this.dispatch("message", { data: JSON.stringify(event) });
+				}
+			});
+		}
+
+		close(): void {
+			this.readyState = MockWebSocket.CLOSED;
+		}
+
+		private dispatch(type: string, event: unknown): void {
+			for (const listener of this.listeners.get(type) ?? []) {
+				listener(event);
+			}
+		}
+	}
+
+	runtime.WebSocket = MockWebSocket;
+	const module = modules.get("openai-codex-responses")!;
+	try {
+		const stream = module.stream(
+			fixtureModel("openai-codex-responses", "https://fixture.invalid/backend-api"),
+			fixtureContext(),
+			{
+				apiKey: codexToken("fixture-account"),
+				cacheRetention: "short",
+				sessionId: "session-websocket",
+				transport: "websocket",
+				maxRetries: 0,
+			},
+		);
+		const events: unknown[] = [];
+		for await (const event of stream) {
+			events.push(canonicalEvent(event as Record<string, unknown>));
+		}
+		await stream.result();
+		const header = (name: string): string | null => {
+			const match = Object.entries(capturedHeaders).find(([key]) => key.toLowerCase() === name.toLowerCase());
+			return match?.[1] ?? null;
+		};
+		if (!capturedBody) {
+			throw new Error("Codex WebSocket mock did not receive a request");
+		}
+		return {
+			events,
+			request: {
+				url: capturedUrl,
+				authorization: header("authorization"),
+				chatgptAccountId: header("chatgpt-account-id"),
+				originator: header("originator"),
+				openAIBeta: header("openai-beta"),
+				contentEncoding: header("content-encoding"),
+				sessionId: header("session-id"),
+				xClientRequestId: header("x-client-request-id"),
+				body: capturedBody,
+			},
+		};
+	} finally {
+		module.closeOpenAICodexWebSocketSessions("session-websocket");
+		if (previousWebSocket === undefined) {
+			delete runtime.WebSocket;
+		} else {
+			runtime.WebSocket = previousWebSocket;
+		}
+	}
 }
 
 interface FixtureRequest {
