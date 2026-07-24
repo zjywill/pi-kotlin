@@ -1026,14 +1026,12 @@ private fun resolveBedrockCacheRetention(
     options: StreamOptions,
     environment: (String) -> String?,
 ): CacheRetention =
-    if (
-        options.cacheRetention == CacheRetention.SHORT &&
-        (options.env["PI_CACHE_RETENTION"] ?: environment("PI_CACHE_RETENTION")) == "long"
-    ) {
-        CacheRetention.LONG
-    } else {
-        options.cacheRetention
-    }
+    options.cacheRetention
+        ?: if ((options.env["PI_CACHE_RETENTION"] ?: environment("PI_CACHE_RETENTION")) == "long") {
+            CacheRetention.LONG
+        } else {
+            CacheRetention.SHORT
+        }
 
 private fun supportsBedrockPromptCaching(
     model: Model,

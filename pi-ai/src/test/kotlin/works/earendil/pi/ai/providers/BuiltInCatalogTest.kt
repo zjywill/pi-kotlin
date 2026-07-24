@@ -40,11 +40,11 @@ class BuiltInCatalogTest {
     }
 
     @Test
-    fun `providers expose every executable protocol including GitHub Copilot`() {
+    fun `providers expose every executable protocol including dynamic Radius`() {
         val providers = builtInProviders()
         val ids = providers.map { it.id }.toSet()
 
-        assertEquals(37, providers.size)
+        assertEquals(38, providers.size)
         assertEquals(1_109, providers.sumOf { it.getModels().size })
         assertTrue(
             ids.containsAll(
@@ -62,6 +62,7 @@ class BuiltInCatalogTest {
                     "openai",
                     "openai-codex",
                     "openrouter",
+                    "radius",
                     "xai",
                 ),
             ),
@@ -106,6 +107,10 @@ class BuiltInCatalogTest {
         assertEquals("Sign in with Kimi Code", assertNotNull(kimiCoding.oauth).loginLabel)
         val xai = providers.single { it.id == "xai" }
         assertEquals("Sign in with SuperGrok or X Premium", assertNotNull(xai.oauth).loginLabel)
+        val radius = providers.single { it.id == "radius" }
+        assertEquals("Radius", radius.name)
+        assertEquals(emptyList(), radius.getModels())
+        assertNotNull(radius.oauth)
         assertTrue(providers.flatMap(works.earendil.pi.ai.Provider::getModels).all { it.api in SUPPORTED_TEST_APIS })
     }
 
@@ -132,6 +137,7 @@ class BuiltInCatalogTest {
             assertNotNull(models.getProvider("openai-codex")?.oauth)
             assertNotNull(models.getProvider("openrouter")?.oauth)
             assertNotNull(models.getProvider("kimi-coding")?.oauth)
+            assertNotNull(models.getProvider("radius")?.oauth)
             assertNotNull(models.getProvider("xai")?.oauth)
         }
 
@@ -206,6 +212,7 @@ class BuiltInCatalogTest {
                 "openai-completions",
                 "openai-codex-responses",
                 "openai-responses",
+                "pi-messages",
             )
     }
 }

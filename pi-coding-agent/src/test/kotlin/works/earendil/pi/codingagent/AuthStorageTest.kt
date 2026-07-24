@@ -6,6 +6,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import works.earendil.pi.ai.ApiKeyCredential
 import works.earendil.pi.ai.OAuthCredential
 import kotlin.io.path.readText
@@ -28,9 +30,14 @@ class AuthStorageTest {
                         access = "access-token",
                         refresh = "refresh-token",
                         expires = 123_456,
+                        scope = "openid profile",
                         accountId = "account-id",
                         enterpriseUrl = "company.ghe.com",
                         availableModelIds = listOf("gpt-4.1", "claude-sonnet-4.6"),
+                        gatewayConfig =
+                            buildJsonObject {
+                                put("baseUrl", "https://radius.example/v1")
+                            },
                     )
 
                 store.modify("openai-codex") { credential }
@@ -40,6 +47,8 @@ class AuthStorageTest {
                 assertTrue(path.readText().contains("\"accountId\": \"account-id\""))
                 assertTrue(path.readText().contains("\"enterpriseUrl\": \"company.ghe.com\""))
                 assertTrue(path.readText().contains("\"availableModelIds\""))
+                assertTrue(path.readText().contains("\"scope\": \"openid profile\""))
+                assertTrue(path.readText().contains("\"gatewayConfig\""))
                 runCatching {
                     assertEquals(
                         setOf(

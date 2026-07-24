@@ -7,6 +7,7 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonClassDiscriminator
+import kotlinx.serialization.json.JsonObject
 
 @OptIn(ExperimentalSerializationApi::class)
 @Serializable
@@ -26,9 +27,11 @@ data class OAuthCredential(
     val access: String,
     val refresh: String,
     val expires: Long,
+    val scope: String? = null,
     val accountId: String? = null,
     val enterpriseUrl: String? = null,
     val availableModelIds: List<String>? = null,
+    val gatewayConfig: JsonObject? = null,
 ) : Credential
 
 @Serializable

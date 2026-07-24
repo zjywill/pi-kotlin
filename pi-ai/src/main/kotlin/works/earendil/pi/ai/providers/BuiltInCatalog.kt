@@ -35,109 +35,110 @@ fun builtInCatalog(): BuiltInCatalogSnapshot = CatalogHolder.snapshot
 fun builtInModels(provider: String): List<Model> = builtInCatalog().modelsByProvider[provider].orEmpty()
 
 fun builtInProviders(): List<Provider> =
-    builtInCatalog()
-        .modelsByProvider
-        .mapNotNull { (providerId, models) ->
-            val supportedModels = models.filter { it.api in SUPPORTED_APIS }
-            supportedModels
-                .takeIf(List<Model>::isNotEmpty)
-                ?.let {
-                    val name = PROVIDER_NAMES[providerId] ?: providerId.toDisplayName()
-                    when (providerId) {
-                        "cloudflare-ai-gateway" ->
-                            CloudflareProvider(
-                                id = providerId,
-                                name = name,
-                                kind = CloudflareProviderKind.AI_GATEWAY,
-                                models = it,
-                            )
+    (
+        builtInCatalog()
+            .modelsByProvider
+            .mapNotNull { (providerId, models) ->
+                val supportedModels = models.filter { it.api in SUPPORTED_APIS }
+                supportedModels
+                    .takeIf(List<Model>::isNotEmpty)
+                    ?.let {
+                        val name = PROVIDER_NAMES[providerId] ?: providerId.toDisplayName()
+                        when (providerId) {
+                            "cloudflare-ai-gateway" ->
+                                CloudflareProvider(
+                                    id = providerId,
+                                    name = name,
+                                    kind = CloudflareProviderKind.AI_GATEWAY,
+                                    models = it,
+                                )
 
-                        "cloudflare-workers-ai" ->
-                            CloudflareProvider(
-                                id = providerId,
-                                name = name,
-                                kind = CloudflareProviderKind.WORKERS_AI,
-                                models = it,
-                            )
+                            "cloudflare-workers-ai" ->
+                                CloudflareProvider(
+                                    id = providerId,
+                                    name = name,
+                                    kind = CloudflareProviderKind.WORKERS_AI,
+                                    models = it,
+                                )
 
-                        "amazon-bedrock" ->
-                            BedrockProvider(
-                                id = providerId,
-                                name = name,
-                                models = it,
-                            )
+                            "amazon-bedrock" ->
+                                BedrockProvider(
+                                    id = providerId,
+                                    name = name,
+                                    models = it,
+                                )
 
-                        "openai-codex" ->
-                            OpenAICodexProvider(
-                                id = providerId,
-                                name = name,
-                                models = it,
-                            )
+                            "openai-codex" ->
+                                OpenAICodexProvider(
+                                    id = providerId,
+                                    name = name,
+                                    models = it,
+                                )
 
-                        "github-copilot" ->
-                            GitHubCopilotProvider(
-                                id = providerId,
-                                name = name,
-                                models = it,
-                            )
+                            "github-copilot" ->
+                                GitHubCopilotProvider(
+                                    id = providerId,
+                                    name = name,
+                                    models = it,
+                                )
 
-                        "anthropic" ->
-                            AnthropicProvider(
-                                id = providerId,
-                                name = name,
-                                baseUrl = it.first().baseUrl,
-                                models = it,
-                                apiKeyEnvNames =
-                                    PROVIDER_API_KEY_ENV_NAMES[providerId]
-                                        ?: defaultApiKeyNames(providerId),
-                                oauth = AnthropicOAuth(),
-                            )
+                            "anthropic" ->
+                                AnthropicProvider(
+                                    id = providerId,
+                                    name = name,
+                                    baseUrl = it.first().baseUrl,
+                                    models = it,
+                                    apiKeyEnvNames =
+                                        PROVIDER_API_KEY_ENV_NAMES[providerId]
+                                            ?: defaultApiKeyNames(providerId),
+                                    oauth = AnthropicOAuth(),
+                                )
 
-                        "openrouter" ->
-                            CatalogProvider(
-                                id = providerId,
-                                name = name,
-                                models = it,
-                                apiKeyEnvNames =
-                                    PROVIDER_API_KEY_ENV_NAMES[providerId]
-                                        ?: defaultApiKeyNames(providerId),
-                                oauth = OpenRouterOAuth(),
-                            )
+                            "openrouter" ->
+                                CatalogProvider(
+                                    id = providerId,
+                                    name = name,
+                                    models = it,
+                                    apiKeyEnvNames =
+                                        PROVIDER_API_KEY_ENV_NAMES[providerId]
+                                            ?: defaultApiKeyNames(providerId),
+                                    oauth = OpenRouterOAuth(),
+                                )
 
-                        "kimi-coding" ->
-                            CatalogProvider(
-                                id = providerId,
-                                name = name,
-                                models = it,
-                                apiKeyEnvNames =
-                                    PROVIDER_API_KEY_ENV_NAMES[providerId]
-                                        ?: defaultApiKeyNames(providerId),
-                                oauth = KimiCodingOAuth(),
-                            )
+                            "kimi-coding" ->
+                                CatalogProvider(
+                                    id = providerId,
+                                    name = name,
+                                    models = it,
+                                    apiKeyEnvNames =
+                                        PROVIDER_API_KEY_ENV_NAMES[providerId]
+                                            ?: defaultApiKeyNames(providerId),
+                                    oauth = KimiCodingOAuth(),
+                                )
 
-                        "xai" ->
-                            CatalogProvider(
-                                id = providerId,
-                                name = name,
-                                models = it,
-                                apiKeyEnvNames =
-                                    PROVIDER_API_KEY_ENV_NAMES[providerId]
-                                        ?: defaultApiKeyNames(providerId),
-                                oauth = XaiOAuth(),
-                            )
+                            "xai" ->
+                                CatalogProvider(
+                                    id = providerId,
+                                    name = name,
+                                    models = it,
+                                    apiKeyEnvNames =
+                                        PROVIDER_API_KEY_ENV_NAMES[providerId]
+                                            ?: defaultApiKeyNames(providerId),
+                                    oauth = XaiOAuth(),
+                                )
 
-                        else ->
-                            CatalogProvider(
-                                id = providerId,
-                                name = name,
-                                models = it,
-                                apiKeyEnvNames =
-                                    PROVIDER_API_KEY_ENV_NAMES[providerId] ?: defaultApiKeyNames(providerId),
-                            )
+                            else ->
+                                CatalogProvider(
+                                    id = providerId,
+                                    name = name,
+                                    models = it,
+                                    apiKeyEnvNames =
+                                        PROVIDER_API_KEY_ENV_NAMES[providerId] ?: defaultApiKeyNames(providerId),
+                                )
+                        }
                     }
-                }
-        }
-        .sortedBy(Provider::id)
+            } + radiusProvider()
+    ).sortedBy(Provider::id)
 
 fun builtInModelsCollection(): Models = Models(builtInProviders())
 
@@ -159,12 +160,16 @@ suspend fun builtInModelsCollection(options: BuiltInModelsOptions): Models {
             ?.toEpochMilli()
     val providers =
         builtInProviders().map { provider ->
-            provider.withRemoteCatalog(
-                catalogBaseUrl = options.catalogBaseUrl,
-                localGeneratedAt = generatedAt,
-                userAgent = options.userAgent,
-                client = options.httpClient,
-            )
+            if (provider.id == "radius") {
+                provider
+            } else {
+                provider.withRemoteCatalog(
+                    catalogBaseUrl = options.catalogBaseUrl,
+                    localGeneratedAt = generatedAt,
+                    userAgent = options.userAgent,
+                    client = options.httpClient,
+                )
+            }
         }
     return Models(providers, options.modelsStore, options.credentialStore).also { models ->
         models.refresh(
@@ -247,6 +252,15 @@ private class CatalogProvider(
 
                     "mistral-conversations" ->
                         MistralProvider(
+                            id = id,
+                            name = name,
+                            baseUrl = apiModels.first().baseUrl,
+                            models = apiModels,
+                            apiKeyEnvNames = apiKeyEnvNames,
+                        )
+
+                    "pi-messages" ->
+                        PiMessagesProvider(
                             id = id,
                             name = name,
                             baseUrl = apiModels.first().baseUrl,
@@ -345,6 +359,7 @@ private val SUPPORTED_APIS =
         "openai-completions",
         "openai-codex-responses",
         "openai-responses",
+        "pi-messages",
     )
 private val PROVIDER_NAMES =
     mapOf(
@@ -376,6 +391,7 @@ private val PROVIDER_NAMES =
         "openrouter" to "OpenRouter",
         "qwen-token-plan" to "Qwen Token Plan",
         "qwen-token-plan-cn" to "Qwen Token Plan CN",
+        "radius" to "Radius",
         "together" to "Together AI",
         "vercel-ai-gateway" to "Vercel AI Gateway",
         "xai" to "xAI",

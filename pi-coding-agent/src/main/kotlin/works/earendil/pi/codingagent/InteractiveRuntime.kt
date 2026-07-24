@@ -29,6 +29,7 @@ import works.earendil.pi.ai.AuthInteraction
 import works.earendil.pi.ai.AuthPrompt
 import works.earendil.pi.ai.AuthType
 import works.earendil.pi.ai.Models
+import works.earendil.pi.ai.ModelsRefreshOptions
 import works.earendil.pi.ai.Provider
 import works.earendil.pi.ai.UserMessage
 import works.earendil.pi.codingagent.session.SessionManager
@@ -336,6 +337,7 @@ class InteractiveRuntime(
                 AuthType.OAUTH,
                 ConsoleAuthInteraction(console),
             )
+            models.refresh(ModelsRefreshOptions(allowNetwork = true))
             console.println("Logged in to ${provider.name}.")
         } catch (error: Exception) {
             console.error(error.message ?: "Login failed")

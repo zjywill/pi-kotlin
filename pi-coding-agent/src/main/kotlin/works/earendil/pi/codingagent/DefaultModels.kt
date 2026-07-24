@@ -24,6 +24,7 @@ private val DEFAULT_MODEL_IDS =
         "openrouter" to "moonshotai/kimi-k2.6",
         "qwen-token-plan" to "qwen3.7-max",
         "qwen-token-plan-cn" to "qwen3.7-max",
+        "radius" to "auto",
         "together" to "moonshotai/Kimi-K2.6",
         "vercel-ai-gateway" to "zai/glm-5.1",
         "xai" to "grok-4.5",

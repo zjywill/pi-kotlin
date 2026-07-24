@@ -28,6 +28,7 @@ Run the available comparisons from the Kotlin repository:
 ./migration/oracle/compare-openrouter-oauth.sh
 ./migration/oracle/compare-provider-payloads.sh
 ./migration/oracle/compare-provider-stream-events.sh
+./migration/oracle/compare-radius.sh
 ./migration/oracle/compare-session-jsonl.sh
 ./migration/oracle/compare-xai-oauth.sh
 ```
@@ -57,6 +58,14 @@ wait-before-first-poll, pending and server-directed slow-down timing,
 exponential refresh retries, unauthorized refresh short-circuiting,
 Bearer-header derivation, and a real local Anthropic Messages SSE request using
 the stored OAuth credential.
+
+The Radius comparison covers dynamic `/v1/oauth` discovery, browser PKCE and
+device authorization, pending and server-directed slow-down timing, refresh
+credentials with a 60-second expiry skew, authenticated `/v1/config` model
+loading, cached and legacy credential catalog restoration, and a real local
+`pi-messages` SSE request using the stored OAuth credential. It compares the
+final request, public text/tool/terminal events, usage, response ID, and Radius
+rewrite diagnostics.
 
 The model catalog runtime comparison covers bundled-versus-remote timestamp
 selection, a newer persisted overlay restored without network access, and

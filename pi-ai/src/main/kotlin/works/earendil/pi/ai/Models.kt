@@ -60,6 +60,7 @@ interface Provider {
 }
 
 data class RefreshModelsContext(
+    val credential: Credential? = null,
     val store: ProviderModelsStore,
     val allowNetwork: Boolean,
     val force: Boolean = false,
@@ -245,8 +246,16 @@ class Models(
                                     }
                                 }
                             try {
+                                val stored = readStoredCredential(provider.id)
+                                val credential =
+                                    resolveRefreshCredential(
+                                        provider = provider,
+                                        stored = stored,
+                                        allowNetwork = options.allowNetwork,
+                                    )
                                 provider.refreshModels(
                                     RefreshModelsContext(
+                                        credential = credential,
                                         store = store,
                                         allowNetwork = options.allowNetwork,
                                         force = options.force,
@@ -259,6 +268,7 @@ class Models(
                                 runCatching {
                                     provider.refreshModels(
                                         RefreshModelsContext(
+                                            credential = runCatching { readStoredCredential(provider.id) }.getOrNull(),
                                             store = store,
                                             allowNetwork = false,
                                         ),
@@ -281,6 +291,25 @@ class Models(
             errors = errors.toSortedMap(),
         )
     }
+
+    private suspend fun resolveRefreshCredential(
+        provider: Provider,
+        stored: Credential?,
+        allowNetwork: Boolean,
+    ): Credential? =
+        when (stored) {
+            is ApiKeyCredential -> stored
+            is OAuthCredential -> {
+                val oauth = provider.oauth
+                when {
+                    !allowNetwork || currentTimeMillis() < stored.expires -> stored
+                    oauth == null -> null
+                    else -> refreshStoredOAuth(provider, oauth)
+                }
+            }
+
+            null -> null
+        }
 
     suspend fun stream(
         model: Model,
@@ -403,36 +432,7 @@ class Models(
     ): AuthResult? {
         var credential = stored
         if (currentTimeMillis() >= credential.expires) {
-            val post =
-                try {
-                    credentials.modify(provider.id) { current ->
-                        if (current !is OAuthCredential || currentTimeMillis() < current.expires) {
-                            null
-                        } else {
-                            try {
-                                oauth.refresh(current)
-                            } catch (error: CancellationException) {
-                                throw error
-                            } catch (error: Throwable) {
-                                throw ModelsAuthException(
-                                    code = "oauth",
-                                    message = "OAuth refresh failed for ${provider.id}",
-                                    cause = error,
-                                )
-                            }
-                        }
-                    }
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (error: ModelsAuthException) {
-                    throw error
-                } catch (error: Throwable) {
-                    throw ModelsAuthException(
-                        code = "auth",
-                        message = "Credential store modify failed for ${provider.id}",
-                        cause = error,
-                    )
-                }
+            val post = refreshStoredOAuth(provider, oauth)
             if (post !is OAuthCredential) {
                 return null
             }
@@ -453,6 +453,40 @@ class Models(
             )
         }
     }
+
+    private suspend fun refreshStoredOAuth(
+        provider: Provider,
+        oauth: OAuthAuth,
+    ): Credential? =
+        try {
+            credentials.modify(provider.id) { current ->
+                if (current !is OAuthCredential || currentTimeMillis() < current.expires) {
+                    null
+                } else {
+                    try {
+                        oauth.refresh(current)
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Throwable) {
+                        throw ModelsAuthException(
+                            code = "oauth",
+                            message = "OAuth refresh failed for ${provider.id}",
+                            cause = error,
+                        )
+                    }
+                }
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: ModelsAuthException) {
+            throw error
+        } catch (error: Throwable) {
+            throw ModelsAuthException(
+                code = "auth",
+                message = "Credential store modify failed for ${provider.id}",
+                cause = error,
+            )
+        }
 
     private fun errorStream(
         model: Model,

@@ -222,16 +222,18 @@ enum class StopReason {
 
 @Serializable
 data class AssistantMessageDiagnostic(
-    val source: String,
-    val message: String,
+    val type: String,
+    val timestamp: Long,
     val error: DiagnosticErrorInfo? = null,
+    val details: JsonObject? = null,
 )
 
 @Serializable
 data class DiagnosticErrorInfo(
     val name: String? = null,
     val message: String,
-    val code: String? = null,
+    val stack: String? = null,
+    val code: JsonElement? = null,
 )
 
 @OptIn(ExperimentalSerializationApi::class)
@@ -399,7 +401,7 @@ data class StreamOptions(
     val maxTokens: Int? = null,
     val apiKey: String? = null,
     val transport: Transport = Transport.AUTO,
-    val cacheRetention: CacheRetention = CacheRetention.SHORT,
+    val cacheRetention: CacheRetention? = null,
     val sessionId: String? = null,
     val headers: Map<String, String?> = emptyMap(),
     val timeoutMs: Long? = null,
@@ -428,6 +430,9 @@ data class StreamOptions(
     val thinkingDisplay: BedrockThinkingDisplay? = null,
     val requestMetadata: Map<String, String>? = null,
     val bearerToken: String? = null,
+    val debug: Boolean = false,
+    val onPayload: (suspend (JsonElement, Model) -> JsonElement?)? = null,
+    val onResponse: (suspend (ProviderResponse, Model) -> Unit)? = null,
 )
 
 data class SimpleStreamOptions(

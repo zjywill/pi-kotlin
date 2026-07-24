@@ -43,7 +43,7 @@ internal data class OAuthHttpRequest(
     val url: String,
     val method: String = "POST",
     val headers: Map<String, String> = emptyMap(),
-    val body: String,
+    val body: String = "",
     val timeoutMs: Long? = null,
 )
 
@@ -64,7 +64,14 @@ internal class JavaOAuthHttpTransport(
             val httpRequest =
                 HttpRequest
                     .newBuilder(URI.create(request.url))
-                    .method(request.method, HttpRequest.BodyPublishers.ofString(request.body))
+                    .method(
+                        request.method,
+                        if (request.method == "GET" && request.body.isEmpty()) {
+                            HttpRequest.BodyPublishers.noBody()
+                        } else {
+                            HttpRequest.BodyPublishers.ofString(request.body)
+                        },
+                    )
                     .apply {
                         request.headers.forEach(::header)
                         request.timeoutMs?.let { timeout(Duration.ofMillis(it)) }

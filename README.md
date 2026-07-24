@@ -32,7 +32,7 @@ packaging and process internals.
 
 Start the installed `pi` application in interactive mode, then authenticate
 with Anthropic Claude Pro/Max, OpenRouter, OpenAI Codex, GitHub Copilot, Kimi
-Code, or xAI:
+Code, Radius, or xAI:
 
 ```text
 /login anthropic
@@ -40,6 +40,7 @@ Code, or xAI:
 /login openai-codex
 /login github-copilot
 /login kimi-coding
+/login radius
 /login xai
 ```
 
@@ -47,8 +48,9 @@ Credentials are stored in `~/.pi/agent/auth.json` by default, or under
 `PI_CODING_AGENT_DIR` when configured. Writes are atomic and the credential
 file is owner-readable and owner-writable on POSIX filesystems. Use
 `/logout anthropic`, `/logout openrouter`, `/logout openai-codex`,
-`/logout github-copilot`, `/logout kimi-coding`, or `/logout xai` to remove
-only that stored credential; environment variables are unchanged.
+`/logout github-copilot`, `/logout kimi-coding`, `/logout radius`, or
+`/logout xai` to remove only that stored credential; environment variables are
+unchanged.
 
 See [migration/MIGRATION.md](migration/MIGRATION.md) for migration rules,
 acceptance gates, current status, and the executable completeness audit.

@@ -40,6 +40,7 @@ through the commit recorded in `sync-state.tsv`.
 - `./migration/oracle/compare-openrouter-oauth.sh`
 - `./migration/oracle/compare-provider-payloads.sh`
 - `./migration/oracle/compare-provider-stream-events.sh`
+- `./migration/oracle/compare-radius.sh`
 - `./migration/oracle/compare-session-jsonl.sh`
 - `./migration/oracle/compare-xai-oauth.sh`
 - Installed CLI and server smoke tests for process-level changes
