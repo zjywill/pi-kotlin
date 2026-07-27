@@ -57,16 +57,22 @@ internal fun loadSkills(
         defaultResources
             .filter(ResolvedResource::enabled)
             .forEach { resource ->
+                val sourceInfoFactory = { filePath: Path, fallbackBaseDir: Path ->
+                    resource.sourceInfo.copy(
+                        path = filePath.toAbsolutePath().normalize(),
+                        baseDir = resource.sourceInfo.baseDir ?: fallbackBaseDir,
+                    )
+                }
                 add(
-                    loadSkillFile(
-                        resource.path,
-                        sourceInfoFactory = { filePath, fallbackBaseDir ->
-                            resource.sourceInfo.copy(
-                                path = filePath.toAbsolutePath().normalize(),
-                                baseDir = resource.sourceInfo.baseDir ?: fallbackBaseDir,
-                            )
-                        },
-                    ),
+                    if (Files.isDirectory(resource.path)) {
+                        loadSkillsFromDirectory(
+                            directory = resource.path,
+                            sourceInfoFactory = sourceInfoFactory,
+                            includeRootMarkdown = true,
+                        )
+                    } else {
+                        loadSkillFile(resource.path, sourceInfoFactory)
+                    },
                 )
             }
     } else {

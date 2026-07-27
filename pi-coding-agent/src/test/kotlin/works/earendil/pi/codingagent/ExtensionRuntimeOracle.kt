@@ -9,7 +9,11 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
+import works.earendil.pi.ai.Model
+import works.earendil.pi.ai.Models
 
 fun main(args: Array<String>) {
     val fixture =
@@ -75,6 +79,15 @@ fun main(args: Array<String>) {
                     },
                 context = context,
             )
+        val projectTrust =
+            host.emit(
+                event =
+                    buildJsonObject {
+                        put("type", "project_trust")
+                        put("cwd", fixture.parent.toString())
+                    },
+                context = context,
+            )
         val before =
             host.emit(
                 event =
@@ -131,6 +144,40 @@ fun main(args: Array<String>) {
                     },
                 context = context,
             )
+        val discoveredResources =
+            discoverExtensionResources(
+                host = host,
+                cwd = fixture.parent,
+                reason = "startup",
+                context = context,
+                onActions = {},
+            )
+        val composedResources =
+            loadPromptResources(
+                cwd = fixture.parent,
+                agentDir = agentDir,
+                projectTrusted = true,
+                resolvedPackageResources = discoveredResources,
+            )
+        val models = Models()
+        val providerRegistry = ExtensionProviderRegistry(models)
+        providerRegistry.apply(registration.providers) { error(it) }
+        val registeredModel = checkNotNull(models.getModel("fixture-provider", "fixture-model"))
+        val providerConfig = registration.providers.single().getValue("config").jsonObject
+        val originalModel = providerConfig.getValue("models").jsonArray.single().jsonObject
+        val invalidConfig =
+            buildJsonObject {
+                put(
+                    "models",
+                    JsonArray(
+                        listOf(
+                            JsonObject(originalModel - "api" - "baseUrl"),
+                        ),
+                    ),
+                )
+            }
+        val invalidProviderRejected =
+            runCatching { providerRegistry.register("fixture-provider", invalidConfig) }.isFailure
 
         val output =
             buildJsonObject {
@@ -238,10 +285,34 @@ fun main(args: Array<String>) {
                 )
                 put("commandActions", normalizedActions(command.actions))
                 put("sessionActions", normalizedActions(session.actions))
+                put("projectTrust", requireNotNull(projectTrust.result))
                 put("beforeAgentStart", requireNotNull(before.result))
                 put("toolCall", requireNotNull(toolCall.result))
                 put("toolResult", requireNotNull(toolResult.result))
                 put("resourcesDiscover", requireNotNull(resources.result))
+                put(
+                    "composedResources",
+                    buildJsonObject {
+                        put("skills", JsonArray(composedResources.skills.map { JsonPrimitive(it.name) }))
+                        put("prompts", JsonArray(composedResources.promptTemplates.map { JsonPrimitive(it.name) }))
+                        put(
+                            "themes",
+                            JsonArray(
+                                composedResources.packageResources.themes.map {
+                                    JsonPrimitive(it.path.fileName.toString())
+                                },
+                            ),
+                        )
+                    },
+                )
+                put(
+                    "providerRuntime",
+                    buildJsonObject {
+                        put("model", providerModelJson(registeredModel))
+                        put("invalidProviderRejected", invalidProviderRejected)
+                        put("preservedModelId", registeredModel.id)
+                    },
+                )
             }
         println(protocolJson.encodeToString(JsonObject.serializer(), output))
     } finally {
@@ -249,6 +320,34 @@ fun main(args: Array<String>) {
         root.toFile().deleteRecursively()
     }
 }
+
+private fun providerModelJson(model: Model): JsonObject =
+    buildJsonObject {
+        put("id", model.id)
+        put("name", model.name)
+        put("api", model.api)
+        put("provider", model.provider)
+        put("baseUrl", model.baseUrl)
+        put("reasoning", model.reasoning)
+        put(
+            "input",
+            protocolJson.encodeToJsonElement(
+                kotlinx.serialization.builtins.ListSerializer(works.earendil.pi.ai.ModelInput.serializer()),
+                model.input,
+            ),
+        )
+        put(
+            "cost",
+            buildJsonObject {
+                put("input", model.cost.input.toInt())
+                put("output", model.cost.output.toInt())
+                put("cacheRead", model.cost.cacheRead.toInt())
+                put("cacheWrite", model.cost.cacheWrite.toInt())
+            },
+        )
+        put("contextWindow", model.contextWindow)
+        put("maxTokens", model.maxTokens)
+    }
 
 private fun oracleExtensionContext(cwd: Path): JsonObject =
     buildJsonObject {

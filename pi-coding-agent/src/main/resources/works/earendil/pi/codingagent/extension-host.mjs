@@ -200,6 +200,15 @@ const aliases = new Map([
 	["@mariozechner/pi-agent-core", "virtual:empty"],
 ]);
 
+function transformTypeScript(source) {
+	try {
+		return stripTypeScriptTypes(source, { mode: "transform", sourceMap: false });
+	} catch (error) {
+		if (error?.code !== "ERR_INVALID_ARG_VALUE") throw error;
+		return stripTypeScriptTypes(source, { mode: "strip", sourceMap: false });
+	}
+}
+
 registerHooks({
 	resolve(specifier, context, nextResolve) {
 		const alias = aliases.get(specifier);
@@ -215,7 +224,7 @@ registerHooks({
 			const typescript = readFileSync(fileURLToPath(url), "utf8");
 			return {
 				format: "module",
-				source: stripTypeScriptTypes(typescript, { mode: "transform", sourceMap: false }),
+				source: transformTypeScript(typescript),
 				shortCircuit: true,
 			};
 		}
@@ -241,6 +250,7 @@ let tools = new Map();
 let commands = new Map();
 let flags = new Map();
 let providers = new Map();
+let attemptedPaths = new Set();
 let registrationVersion = 0;
 let currentActions = null;
 
@@ -639,11 +649,20 @@ async function loadExtensions(request) {
 	commands = new Map();
 	flags = new Map();
 	providers = new Map();
+	attemptedPaths = new Set();
 	registrationVersion = 0;
 	state.flags = new Map(Object.entries(request.flags ?? {}));
 	updateState(request.context);
+	const errors = await loadExtensionPaths(request.paths ?? []);
+	return { registrations: registrationMetadata(), errors };
+}
+
+async function loadExtensionPaths(paths) {
 	const errors = [];
-	for (const [index, extensionPath] of (request.paths ?? []).entries()) {
+	for (const extensionPath of paths) {
+		if (attemptedPaths.has(extensionPath)) continue;
+		attemptedPaths.add(extensionPath);
+		const index = extensions.length;
 		try {
 			const url = pathToFileURL(extensionPath);
 			url.searchParams.set("pi-kotlin-load", `${Date.now()}-${index}`);
@@ -659,6 +678,14 @@ async function loadExtensions(request) {
 			errors.push(errorInfo(extensionPath, "load", error));
 		}
 	}
+	return errors;
+}
+
+async function loadMoreExtensions(request) {
+	updateState(request.context);
+	const errors = await loadExtensionPaths(request.paths ?? []);
+	const extensionsByPath = new Map(extensions.map(extension => [extension.path, extension]));
+	extensions = (request.paths ?? []).map(path => extensionsByPath.get(path)).filter(Boolean);
 	return { registrations: registrationMetadata(), errors };
 }
 
@@ -690,6 +717,7 @@ async function emitEvent(event, context) {
 	const errors = [];
 	const collectedMessages = [];
 	let result;
+	let resources;
 	let currentEvent = jsonValue(event);
 
 	for (const { extension, handler } of handlersFor(event.type)) {
@@ -724,8 +752,14 @@ async function emitEvent(event, context) {
 				};
 			} else if (event.type === "resources_discover") {
 				result ??= { skillPaths: [], promptPaths: [], themePaths: [] };
+				resources ??= { skillPaths: [], promptPaths: [], themePaths: [] };
 				for (const name of ["skillPaths", "promptPaths", "themePaths"]) {
-					if (Array.isArray(value?.[name])) result[name].push(...value[name]);
+					if (Array.isArray(value?.[name])) {
+						result[name].push(...value[name]);
+						resources[name].push(
+							...value[name].map(path => ({ path, extensionPath: extension.path })),
+						);
+					}
 				}
 			} else if (event.type === "project_trust") {
 				if (value?.trusted && value.trusted !== "undecided") {
@@ -743,7 +777,7 @@ async function emitEvent(event, context) {
 			errors.push(errorInfo(extension.path, event.type, error));
 		}
 	}
-	return { result: result ?? null, errors };
+	return { result: result ?? null, errors, ...(resources ? { resources } : {}) };
 }
 
 async function invokeTool(request) {
@@ -783,6 +817,9 @@ async function handle(request) {
 		switch (request.type) {
 			case "load":
 				response = await loadExtensions(request);
+				break;
+			case "load_more":
+				response = await loadMoreExtensions(request);
 				break;
 			case "emit":
 				response = await emitEvent(request.event, request.context);

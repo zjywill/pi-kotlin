@@ -1,0 +1,364 @@
+package works.earendil.pi.codingagent
+
+import java.nio.charset.StandardCharsets
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import works.earendil.pi.ai.AssistantMessageEventStream
+import works.earendil.pi.ai.AuthResult
+import works.earendil.pi.ai.Context
+import works.earendil.pi.ai.Credential
+import works.earendil.pi.ai.Model
+import works.earendil.pi.ai.ModelAuth
+import works.earendil.pi.ai.ModelCost
+import works.earendil.pi.ai.ModelCostTier
+import works.earendil.pi.ai.ModelInput
+import works.earendil.pi.ai.ModelThinkingLevel
+import works.earendil.pi.ai.Models
+import works.earendil.pi.ai.Provider
+import works.earendil.pi.ai.SimpleStreamOptions
+import works.earendil.pi.ai.StreamOptions
+import works.earendil.pi.ai.providers.protocolProvider
+
+internal class ExtensionProviderRegistry(
+    private val models: Models,
+    private val environment: Map<String, String> = System.getenv(),
+) {
+    private val baseProviders = mutableMapOf<String, Provider?>()
+    private val configurations = mutableMapOf<String, JsonObject>()
+
+    fun apply(
+        registrations: List<JsonObject>,
+        onError: (String) -> Unit,
+    ) {
+        registrations.forEach { registration ->
+            val name = registration.stringValue("name")
+            val config = registration["config"] as? JsonObject
+            if (name == null || config == null) {
+                onError("Extension provider registration is missing a name or serializable config")
+                return@forEach
+            }
+            runCatching { register(name, config) }
+                .onFailure { error -> onError(error.message ?: "Failed to register provider $name") }
+        }
+    }
+
+    fun register(
+        name: String,
+        incoming: JsonObject,
+    ) {
+        require(name.isNotBlank()) { "Provider id must not be empty" }
+        if (name !in baseProviders) {
+            baseProviders[name] = models.getProvider(name)
+        }
+        validateIncomingProvider(name, baseProviders[name], incoming)
+        val effective = JsonObject(configurations[name].orEmpty() + incoming)
+        val provider = composeProvider(name, baseProviders[name], effective, environment)
+        configurations[name] = effective
+        models.setProvider(provider)
+    }
+
+    fun unregister(name: String) {
+        if (name !in baseProviders) {
+            return
+        }
+        configurations.remove(name)
+        val base = baseProviders.remove(name)
+        if (base == null) {
+            models.deleteProvider(name)
+        } else {
+            models.setProvider(base)
+        }
+    }
+
+    fun reset() {
+        configurations.keys.toList().forEach(::unregister)
+        baseProviders.clear()
+    }
+}
+
+private fun validateIncomingProvider(
+    providerId: String,
+    base: Provider?,
+    config: JsonObject,
+) {
+    val configuredModels = config["models"] ?: return
+    if (configuredModels is JsonNull) {
+        return
+    }
+    configuredModels.jsonArray.forEach { element ->
+        parseExtensionModel(
+            providerId = providerId,
+            value = element.jsonObject,
+            configApi = config.stringValue("api"),
+            configBaseUrl = config.stringValue("baseUrl"),
+            defaults = base?.getModels().orEmpty(),
+        )
+    }
+}
+
+private fun composeProvider(
+    providerId: String,
+    base: Provider?,
+    config: JsonObject,
+    configuredEnvironment: Map<String, String>,
+): Provider {
+    val configuredName = config.stringValue("name")
+    val configuredBaseUrl = config.stringValue("baseUrl")
+    val configuredApi = config.stringValue("api")
+    val apiKey = config.stringValue("apiKey")
+    val configuredHeaderValues = config.stringMap("headers")
+    val authHeader = config["authHeader"]?.jsonPrimitive?.booleanOrNull ?: false
+    if (config["oauth"] != null && config["oauth"] !is JsonNull && base?.oauth == null) {
+        error("Provider $providerId: function-based OAuth registrations are not serializable")
+    }
+    if (authHeader && apiKey == null && base == null) {
+        error("Provider $providerId: authHeader requires apiKey or an existing provider")
+    }
+
+    val baseModels = base?.getModels().orEmpty()
+    val configuredModels = config["models"]
+    val providerModels =
+        if (configuredModels == null || configuredModels is JsonNull) {
+            require(baseModels.isNotEmpty()) {
+                "Provider $providerId: models are required for a new provider"
+            }
+            baseModels.map { model ->
+                if (configuredBaseUrl == null) model else model.copy(baseUrl = configuredBaseUrl)
+            }
+        } else {
+            configuredModels.jsonArray.map { element ->
+                parseExtensionModel(
+                    providerId = providerId,
+                    value = element.jsonObject,
+                    configApi = configuredApi,
+                    configBaseUrl = configuredBaseUrl,
+                    defaults = baseModels,
+                )
+            }
+        }
+    require(providerModels.isNotEmpty()) { "Provider $providerId: models must not be empty" }
+
+    val name = configuredName ?: base?.name ?: providerId
+    val baseApis = baseModels.mapTo(mutableSetOf(), Model::api)
+    val fallbackModels = providerModels.filterNot { it.api in baseApis }
+    val fallback =
+        fallbackModels
+            .takeIf(List<Model>::isNotEmpty)
+            ?.let {
+                protocolProvider(
+                    id = providerId,
+                    name = name,
+                    models = it,
+                    apiKeyEnvNames = emptyList(),
+                )
+            }
+    return object : Provider {
+        override val id: String = providerId
+        override val name: String = name
+        override val baseUrl: String? = configuredBaseUrl ?: base?.baseUrl ?: providerModels.firstOrNull()?.baseUrl
+        override val headers: Map<String, String?> = base?.headers.orEmpty()
+        override val oauth = base?.oauth
+
+        override fun resolveAmbientAuth(environment: (String) -> String?): AuthResult? {
+            val inherited = base?.resolveAmbientAuth(environment)
+            val resolvedKey =
+                apiKey?.let { value ->
+                    resolveConfigValue(value) { key -> environment(key) ?: configuredEnvironment[key] }
+                }
+                    ?: inherited?.auth?.apiKey
+            val resolvedHeaders =
+                inherited?.auth?.headers.orEmpty() +
+                    configuredHeaderValues.mapValues { (_, value) ->
+                        resolveConfigValue(value) { key -> environment(key) ?: configuredEnvironment[key] }
+                    }
+            if (apiKey == null && configuredHeaderValues.isEmpty() && !authHeader) {
+                return inherited
+            }
+            val authHeaders =
+                if (authHeader) {
+                    require(!resolvedKey.isNullOrBlank()) {
+                        "Provider $providerId: authHeader requires a resolved API key"
+                    }
+                    resolvedHeaders + ("Authorization" to "Bearer $resolvedKey")
+                } else {
+                    resolvedHeaders
+                }
+            return AuthResult(
+                auth =
+                    ModelAuth(
+                        apiKey = resolvedKey,
+                        headers = authHeaders,
+                        baseUrl = inherited?.auth?.baseUrl,
+                    ),
+                source = "Extension provider",
+                env = inherited?.env.orEmpty(),
+            )
+        }
+
+        override fun getModels(): List<Model> = providerModels
+
+        override fun filterModels(
+            models: List<Model>,
+            credential: Credential?,
+        ): List<Model> = base?.filterModels(models, credential) ?: models
+
+        override suspend fun stream(
+            model: Model,
+            context: Context,
+            options: StreamOptions,
+        ): AssistantMessageEventStream =
+            delegate(model).stream(model, context, options)
+
+        override suspend fun streamSimple(
+            model: Model,
+            context: Context,
+            options: SimpleStreamOptions,
+        ): AssistantMessageEventStream =
+            delegate(model).streamSimple(model, context, options)
+
+        private fun delegate(model: Model): Provider =
+            when {
+                base != null && model.api in baseApis -> base
+                fallback != null -> fallback
+                else -> error("Provider $providerId does not support API ${model.api}")
+            }
+    }
+}
+
+private fun parseExtensionModel(
+    providerId: String,
+    value: JsonObject,
+    configApi: String?,
+    configBaseUrl: String?,
+    defaults: List<Model>,
+): Model {
+    val id = value.stringValue("id")?.takeIf(String::isNotBlank)
+        ?: error("Provider $providerId: model id is required")
+    val fallback = defaults.firstOrNull { it.id == id } ?: defaults.firstOrNull()
+    val api = value.stringValue("api") ?: configApi ?: fallback?.api
+        ?: error("Provider $providerId, model $id: no api specified")
+    val baseUrl = value.stringValue("baseUrl") ?: configBaseUrl ?: fallback?.baseUrl
+        ?: error("Provider $providerId, model $id: no baseUrl specified")
+    val contextWindow = value.intValue("contextWindow") ?: fallback?.contextWindow ?: 128_000
+    val maxTokens = value.intValue("maxTokens") ?: fallback?.maxTokens ?: 16_384
+    return Model(
+        id = id,
+        name = value.stringValue("name") ?: fallback?.name ?: id,
+        api = api,
+        provider = providerId,
+        baseUrl = baseUrl,
+        reasoning = value["reasoning"]?.jsonPrimitive?.booleanOrNull ?: fallback?.reasoning ?: false,
+        thinkingLevelMap = value.thinkingLevelMap() ?: fallback?.thinkingLevelMap.orEmpty(),
+        input = value.modelInputs() ?: fallback?.input ?: listOf(ModelInput.TEXT),
+        cost = value.modelCost() ?: fallback?.cost ?: ModelCost(0.0, 0.0, 0.0, 0.0),
+        contextWindow = contextWindow,
+        maxTokens = maxTokens,
+        headers = fallback?.headers.orEmpty() + value.stringMap("headers"),
+        compat = value["compat"] as? JsonObject ?: fallback?.compat,
+    )
+}
+
+private fun JsonObject.intValue(name: String): Int? = this[name]?.jsonPrimitive?.intOrNull
+
+private fun JsonObject.modelInputs(): List<ModelInput>? =
+    (this["input"] as? JsonArray)?.map { input ->
+        when (input.jsonPrimitive.content) {
+            "text" -> ModelInput.TEXT
+            "image" -> ModelInput.IMAGE
+            else -> error("Unsupported model input: ${input.jsonPrimitive.content}")
+        }
+    }
+
+private fun JsonObject.thinkingLevelMap(): Map<ModelThinkingLevel, String?>? =
+    (this["thinkingLevelMap"] as? JsonObject)?.mapKeys { (name, _) ->
+        when (name) {
+            "off" -> ModelThinkingLevel.OFF
+            "minimal" -> ModelThinkingLevel.MINIMAL
+            "low" -> ModelThinkingLevel.LOW
+            "medium" -> ModelThinkingLevel.MEDIUM
+            "high" -> ModelThinkingLevel.HIGH
+            "xhigh" -> ModelThinkingLevel.XHIGH
+            "max" -> ModelThinkingLevel.MAX
+            else -> error("Unsupported thinking level: $name")
+        }
+    }?.mapValues { (_, value) ->
+        if (value is JsonNull) null else value.jsonPrimitive.content
+    }
+
+private fun JsonObject.modelCost(): ModelCost? {
+    val cost = this["cost"] as? JsonObject ?: return null
+    return ModelCost(
+        input = cost.doubleValue("input"),
+        output = cost.doubleValue("output"),
+        cacheRead = cost.doubleValue("cacheRead"),
+        cacheWrite = cost.doubleValue("cacheWrite"),
+        tiers =
+            (cost["tiers"] as? JsonArray).orEmpty().map { tier ->
+                val item = tier.jsonObject
+                ModelCostTier(
+                    input = item.doubleValue("input"),
+                    output = item.doubleValue("output"),
+                    cacheRead = item.doubleValue("cacheRead"),
+                    cacheWrite = item.doubleValue("cacheWrite"),
+                    inputTokensAbove =
+                        item["inputTokensAbove"]?.jsonPrimitive?.intOrNull
+                            ?: error("Model cost tier inputTokensAbove is required"),
+                )
+            },
+    )
+}
+
+private fun JsonObject.doubleValue(name: String): Double =
+    this[name]?.jsonPrimitive?.doubleOrNull ?: 0.0
+
+private fun JsonObject.stringMap(name: String): Map<String, String> =
+    (this[name] as? JsonObject)
+        ?.mapValues { (_, value) -> value.jsonPrimitive.content }
+        .orEmpty()
+
+private fun resolveConfigValue(
+    value: String,
+    environment: Map<String, String>,
+): String = resolveConfigValue(value, environment::get)
+
+private fun resolveConfigValue(
+    value: String,
+    environment: (String) -> String?,
+): String {
+    val trimmed = value.trim()
+    val envName =
+        when {
+            trimmed.startsWith("\${") && trimmed.endsWith("}") -> trimmed.substring(2, trimmed.length - 1)
+            trimmed.startsWith("\$") -> trimmed.drop(1)
+            else -> null
+        }
+    if (envName != null) {
+        return environment(envName)
+            ?: error("Environment variable $envName is not set")
+    }
+    if (trimmed.startsWith("!")) {
+        val command = trimmed.drop(1).trim()
+        require(command.isNotEmpty()) { "Configured command must not be empty" }
+        val shell =
+            if (System.getProperty("os.name").lowercase().contains("win")) {
+                listOf("cmd.exe", "/c", command)
+            } else {
+                listOf(System.getenv("SHELL") ?: "/bin/zsh", "-lc", command)
+            }
+        val process = ProcessBuilder(shell).redirectErrorStream(true).start()
+        val output = process.inputStream.readAllBytes().toString(StandardCharsets.UTF_8).trim()
+        check(process.waitFor() == 0) { "Configured command failed: $output" }
+        return output
+    }
+    return value
+}

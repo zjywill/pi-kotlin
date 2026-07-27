@@ -296,6 +296,21 @@ private class CatalogProvider(
         }.stream(model, context, options)
 }
 
+fun protocolProvider(
+    id: String,
+    name: String,
+    models: List<Model>,
+    apiKeyEnvNames: List<String> = emptyList(),
+    oauth: OAuthAuth? = null,
+): Provider =
+    CatalogProvider(
+        id = id,
+        name = name,
+        models = models,
+        apiKeyEnvNames = apiKeyEnvNames,
+        oauth = oauth,
+    )
+
 private fun loadCatalog(): BuiltInCatalogSnapshot {
     val manifestBytes = readCatalogResource(".manifest.json")
     val manifest = providerJson.parseToJsonElement(manifestBytes.decodeToString()).jsonObject

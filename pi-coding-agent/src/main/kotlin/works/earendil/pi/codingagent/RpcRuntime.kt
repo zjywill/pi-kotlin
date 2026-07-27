@@ -106,6 +106,7 @@ class RpcRuntime(
     private var bashProcess: Process? = null
     private var promptResources: PromptResources? = null
     private var extensionHost: ExtensionHost? = null
+    private val extensionProviders = ExtensionProviderRegistry(models)
     private var extensionContextProvider: () -> JsonObject = { JsonObject(emptyMap()) }
     private var baseSystemPrompt: String = ""
     private var availableTools: List<AgentTool> = emptyList()
@@ -372,6 +373,7 @@ class RpcRuntime(
         }
         extensionHost?.close()
         extensionHost = null
+        extensionProviders.reset()
         scope.cancel()
     }
 
@@ -798,20 +800,12 @@ class RpcRuntime(
     private fun createAgent(): Agent {
         extensionHost?.close()
         extensionHost = null
+        extensionProviders.reset()
         val context = sessionManager.buildSessionContext()
-        val model =
-            resolveModel(context.model?.provider, context.model?.modelId)
-                ?: error("No model is available")
         val thinking =
             (options.thinking ?: parseModelReference(options.provider, options.model).thinking)?.toCoreThinking()
                 ?: context.thinkingLevel.toAgentThinking()
                 ?: AgentThinkingLevel.OFF
-        val projectTrusted =
-            resolveProjectTrusted(
-                cwd = sessionManager.getCwd(),
-                agentDir = options.agentDir,
-                override = options.projectTrusted,
-            )
         val initialBuiltInTools =
             createSelectedCodingTools(
                 cwd = sessionManager.getCwd(),
@@ -820,29 +814,12 @@ class RpcRuntime(
                 allowedTools = options.tools,
                 excludedTools = options.excludeTools,
             )
-        val promptResources =
-            loadPromptResources(
-                cwd = sessionManager.getCwd(),
-                agentDir = options.agentDir,
-                systemPromptSource = options.systemPrompt,
-                appendPromptSources = options.appendSystemPrompt,
-                noContextFiles = options.noContextFiles,
-                skillPaths = options.skillPaths,
-                noSkills = options.noSkills,
-                promptTemplatePaths = options.promptTemplatePaths,
-                noPromptTemplates = options.noPromptTemplates,
-                projectTrusted = projectTrusted,
-            )
-        this.promptResources = promptResources
-        val extensionSources =
-            resolveExtensionSources(
-                cwd = sessionManager.getCwd(),
-                explicitPaths = options.extensionPaths,
-                packageResources = promptResources.packageResources,
-                noExtensions = options.noExtensions,
-            )
         var createdRef: Agent? = null
         var selectedTools: List<AgentTool> = initialBuiltInTools
+        var projectTrusted = false
+        var modelRef: Model? =
+            context.model?.let { models.getModel(it.provider, it.modelId) }
+                ?: models.getModels().firstOrNull()
 
         fun currentExtensionContext(): JsonObject {
             val state = createdRef?.state
@@ -850,7 +827,7 @@ class RpcRuntime(
                 cwd = sessionManager.getCwd(),
                 mode = options.extensionMode,
                 projectTrusted = projectTrusted,
-                model = state?.model ?: model,
+                model = state?.model ?: modelRef,
                 thinkingLevel = (state?.thinkingLevel ?: thinking).toProtocolValue(),
                 systemPrompt = state?.systemPrompt.orEmpty(),
                 activeTools = (state?.tools ?: selectedTools).map(AgentTool::name),
@@ -864,20 +841,21 @@ class RpcRuntime(
             )
         }
 
-        val host =
-            ExtensionHost.start(
-                sources = extensionSources,
-                agentDir = options.agentDir,
+        val bootstrap =
+            bootstrapExtensions(
                 cwd = sessionManager.getCwd(),
+                agentDir = options.agentDir,
+                trustOverride = options.projectTrusted,
+                explicitPaths = options.extensionPaths,
+                noExtensions = options.noExtensions,
                 mode = options.extensionMode,
-                projectTrusted = projectTrusted,
                 flagValues = options.extensionFlagValues,
-                context =
+                context = { trusted ->
                     extensionContextJson(
                         cwd = sessionManager.getCwd(),
                         mode = options.extensionMode,
-                        projectTrusted = projectTrusted,
-                        model = model,
+                        projectTrusted = trusted,
+                        model = modelRef,
                         thinkingLevel = thinking.toProtocolValue(),
                         systemPrompt = "",
                         activeTools = initialBuiltInTools.map(AgentTool::name),
@@ -888,7 +866,13 @@ class RpcRuntime(
                         isIdle = true,
                         hasPendingMessages = false,
                         flagValues = options.extensionFlagValues,
-                    ),
+                    )
+                },
+                onWarning = { warning ->
+                    emitExtensionError(
+                        ExtensionDiagnostic("<resources>", "load", warning),
+                    )
+                },
                 onDiagnostic = ::emitExtensionError,
                 onLog = { line ->
                     emit(
@@ -898,9 +882,32 @@ class RpcRuntime(
                         },
                     )
                 },
+                onBootstrapActions = ::applyBootstrapExtensionActions,
             )
+        projectTrusted = bootstrap.projectTrusted
+        val host = bootstrap.host
         extensionHost = host
         extensionContextProvider = ::currentExtensionContext
+        applyBootstrapExtensionActions(host?.drainStartupActions().orEmpty())
+        val model =
+            resolveModel(context.model?.provider, context.model?.modelId)
+                ?: error("No model is available")
+        modelRef = model
+        val promptResources =
+            loadPromptResources(
+                cwd = sessionManager.getCwd(),
+                agentDir = options.agentDir,
+                systemPromptSource = options.systemPrompt,
+                appendPromptSources = options.appendSystemPrompt,
+                noContextFiles = options.noContextFiles,
+                skillPaths = options.skillPaths,
+                noSkills = options.noSkills,
+                promptTemplatePaths = options.promptTemplatePaths,
+                noPromptTemplates = options.noPromptTemplates,
+                projectTrusted = projectTrusted,
+                resolvedPackageResources = bootstrap.packageResources,
+            )
+        this.promptResources = promptResources
         val extensionTools =
             host
                 ?.registrations
@@ -999,6 +1006,40 @@ class RpcRuntime(
                     context = extensionContextProvider(),
                 )
             applyExtensionActions(invocation.actions)
+            val resources =
+                discoverExtensionResources(
+                    host = host,
+                    cwd = sessionManager.getCwd(),
+                    reason = if (reason == "reload") "reload" else "startup",
+                    context = extensionContextProvider(),
+                    onActions = ::applyExtensionActions,
+                )
+            if (
+                resources.skills.isNotEmpty() ||
+                resources.prompts.isNotEmpty() ||
+                resources.themes.isNotEmpty()
+            ) {
+                val current = requireNotNull(promptResources)
+                val extended =
+                    loadPromptResources(
+                        cwd = sessionManager.getCwd(),
+                        agentDir = options.agentDir,
+                        systemPromptSource = options.systemPrompt,
+                        appendPromptSources = options.appendSystemPrompt,
+                        noContextFiles = options.noContextFiles,
+                        skillPaths = options.skillPaths,
+                        noSkills = options.noSkills,
+                        promptTemplatePaths = options.promptTemplatePaths,
+                        noPromptTemplates = options.noPromptTemplates,
+                        projectTrusted = extensionContextProvider()["projectTrusted"]
+                            ?.jsonPrimitive
+                            ?.booleanOrNull == true,
+                        resolvedPackageResources = current.packageResources.merge(resources),
+                    )
+                promptResources = extended
+                baseSystemPrompt = buildCodingSystemPrompt(sessionManager.getCwd(), availableTools, extended)
+                agent.state.systemPrompt = baseSystemPrompt
+            }
         }.onFailure { error ->
             emitExtensionError(
                 ExtensionDiagnostic(
@@ -1030,6 +1071,7 @@ class RpcRuntime(
         }
         host.close()
         extensionHost = null
+        extensionProviders.reset()
     }
 
     private fun applyExtensionActions(actions: List<ExtensionAction>) {
@@ -1123,9 +1165,35 @@ class RpcRuntime(
                     }
                 }
 
+                "register_provider" -> {
+                    val name = action.data.stringValue("name")
+                    val config = action.data["config"] as? JsonObject
+                    if (name == null || config == null) {
+                        emitExtensionError(
+                            ExtensionDiagnostic(
+                                extensionPath = "<action>",
+                                event = action.type,
+                                error = "Extension provider registration is invalid",
+                            ),
+                        )
+                    } else {
+                        runCatching { extensionProviders.register(name, config) }
+                            .onFailure { error ->
+                                emitExtensionError(
+                                    ExtensionDiagnostic(
+                                        extensionPath = "<action>",
+                                        event = action.type,
+                                        error = error.message ?: "Failed to register provider $name",
+                                    ),
+                                )
+                            }
+                    }
+                }
+
+                "unregister_provider" ->
+                    action.data.stringValue("name")?.let(extensionProviders::unregister)
+
                 "unsupported",
-                "register_provider",
-                "unregister_provider",
                 "new_session",
                 "fork",
                 "navigate_tree",
@@ -1142,6 +1210,47 @@ class RpcRuntime(
                             error = "Extension action is not available in the Kotlin runtime yet",
                         ),
                     )
+            }
+        }
+    }
+
+    private fun applyBootstrapExtensionActions(actions: List<ExtensionAction>) {
+        actions.forEach { action ->
+            when (action.type) {
+                "ui" ->
+                    emit(
+                        JsonObject(
+                            mapOf("type" to JsonPrimitive("extension_ui_request")) + action.data,
+                        ),
+                    )
+
+                "append_entry" ->
+                    action.data.stringValue("customType")?.let { customType ->
+                        sessionManager.appendCustomEntry(customType, action.data["data"])
+                    }
+
+                "set_session_name" ->
+                    action.data.stringValue("name")?.let(sessionManager::appendSessionInfo)
+
+                "register_provider" -> {
+                    val name = action.data.stringValue("name")
+                    val config = action.data["config"] as? JsonObject
+                    if (name != null && config != null) {
+                        runCatching { extensionProviders.register(name, config) }
+                            .onFailure { error ->
+                                emitExtensionError(
+                                    ExtensionDiagnostic(
+                                        "<action>",
+                                        action.type,
+                                        error.message ?: "Failed to register provider $name",
+                                    ),
+                                )
+                            }
+                    }
+                }
+
+                "unregister_provider" ->
+                    action.data.stringValue("name")?.let(extensionProviders::unregister)
             }
         }
     }

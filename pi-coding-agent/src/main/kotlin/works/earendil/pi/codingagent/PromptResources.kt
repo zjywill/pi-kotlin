@@ -48,25 +48,20 @@ internal fun loadPromptResources(
     noPromptTemplates: Boolean = false,
     projectTrusted: Boolean = false,
     homeDir: Path = defaultHomeDirectory(),
+    resolvedPackageResources: ResolvedPackageResources? = null,
     onWarning: (String) -> Unit = {},
 ): PromptResources {
     val normalizedCwd = cwd.toAbsolutePath().normalize()
     val normalizedAgentDir = agentDir.toAbsolutePath().normalize()
-    val settingsStore =
-        SettingsStore(
-            cwd = normalizedCwd,
-            agentDir = normalizedAgentDir,
-            projectTrusted = projectTrusted,
-            onWarning = onWarning,
-        )
     val packageResources =
-        PackageManager(
-            cwd = normalizedCwd,
-            agentDir = normalizedAgentDir,
-            settings = settingsStore,
-            projectTrusted = projectTrusted,
-            homeDir = homeDir,
-        ).resolve()
+        resolvedPackageResources
+            ?: resolvePackageResources(
+                cwd = normalizedCwd,
+                agentDir = normalizedAgentDir,
+                projectTrusted = projectTrusted,
+                homeDir = homeDir,
+                onWarning = onWarning,
+            )
     val discoveredSystemPrompt =
         systemPromptSource
             ?: discoverPromptFile(
@@ -133,6 +128,50 @@ internal fun loadPromptResources(
         diagnostics = diagnostics,
         packageResources = packageResources,
     )
+}
+
+internal fun resolvePackageResources(
+    cwd: Path,
+    agentDir: Path = defaultAgentDirectory(),
+    projectTrusted: Boolean,
+    homeDir: Path = defaultHomeDirectory(),
+    onWarning: (String) -> Unit = {},
+): ResolvedPackageResources {
+    val normalizedCwd = cwd.toAbsolutePath().normalize()
+    val normalizedAgentDir = agentDir.toAbsolutePath().normalize()
+    val settingsStore =
+        SettingsStore(
+            cwd = normalizedCwd,
+            agentDir = normalizedAgentDir,
+            projectTrusted = projectTrusted,
+            onWarning = onWarning,
+        )
+    return PackageManager(
+        cwd = normalizedCwd,
+        agentDir = normalizedAgentDir,
+        settings = settingsStore,
+        projectTrusted = projectTrusted,
+        homeDir = homeDir,
+    ).resolve()
+}
+
+internal fun ResolvedPackageResources.merge(other: ResolvedPackageResources): ResolvedPackageResources =
+    ResolvedPackageResources(
+        extensions = mergeResources(extensions, other.extensions),
+        skills = mergeResources(skills, other.skills),
+        prompts = mergeResources(prompts, other.prompts),
+        themes = mergeResources(themes, other.themes),
+    )
+
+private fun mergeResources(
+    first: List<ResolvedResource>,
+    second: List<ResolvedResource>,
+): List<ResolvedResource> {
+    val merged = linkedMapOf<Path, ResolvedResource>()
+    (first + second).forEach { resource ->
+        merged.putIfAbsent(canonicalPath(resource.path), resource)
+    }
+    return merged.values.toList()
 }
 
 internal fun loadProjectContextFiles(

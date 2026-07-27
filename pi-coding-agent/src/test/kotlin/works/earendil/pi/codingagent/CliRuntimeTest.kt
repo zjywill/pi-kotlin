@@ -121,8 +121,91 @@ class CliRuntimeTest {
                     ),
                 )
 
-            assertEquals(0, exit)
+            assertEquals(0, exit, stderr.toString())
             assertEquals("extension complete\n", stdout.toString())
+            assertEquals("", stderr.toString())
+        }
+
+    @Test
+    fun `print mode selects extension provider models and composes discovered skills`() =
+        runTest {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                nodeAvailable(),
+                "Node.js 22+ is required for extension runtime tests",
+            )
+            val root = Files.createTempDirectory("pi-kotlin-cli-extension-provider")
+            val skillDir = Files.createDirectories(root.resolve("skills").resolve("extension-skill"))
+            Files.writeString(
+                skillDir.resolve("SKILL.md"),
+                "---\nname: extension-skill\ndescription: Discovered by extension\n---\nUse it.",
+            )
+            val extension =
+                root.resolve("extension.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          pi.registerProvider("faux", {
+                            name: "Extension Faux",
+                            api: "faux",
+                            baseUrl: "http://localhost:0",
+                            models: [{
+                              id: "extension-faux",
+                              name: "Extension Faux Model",
+                              reasoning: false,
+                              input: ["text"],
+                              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                              contextWindow: 8192,
+                              maxTokens: 1024,
+                            }],
+                          });
+                          pi.on("resources_discover", () => ({
+                            skillPaths: ["skills/extension-skill"],
+                          }));
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val provider = FauxProvider()
+            provider.setResponses(
+                listOf(
+                    FauxResponseStep.Factory { context, _, _, model ->
+                        assertEquals("extension-faux", model.id)
+                        assertTrue(context.systemPrompt.orEmpty().contains("<name>extension-skill</name>"))
+                        fauxAssistantMessage("extension provider complete")
+                    },
+                ),
+            )
+            val stdout = StringWriter()
+            val stderr = StringWriter()
+            val runtime =
+                CliRuntime(
+                    models = Models(listOf(provider)),
+                    cwd = root,
+                    agentDir = Files.createDirectories(root.resolve("agent")),
+                    stdout = PrintWriter(stdout, true),
+                    stderr = PrintWriter(stderr, true),
+                )
+
+            val exit =
+                runtime.run(
+                    parseArgs(
+                        listOf(
+                            "--provider",
+                            "faux",
+                            "--model",
+                            "extension-faux",
+                            "--no-session",
+                            "--extension",
+                            extension.toString(),
+                            "-p",
+                            "hello",
+                        ),
+                    ),
+                )
+
+            assertEquals(0, exit)
+            assertEquals("extension provider complete\n", stdout.toString())
             assertEquals("", stderr.toString())
         }
 

@@ -90,11 +90,13 @@ scope-relative settings mutation. It also compares documented npm/git/local
 source parsing and user/project/temporary managed install paths.
 
 The extension-runtime comparison loads the same TypeScript fixture through the
-upstream jiti loader and the Kotlin distribution's Node JSONL host. It compares
+upstream jiti loader and the Kotlin distribution's Node 22+ JSONL host. It compares
 common pi/TypeBox imports, tool schemas and execution updates, commands, flags,
 static provider registration metadata, lifecycle actions, system-prompt
 replacement, tool-call blocking, tool-result chaining, and
-`resources_discover` event results.
+`project_trust` decisions, `resources_discover` composition, and serializable
+provider model validation. Kotlin runtime tests additionally cover
+registration, model selection, and invalid re-registration rollback.
 
 The model catalog runtime comparison covers bundled-versus-remote timestamp
 selection, a newer persisted overlay restored without network access, and

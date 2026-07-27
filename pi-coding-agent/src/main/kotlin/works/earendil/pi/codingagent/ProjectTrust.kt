@@ -158,6 +158,9 @@ internal fun resolveProjectTrusted(
     agentDir: Path,
     override: Boolean?,
     homeDir: Path = defaultHomeDirectory(),
+    extensionHost: ExtensionHost? = null,
+    extensionContext: JsonObject = JsonObject(emptyMap()),
+    onExtensionActions: (List<ExtensionAction>) -> Unit = {},
 ): Boolean {
     if (override != null) {
         return override
@@ -165,7 +168,44 @@ internal fun resolveProjectTrusted(
     if (!hasTrustRequiringProjectResources(cwd, homeDir)) {
         return true
     }
-    return ProjectTrustStore(agentDir).get(cwd) ?: false
+    val trustStore = ProjectTrustStore(agentDir)
+    if (extensionHost != null) {
+        val invocation =
+            extensionHost.emit(
+                event =
+                    buildJsonObject {
+                        put("type", "project_trust")
+                        put("cwd", cwd.toAbsolutePath().normalize().toString())
+                    },
+                context = extensionContext,
+            )
+        onExtensionActions(invocation.actions)
+        val result = invocation.result as? JsonObject
+        val trusted =
+            when (result?.stringValue("trusted")) {
+                "yes" -> true
+                "no" -> false
+                else -> null
+            }
+        if (trusted != null) {
+            if (result?.get("remember")?.jsonPrimitive?.booleanOrNull == true) {
+                trustStore.set(cwd, trusted)
+            }
+            return trusted
+        }
+    }
+    trustStore.get(cwd)?.let { return it }
+    return when (
+        SettingsStore(
+            cwd = cwd,
+            agentDir = agentDir,
+            projectTrusted = false,
+        ).global().raw.stringValue("defaultProjectTrust")
+    ) {
+        "always" -> true
+        "never" -> false
+        else -> false
+    }
 }
 
 internal fun hasTrustRequiringProjectResources(

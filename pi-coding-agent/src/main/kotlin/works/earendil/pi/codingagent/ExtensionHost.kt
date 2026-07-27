@@ -109,6 +109,18 @@ internal data class ExtensionRegistrations(
 internal data class ExtensionInvocation(
     val result: JsonElement?,
     val actions: List<ExtensionAction>,
+    val resources: ExtensionResourcePaths? = null,
+)
+
+internal data class ExtensionResourcePath(
+    val path: String,
+    val extensionPath: Path,
+)
+
+internal data class ExtensionResourcePaths(
+    val skillPaths: List<ExtensionResourcePath> = emptyList(),
+    val promptPaths: List<ExtensionResourcePath> = emptyList(),
+    val themePaths: List<ExtensionResourcePath> = emptyList(),
 )
 
 internal class ExtensionHost private constructor(
@@ -117,10 +129,11 @@ internal class ExtensionHost private constructor(
     private val output: PrintWriter,
     private val stderrLines: ArrayDeque<String>,
     private val stderrThread: Thread,
-    private val sourceInfoByPath: Map<Path, ResourceSourceInfo>,
+    private val sourceInfoByPath: MutableMap<Path, ResourceSourceInfo>,
     private val onDiagnostic: (ExtensionDiagnostic) -> Unit,
 ) : AutoCloseable {
     private val requestIds = AtomicLong()
+    private val startupActions = mutableListOf<ExtensionAction>()
     private var closed = false
 
     lateinit var registrations: ExtensionRegistrations
@@ -179,6 +192,47 @@ internal class ExtensionHost private constructor(
         return registrations
     }
 
+    fun drainStartupActions(): List<ExtensionAction> =
+        startupActions.toList().also { startupActions.clear() }
+
+    fun loadAdditional(
+        sources: List<ExtensionSource>,
+        context: JsonObject,
+    ): ExtensionRegistrations {
+        val normalizedSources =
+            sources
+                .distinctBy { canonicalExtensionPath(it.path) }
+                .filter { Files.isRegularFile(it.path) }
+        if (normalizedSources.isEmpty()) {
+            return registrations
+        }
+        normalizedSources.forEach { source ->
+            sourceInfoByPath[canonicalExtensionPath(source.path)] = source.sourceInfo
+        }
+        val response =
+            request(
+                buildJsonObject {
+                    put("type", "load_more")
+                    put(
+                        "paths",
+                        JsonArray(normalizedSources.map { JsonPrimitive(it.path.toString()) }),
+                    )
+                    put("context", context)
+                },
+            )
+        response["errors"]
+            ?.jsonArray
+            .orEmpty()
+            .mapNotNull(::parseDiagnostic)
+            .forEach(onDiagnostic)
+        startupActions += parseActions(response)
+        registrations =
+            parseRegistrations(
+                response["registrations"]?.jsonObject ?: JsonObject(emptyMap()),
+            )
+        return registrations
+    }
+
     @Synchronized
     override fun close() {
         if (closed) {
@@ -217,18 +271,39 @@ internal class ExtensionHost private constructor(
             .orEmpty()
             .mapNotNull(::parseDiagnostic)
             .forEach(onDiagnostic)
-        val actions =
-            response["actions"]
+        return ExtensionInvocation(
+            result = response["result"]?.takeUnless { it is JsonNull },
+            actions = parseActions(response),
+            resources = response["resources"]?.let(::parseResourcePaths),
+        )
+    }
+
+    private fun parseActions(response: JsonObject): List<ExtensionAction> =
+        response["actions"]
+            ?.jsonArray
+            .orEmpty()
+            .mapNotNull { element ->
+                val action = element as? JsonObject ?: return@mapNotNull null
+                val type = action.string("type") ?: return@mapNotNull null
+                ExtensionAction(type, JsonObject(action - "type"))
+            }
+
+    private fun parseResourcePaths(value: JsonElement): ExtensionResourcePaths {
+        val resources = value.jsonObject
+        fun entries(name: String): List<ExtensionResourcePath> =
+            resources[name]
                 ?.jsonArray
                 .orEmpty()
                 .mapNotNull { element ->
-                    val action = element as? JsonObject ?: return@mapNotNull null
-                    val type = action.string("type") ?: return@mapNotNull null
-                    ExtensionAction(type, JsonObject(action - "type"))
+                    val item = element as? JsonObject ?: return@mapNotNull null
+                    val path = item.string("path") ?: return@mapNotNull null
+                    val extensionPath = item.string("extensionPath") ?: return@mapNotNull null
+                    ExtensionResourcePath(path, Path.of(extensionPath).toAbsolutePath().normalize())
                 }
-        return ExtensionInvocation(
-            result = response["result"]?.takeUnless { it is JsonNull },
-            actions = actions,
+        return ExtensionResourcePaths(
+            skillPaths = entries("skillPaths"),
+            promptPaths = entries("promptPaths"),
+            themePaths = entries("themePaths"),
         )
     }
 
@@ -374,6 +449,7 @@ internal class ExtensionHost private constructor(
             projectTrusted: Boolean,
             flagValues: Map<String, Any>,
             context: JsonObject,
+            hasUI: Boolean = false,
             environment: Map<String, String> = System.getenv(),
             onDiagnostic: (ExtensionDiagnostic) -> Unit = {},
             onLog: (String) -> Unit = {},
@@ -434,7 +510,7 @@ internal class ExtensionHost private constructor(
                     sourceInfoByPath =
                         normalizedSources.associate { source ->
                             canonicalExtensionPath(source.path) to source.sourceInfo
-                        },
+                        }.toMutableMap(),
                     onDiagnostic = onDiagnostic,
                 )
             return try {
@@ -454,7 +530,7 @@ internal class ExtensionHost private constructor(
                                         mapOf(
                                             "cwd" to JsonPrimitive(cwd.toString()),
                                             "mode" to JsonPrimitive(mode.wireName),
-                                            "hasUI" to JsonPrimitive(false),
+                                            "hasUI" to JsonPrimitive(hasUI),
                                             "projectTrusted" to JsonPrimitive(projectTrusted),
                                         ),
                                 ),
@@ -466,6 +542,7 @@ internal class ExtensionHost private constructor(
                     .orEmpty()
                     .mapNotNull(::parseDiagnostic)
                     .forEach(onDiagnostic)
+                host.startupActions += host.parseActions(response)
                 host.registrations =
                     host.parseRegistrations(
                         response["registrations"]?.jsonObject ?: JsonObject(emptyMap()),
@@ -580,7 +657,7 @@ internal fun extensionContextJson(
     buildJsonObject {
         put("cwd", cwd.toString())
         put("mode", mode.wireName)
-        put("hasUI", false)
+        put("hasUI", mode == ExtensionMode.TUI)
         put("projectTrusted", projectTrusted)
         model?.let { put("model", protocolJson.encodeToJsonElement(Model.serializer(), it)) }
         put("thinkingLevel", thinkingLevel)

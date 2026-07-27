@@ -62,6 +62,11 @@ export default function extensionRuntimeFixture(pi: ExtensionAPI) {
 		ctx.ui.setStatus("fixture", "started");
 	});
 
+	pi.on("project_trust", () => ({
+		trusted: "yes",
+		remember: true,
+	}));
+
 	pi.on("before_agent_start", (event) => ({
 		systemPrompt: `${event.systemPrompt}\nextension fixture`,
 	}));

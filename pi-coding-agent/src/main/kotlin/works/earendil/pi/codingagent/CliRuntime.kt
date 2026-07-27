@@ -75,38 +75,7 @@ class CliRuntime(
             sessionManager.appendSessionInfo(name)
         }
         val initialContext = sessionManager.buildSessionContext()
-        val model =
-            resolveModel(args, initialContext.model)
-                ?: run {
-                    stderr.println("Error: No model matched the requested provider/model.")
-                    return 1
-                }
         val runtimeCwd = sessionManager.getCwd()
-        val projectTrusted =
-            try {
-                resolveProjectTrusted(
-                    cwd = runtimeCwd,
-                    agentDir = agentDir,
-                    override = args.projectTrustOverride,
-                )
-            } catch (error: Exception) {
-                stderr.println("Error: ${error.message}")
-                return 1
-            }
-        val promptResources =
-            loadPromptResources(
-                cwd = runtimeCwd,
-                agentDir = agentDir,
-                systemPromptSource = args.systemPrompt,
-                appendPromptSources = args.appendSystemPrompt,
-                noContextFiles = args.noContextFiles,
-                skillPaths = args.skills,
-                noSkills = args.noSkills,
-                promptTemplatePaths = args.promptTemplates,
-                noPromptTemplates = args.noPromptTemplates,
-                projectTrusted = projectTrusted,
-                onWarning = { stderr.println("Warning: $it") },
-            )
         val requestedThinking =
             args.thinking ?: parseModelReference(args.provider, args.model).thinking
         val initialThinking =
@@ -120,16 +89,14 @@ class CliRuntime(
                 allowedTools = args.tools,
                 excludedTools = args.excludeTools,
             )
-        val extensionSources =
-            resolveExtensionSources(
-                cwd = runtimeCwd,
-                explicitPaths = args.extensions,
-                packageResources = promptResources.packageResources,
-                noExtensions = args.noExtensions,
-            )
+        val providerRegistry = ExtensionProviderRegistry(models)
         var agentRef: Agent? = null
         var selectedTools: List<AgentTool> = initialBuiltInTools
         var extensionHost: ExtensionHost? = null
+        var projectTrusted = false
+        var modelRef: Model? =
+            initialContext.model?.let { models.getModel(it.provider, it.modelId) }
+                ?: models.getModels().firstOrNull()
 
         fun currentExtensionContext(): JsonObject {
             val state = agentRef?.state
@@ -137,7 +104,7 @@ class CliRuntime(
                 cwd = runtimeCwd,
                 mode = ExtensionMode.PRINT,
                 projectTrusted = projectTrusted,
-                model = state?.model ?: model,
+                model = state?.model ?: modelRef,
                 thinkingLevel = (state?.thinkingLevel ?: initialThinking).toProtocolValue(),
                 systemPrompt = state?.systemPrompt.orEmpty(),
                 activeTools = (state?.tools ?: selectedTools).map(AgentTool::name),
@@ -151,7 +118,7 @@ class CliRuntime(
             )
         }
 
-        suspend fun applyExtensionActions(actions: List<ExtensionAction>) {
+        fun applyExtensionActions(actions: List<ExtensionAction>) {
             actions.forEach { action ->
                 when (action.type) {
                     "ui" -> {
@@ -202,6 +169,22 @@ class CliRuntime(
                     "send_user_message" ->
                         queueExtensionUserMessage(agentRef, action.data)
 
+                    "register_provider" -> {
+                        val name = action.data.stringValue("name")
+                        val config = action.data["config"] as? JsonObject
+                        if (name == null || config == null) {
+                            stderr.println("Warning: Extension provider registration is invalid.")
+                        } else {
+                            runCatching { providerRegistry.register(name, config) }
+                                .onFailure { error ->
+                                    stderr.println("Warning: ${error.message}")
+                                }
+                        }
+                    }
+
+                    "unregister_provider" ->
+                        action.data.stringValue("name")?.let(providerRegistry::unregister)
+
                     "unsupported" ->
                         stderr.println(
                             "Warning: Extension UI method ${action.data.stringValue("method").orEmpty()} " +
@@ -211,37 +194,73 @@ class CliRuntime(
             }
         }
 
-        extensionHost =
-            ExtensionHost.start(
-                sources = extensionSources,
-                agentDir = agentDir,
+        val bootstrap =
+            try {
+                bootstrapExtensions(
+                    cwd = runtimeCwd,
+                    agentDir = agentDir,
+                    trustOverride = args.projectTrustOverride,
+                    explicitPaths = args.extensions,
+                    noExtensions = args.noExtensions,
+                    mode = ExtensionMode.PRINT,
+                    flagValues = args.unknownFlags,
+                    context = { trusted ->
+                        extensionContextJson(
+                            cwd = runtimeCwd,
+                            mode = ExtensionMode.PRINT,
+                            projectTrusted = trusted,
+                            model = modelRef,
+                            thinkingLevel = initialThinking.toProtocolValue(),
+                            systemPrompt = "",
+                            activeTools = initialBuiltInTools.map(AgentTool::name),
+                            allTools = initialBuiltInTools,
+                            sessionName = sessionManager.getSessionName(),
+                            sessionId = sessionManager.getSessionId(),
+                            sessionFile = sessionManager.getSessionFile(),
+                            isIdle = true,
+                            hasPendingMessages = false,
+                            flagValues = args.unknownFlags,
+                        )
+                    },
+                    onWarning = { stderr.println("Warning: $it") },
+                    onDiagnostic = { diagnostic ->
+                        stderr.println(
+                            "Warning: Extension ${diagnostic.extensionPath} ${diagnostic.event}: ${diagnostic.error}",
+                        )
+                    },
+                    onLog = stderr::println,
+                    onBootstrapActions = ::applyExtensionActions,
+                )
+            } catch (error: Exception) {
+                stderr.println("Error: ${error.message}")
+                return 1
+            }
+        projectTrusted = bootstrap.projectTrusted
+        extensionHost = bootstrap.host
+        applyExtensionActions(extensionHost?.drainStartupActions().orEmpty())
+        val model =
+            resolveModel(args, initialContext.model)
+                ?: run {
+                    stderr.println("Error: No model matched the requested provider/model.")
+                    extensionHost?.close()
+                    providerRegistry.reset()
+                    return 1
+                }
+        modelRef = model
+        var promptResources =
+            loadPromptResources(
                 cwd = runtimeCwd,
-                mode = ExtensionMode.PRINT,
+                agentDir = agentDir,
+                systemPromptSource = args.systemPrompt,
+                appendPromptSources = args.appendSystemPrompt,
+                noContextFiles = args.noContextFiles,
+                skillPaths = args.skills,
+                noSkills = args.noSkills,
+                promptTemplatePaths = args.promptTemplates,
+                noPromptTemplates = args.noPromptTemplates,
                 projectTrusted = projectTrusted,
-                flagValues = args.unknownFlags,
-                context =
-                    extensionContextJson(
-                        cwd = runtimeCwd,
-                        mode = ExtensionMode.PRINT,
-                        projectTrusted = projectTrusted,
-                        model = model,
-                        thinkingLevel = initialThinking.toProtocolValue(),
-                        systemPrompt = "",
-                        activeTools = initialBuiltInTools.map(AgentTool::name),
-                        allTools = initialBuiltInTools,
-                        sessionName = sessionManager.getSessionName(),
-                        sessionId = sessionManager.getSessionId(),
-                        sessionFile = sessionManager.getSessionFile(),
-                        isIdle = true,
-                        hasPendingMessages = false,
-                        flagValues = args.unknownFlags,
-                    ),
-                onDiagnostic = { diagnostic ->
-                    stderr.println(
-                        "Warning: Extension ${diagnostic.extensionPath} ${diagnostic.event}: ${diagnostic.error}",
-                    )
-                },
-                onLog = stderr::println,
+                resolvedPackageResources = bootstrap.packageResources,
+                onWarning = { stderr.println("Warning: $it") },
             )
         val extensionTools =
             extensionHost
@@ -265,7 +284,7 @@ class CliRuntime(
                 excludedTools = args.excludeTools,
                 extensionTools = extensionTools,
             )
-        val baseSystemPrompt = buildCodingSystemPrompt(runtimeCwd, selectedTools, promptResources)
+        var baseSystemPrompt = buildCodingSystemPrompt(runtimeCwd, selectedTools, promptResources)
         val agent =
             Agent(
                 AgentOptions(
@@ -341,6 +360,37 @@ class CliRuntime(
                 context = ::currentExtensionContext,
                 onActions = ::applyExtensionActions,
             )
+            val extensionResources =
+                discoverExtensionResources(
+                    host = extensionHost,
+                    cwd = runtimeCwd,
+                    reason = "startup",
+                    context = currentExtensionContext(),
+                    onActions = ::applyExtensionActions,
+                )
+            if (
+                extensionResources.skills.isNotEmpty() ||
+                extensionResources.prompts.isNotEmpty() ||
+                extensionResources.themes.isNotEmpty()
+            ) {
+                promptResources =
+                    loadPromptResources(
+                        cwd = runtimeCwd,
+                        agentDir = agentDir,
+                        systemPromptSource = args.systemPrompt,
+                        appendPromptSources = args.appendSystemPrompt,
+                        noContextFiles = args.noContextFiles,
+                        skillPaths = args.skills,
+                        noSkills = args.noSkills,
+                        promptTemplatePaths = args.promptTemplates,
+                        noPromptTemplates = args.noPromptTemplates,
+                        projectTrusted = projectTrusted,
+                        resolvedPackageResources = bootstrap.packageResources.merge(extensionResources),
+                        onWarning = { stderr.println("Warning: $it") },
+                    )
+                baseSystemPrompt = buildCodingSystemPrompt(runtimeCwd, selectedTools, promptResources)
+                agent.state.systemPrompt = baseSystemPrompt
+            }
             val prompts =
                 try {
                     buildInitialPrompts(
@@ -405,6 +455,7 @@ class CliRuntime(
                 )
             }
             extensionHost?.close()
+            providerRegistry.reset()
         }
     }
 

@@ -42,14 +42,18 @@ internal fun loadPromptTemplates(
     if (includeDefaults && defaultResources != null) {
         defaultResources
             .filter(ResolvedResource::enabled)
-            .mapNotNull { resource ->
-                loadPromptFile(
-                    resource.path,
-                    sourceInfoFactory = { filePath ->
-                        resource.sourceInfo.copy(path = filePath.toAbsolutePath().normalize())
+            .forEach { resource ->
+                val sourceInfoFactory = { filePath: Path ->
+                    resource.sourceInfo.copy(path = filePath.toAbsolutePath().normalize())
+                }
+                add(
+                    if (Files.isDirectory(resource.path)) {
+                        loadPromptDirectory(resource.path, sourceInfoFactory)
+                    } else {
+                        listOfNotNull(loadPromptFile(resource.path, sourceInfoFactory))
                     },
                 )
-            }.let(::add)
+            }
     } else {
         if (includeDefaults && projectTrusted) {
             val projectBaseDir = normalizedCwd.resolve(".pi")

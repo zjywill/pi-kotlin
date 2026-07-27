@@ -1,5 +1,5 @@
 import { realpathSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const targetRoot = resolve(import.meta.dirname, "../..");
@@ -7,6 +7,13 @@ const sourceRoot = process.env.PI_TYPESCRIPT_ROOT ?? "/Users/junyizhang/Git/pi";
 const fixture = realpathSync(resolve(targetRoot, "migration/fixtures/extension-runtime/basic.ts"));
 const loader = await import(
 	pathToFileURL(resolve(sourceRoot, "packages/coding-agent/src/core/extensions/loader.ts")).href
+);
+const skillsModule = await import(pathToFileURL(resolve(sourceRoot, "packages/coding-agent/src/core/skills.ts")).href);
+const promptsModule = await import(
+	pathToFileURL(resolve(sourceRoot, "packages/coding-agent/src/core/prompt-templates.ts")).href
+);
+const providerComposer = await import(
+	pathToFileURL(resolve(sourceRoot, "packages/coding-agent/src/core/provider-composer.ts")).href
 );
 
 const runtime = loader.createExtensionRuntime();
@@ -90,6 +97,15 @@ for (const handler of extension.handlers.get("session_start") ?? []) {
 	await handler({ type: "session_start", reason: "startup" }, context(sessionActions));
 }
 
+let projectTrust: unknown;
+for (const handler of extension.handlers.get("project_trust") ?? []) {
+	const value = await handler({ type: "project_trust", cwd: dirname(fixture) }, context([]));
+	if (value?.trusted && value.trusted !== "undecided") {
+		projectTrust = value;
+		break;
+	}
+}
+
 let beforeAgentStart: unknown;
 for (const handler of extension.handlers.get("before_agent_start") ?? []) {
 	beforeAgentStart = await handler(
@@ -134,6 +150,57 @@ for (const handler of extension.handlers.get("resources_discover") ?? []) {
 	);
 }
 
+const resourceResult = resourcesDiscover as {
+	skillPaths?: string[];
+	promptPaths?: string[];
+	themePaths?: string[];
+};
+const loadedSkills = skillsModule.loadSkills({
+	cwd: dirname(fixture),
+	agentDir: dirname(fixture),
+	skillPaths: resourceResult.skillPaths ?? [],
+	includeDefaults: false,
+});
+const loadedPrompts = promptsModule.loadPromptTemplates({
+	cwd: dirname(fixture),
+	agentDir: dirname(fixture),
+	promptPaths: resourceResult.promptPaths ?? [],
+	includeDefaults: false,
+});
+
+const providerRegistration = runtime.pendingProviderRegistrations.find(value => value.name === "fixture-provider");
+if (!providerRegistration) throw new Error("fixture provider was not registered");
+providerComposer.validateExtensionProvider(
+	providerRegistration.name,
+	undefined,
+	undefined,
+	providerRegistration.config,
+);
+const providerModel = providerRegistration.config.models?.[0];
+if (!providerModel) throw new Error("fixture provider model was not registered");
+const registeredModel = {
+	...providerModel,
+	api: providerModel.api ?? providerRegistration.config.api,
+	provider: providerRegistration.name,
+	baseUrl: providerModel.baseUrl ?? providerRegistration.config.baseUrl,
+};
+let invalidProviderRejected = false;
+try {
+	providerComposer.validateExtensionProvider("fixture-provider", undefined, undefined, {
+		models: [{
+			id: registeredModel.id,
+			name: registeredModel.name,
+			reasoning: registeredModel.reasoning,
+			input: registeredModel.input,
+			cost: registeredModel.cost,
+			contextWindow: registeredModel.contextWindow,
+			maxTokens: registeredModel.maxTokens,
+		}],
+	});
+} catch {
+	invalidProviderRejected = true;
+}
+
 const output = {
 	errors: loaded.errors,
 	registrations: {
@@ -167,10 +234,32 @@ const output = {
 	},
 	commandActions,
 	sessionActions,
+	projectTrust,
 	beforeAgentStart,
 	toolCall,
 	toolResult: toolResultPatch,
 	resourcesDiscover,
+	composedResources: {
+		skills: loadedSkills.skills.map(skill => skill.name),
+		prompts: loadedPrompts.map(prompt => prompt.name),
+		themes: (resourceResult.themePaths ?? []).map(path => basename(path)),
+	},
+	providerRuntime: {
+		model: {
+			id: registeredModel.id,
+			name: registeredModel.name,
+			api: registeredModel.api,
+			provider: registeredModel.provider,
+			baseUrl: registeredModel.baseUrl,
+			reasoning: registeredModel.reasoning,
+			input: registeredModel.input,
+			cost: registeredModel.cost,
+			contextWindow: registeredModel.contextWindow,
+			maxTokens: registeredModel.maxTokens,
+		},
+		invalidProviderRejected,
+		preservedModelId: registeredModel.id,
+	},
 };
 
 process.stdout.write(`${JSON.stringify(output)}\n`);
