@@ -157,7 +157,7 @@ internal fun resolveProjectTrusted(
     cwd: Path,
     agentDir: Path,
     override: Boolean?,
-    homeDir: Path = Path.of(System.getProperty("user.home")),
+    homeDir: Path = defaultHomeDirectory(),
 ): Boolean {
     if (override != null) {
         return override
@@ -170,7 +170,7 @@ internal fun resolveProjectTrusted(
 
 internal fun hasTrustRequiringProjectResources(
     cwd: Path,
-    homeDir: Path = Path.of(System.getProperty("user.home")),
+    homeDir: Path = defaultHomeDirectory(),
 ): Boolean {
     val normalizedCwd = canonicalPath(cwd)
     val normalizedHome = canonicalPath(homeDir)

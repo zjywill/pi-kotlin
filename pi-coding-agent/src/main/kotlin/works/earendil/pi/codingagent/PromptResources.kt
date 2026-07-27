@@ -17,6 +17,7 @@ internal data class PromptResources(
     val skills: List<Skill>,
     val promptTemplates: List<PromptTemplate>,
     val diagnostics: List<ResourceDiagnostic>,
+    val packageResources: ResolvedPackageResources,
 )
 
 internal fun defaultAgentDirectory(): Path {
@@ -24,8 +25,16 @@ internal fun defaultAgentDirectory(): Path {
     if (!configured.isNullOrBlank()) {
         return resolvePromptPath(Path.of("").toAbsolutePath().normalize(), configured)
     }
-    return Path.of(System.getProperty("user.home"), ".pi", "agent").toAbsolutePath().normalize()
+    return defaultHomeDirectory().resolve(".pi").resolve("agent").toAbsolutePath().normalize()
 }
+
+internal fun defaultHomeDirectory(): Path =
+    System.getenv("HOME")
+        ?.takeIf(String::isNotBlank)
+        ?.let(Path::of)
+        ?.toAbsolutePath()
+        ?.normalize()
+        ?: Path.of(System.getProperty("user.home")).toAbsolutePath().normalize()
 
 internal fun loadPromptResources(
     cwd: Path,
@@ -38,11 +47,26 @@ internal fun loadPromptResources(
     promptTemplatePaths: List<String> = emptyList(),
     noPromptTemplates: Boolean = false,
     projectTrusted: Boolean = false,
-    homeDir: Path = Path.of(System.getProperty("user.home")),
+    homeDir: Path = defaultHomeDirectory(),
     onWarning: (String) -> Unit = {},
 ): PromptResources {
     val normalizedCwd = cwd.toAbsolutePath().normalize()
     val normalizedAgentDir = agentDir.toAbsolutePath().normalize()
+    val settingsStore =
+        SettingsStore(
+            cwd = normalizedCwd,
+            agentDir = normalizedAgentDir,
+            projectTrusted = projectTrusted,
+            onWarning = onWarning,
+        )
+    val packageResources =
+        PackageManager(
+            cwd = normalizedCwd,
+            agentDir = normalizedAgentDir,
+            settings = settingsStore,
+            projectTrusted = projectTrusted,
+            homeDir = homeDir,
+        ).resolve()
     val discoveredSystemPrompt =
         systemPromptSource
             ?: discoverPromptFile(
@@ -72,6 +96,7 @@ internal fun loadPromptResources(
             includeDefaults = !noSkills,
             projectTrusted = projectTrusted,
             homeDir = homeDir,
+            defaultResources = packageResources.skills,
         )
     val loadedPrompts =
         loadPromptTemplates(
@@ -80,6 +105,7 @@ internal fun loadPromptResources(
             promptPaths = promptTemplatePaths,
             includeDefaults = !noPromptTemplates,
             projectTrusted = projectTrusted,
+            defaultResources = packageResources.prompts,
         )
     val diagnostics = loadedSkills.diagnostics + loadedPrompts.diagnostics
     diagnostics.forEach { diagnostic ->
@@ -105,6 +131,7 @@ internal fun loadPromptResources(
         skills = loadedSkills.skills,
         promptTemplates = loadedPrompts.prompts,
         diagnostics = diagnostics,
+        packageResources = packageResources,
     )
 }
 
@@ -266,7 +293,7 @@ private fun resolvePromptPath(
 ): Path {
     val expanded =
         if (value == "~" || value.startsWith("~/")) {
-            Path.of(System.getProperty("user.home")).resolve(value.removePrefix("~/"))
+            defaultHomeDirectory().resolve(value.removePrefix("~/"))
         } else {
             Path.of(value)
         }

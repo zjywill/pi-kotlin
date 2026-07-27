@@ -1,0 +1,12 @@
+{
+  "name": "pi-kotlin-package-smoke",
+  "version": "1.0.0",
+  "pi": {
+    "skills": [
+      "skills/smoke/SKILL.md"
+    ],
+    "prompts": [
+      "prompts/smoke.md"
+    ]
+  }
+}

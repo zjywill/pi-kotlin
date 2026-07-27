@@ -49,3 +49,9 @@ tasks.register<JavaExec>("resourceLoadingOracle") {
     classpath = sourceSets["test"].runtimeClasspath
     mainClass = "works.earendil.pi.codingagent.ResourceLoadingOracleKt"
 }
+
+tasks.register<JavaExec>("packageResourcesOracle") {
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass = "works.earendil.pi.codingagent.PackageResourcesOracleKt"
+}

@@ -27,6 +27,7 @@ Run the available comparisons from the Kotlin repository:
 ./migration/oracle/compare-openai-codex-oauth.sh
 ./migration/oracle/compare-openrouter-images.sh
 ./migration/oracle/compare-openrouter-oauth.sh
+./migration/oracle/compare-package-resources.sh
 ./migration/oracle/compare-provider-payloads.sh
 ./migration/oracle/compare-provider-stream-events.sh
 ./migration/oracle/compare-radius.sh
@@ -80,6 +81,12 @@ arguments, positional/default/slice substitution, project-over-user collision
 precedence, `.pi` and `.agents` skill discovery, manual-only skills, prompt
 templates, source metadata, context/system/append prompts, trusted versus
 untrusted project resources, and inherited persisted trust decisions.
+
+The package-resources comparison covers user/project settings, local package
+manifests, package filters, enabled/disabled resource state, source metadata,
+project precedence, top-level overrides, configured-package listing, and
+scope-relative settings mutation. It also compares documented npm/git/local
+source parsing and user/project/temporary managed install paths.
 
 The model catalog runtime comparison covers bundled-versus-remote timestamp
 selection, a newer persisted overlay restored without network access, and

@@ -17,6 +17,23 @@ import kotlin.test.assertTrue
 
 class ModelCatalogCommandTest {
     @Test
+    fun `update models rejects conflicting targets before network access`() =
+        runBlocking {
+            val stderr = ByteArrayOutputStream()
+
+            val exitCode =
+                runModelCatalogCommand(
+                    arguments = listOf("update", "--models", "--extensions"),
+                    catalogBaseUrl = "http://127.0.0.1:1",
+                    output = PrintStream(ByteArrayOutputStream()),
+                    errorOutput = PrintStream(stderr),
+                )
+
+            assertEquals(1, exitCode)
+            assertTrue(stderr.toString().contains("--models cannot be combined with --extensions"))
+        }
+
+    @Test
     fun `update models refreshes every catalog route and persists check results`() =
         runBlocking {
             val directory = Files.createTempDirectory("pi-kotlin-model-update")

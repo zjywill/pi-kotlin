@@ -9,6 +9,7 @@ internal fun loadPromptTemplates(
     promptPaths: List<String> = emptyList(),
     includeDefaults: Boolean = true,
     projectTrusted: Boolean = true,
+    defaultResources: List<ResolvedResource>? = null,
 ): LoadedPromptTemplates {
     val normalizedCwd = canonicalPath(cwd)
     val normalizedAgentDir = canonicalPath(agentDir)
@@ -38,32 +39,45 @@ internal fun loadPromptTemplates(
         }
     }
 
-    if (includeDefaults && projectTrusted) {
-        val projectBaseDir = normalizedCwd.resolve(".pi")
-        val projectRoot = projectBaseDir.resolve("prompts")
-        add(
-            loadPromptDirectory(
-                projectRoot,
-                sourceInfoFactory(
-                    root = projectBaseDir,
-                    source = "auto",
-                    scope = "project",
+    if (includeDefaults && defaultResources != null) {
+        defaultResources
+            .filter(ResolvedResource::enabled)
+            .mapNotNull { resource ->
+                loadPromptFile(
+                    resource.path,
+                    sourceInfoFactory = { filePath ->
+                        resource.sourceInfo.copy(path = filePath.toAbsolutePath().normalize())
+                    },
+                )
+            }.let(::add)
+    } else {
+        if (includeDefaults && projectTrusted) {
+            val projectBaseDir = normalizedCwd.resolve(".pi")
+            val projectRoot = projectBaseDir.resolve("prompts")
+            add(
+                loadPromptDirectory(
+                    projectRoot,
+                    sourceInfoFactory(
+                        root = projectBaseDir,
+                        source = "auto",
+                        scope = "project",
+                    ),
                 ),
-            ),
-        )
-    }
-    if (includeDefaults) {
-        val userRoot = normalizedAgentDir.resolve("prompts")
-        add(
-            loadPromptDirectory(
-                userRoot,
-                sourceInfoFactory(
-                    root = normalizedAgentDir,
-                    source = "auto",
-                    scope = "user",
+            )
+        }
+        if (includeDefaults) {
+            val userRoot = normalizedAgentDir.resolve("prompts")
+            add(
+                loadPromptDirectory(
+                    userRoot,
+                    sourceInfoFactory(
+                        root = normalizedAgentDir,
+                        source = "auto",
+                        scope = "user",
+                    ),
                 ),
-            ),
-        )
+            )
+        }
     }
     promptPaths.forEach { rawPath ->
         val path = resolvePromptTemplatePath(normalizedCwd, rawPath)
@@ -260,7 +274,7 @@ private fun resolvePromptTemplatePath(
     val trimmed = rawPath.trim()
     val expanded =
         if (trimmed == "~" || trimmed.startsWith("~/")) {
-            Path.of(System.getProperty("user.home")).resolve(trimmed.removePrefix("~/"))
+            defaultHomeDirectory().resolve(trimmed.removePrefix("~/"))
         } else {
             Path.of(trimmed)
         }

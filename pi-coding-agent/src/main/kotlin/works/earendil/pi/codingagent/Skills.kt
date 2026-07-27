@@ -15,7 +15,8 @@ internal fun loadSkills(
     skillPaths: List<String> = emptyList(),
     includeDefaults: Boolean = true,
     projectTrusted: Boolean = true,
-    homeDir: Path = Path.of(System.getProperty("user.home")),
+    homeDir: Path = defaultHomeDirectory(),
+    defaultResources: List<ResolvedResource>? = null,
 ): LoadedSkills {
     val normalizedCwd = canonicalPath(cwd)
     val normalizedAgentDir = canonicalPath(agentDir)
@@ -52,53 +53,71 @@ internal fun loadSkills(
         }
     }
 
-    if (includeDefaults && projectTrusted) {
-        val projectBaseDir = normalizedCwd.resolve(".pi")
-        add(
-            loadSkillsFromDirectory(
-                projectBaseDir.resolve("skills"),
-                sourceInfoFactory = sourceInfoFactory("auto", "project", projectBaseDir),
-                includeRootMarkdown = true,
-            ),
-        )
-        collectAncestorAgentsSkillDirectories(normalizedCwd).forEach { directory ->
-            if (canonicalPath(directory) != canonicalPath(normalizedHome.resolve(".agents").resolve("skills"))) {
+    if (includeDefaults && defaultResources != null) {
+        defaultResources
+            .filter(ResolvedResource::enabled)
+            .forEach { resource ->
                 add(
-                    loadSkillsFromDirectory(
-                        directory,
-                        sourceInfoFactory =
-                            sourceInfoFactory(
-                                source = "auto",
-                                scope = "project",
-                                baseDir = directory.parent,
-                            ),
-                        includeRootMarkdown = false,
+                    loadSkillFile(
+                        resource.path,
+                        sourceInfoFactory = { filePath, fallbackBaseDir ->
+                            resource.sourceInfo.copy(
+                                path = filePath.toAbsolutePath().normalize(),
+                                baseDir = resource.sourceInfo.baseDir ?: fallbackBaseDir,
+                            )
+                        },
                     ),
                 )
             }
+    } else {
+        if (includeDefaults && projectTrusted) {
+            val projectBaseDir = normalizedCwd.resolve(".pi")
+            add(
+                loadSkillsFromDirectory(
+                    projectBaseDir.resolve("skills"),
+                    sourceInfoFactory = sourceInfoFactory("auto", "project", projectBaseDir),
+                    includeRootMarkdown = true,
+                ),
+            )
+            collectAncestorAgentsSkillDirectories(normalizedCwd).forEach { directory ->
+                if (canonicalPath(directory) != canonicalPath(normalizedHome.resolve(".agents").resolve("skills"))) {
+                    add(
+                        loadSkillsFromDirectory(
+                            directory,
+                            sourceInfoFactory =
+                                sourceInfoFactory(
+                                    source = "auto",
+                                    scope = "project",
+                                    baseDir = directory.parent,
+                                ),
+                            includeRootMarkdown = false,
+                        ),
+                    )
+                }
+            }
         }
-    }
-    if (includeDefaults) {
-        add(
-            loadSkillsFromDirectory(
-                normalizedAgentDir.resolve("skills"),
-                sourceInfoFactory = sourceInfoFactory("auto", "user", normalizedAgentDir),
-                includeRootMarkdown = true,
-            ),
-        )
-        val userAgentsSkills = normalizedHome.resolve(".agents").resolve("skills")
-        add(
-            loadSkillsFromDirectory(
-                userAgentsSkills,
-                sourceInfoFactory =
-                    sourceInfoFactory(
-                        source = "auto",
-                        scope = "user",
-                        baseDir = userAgentsSkills.parent,
-                    ),
-                includeRootMarkdown = false,
-            ),
-        )
+        if (includeDefaults) {
+            add(
+                loadSkillsFromDirectory(
+                    normalizedAgentDir.resolve("skills"),
+                    sourceInfoFactory = sourceInfoFactory("auto", "user", normalizedAgentDir),
+                    includeRootMarkdown = true,
+                ),
+            )
+            val userAgentsSkills = normalizedHome.resolve(".agents").resolve("skills")
+            add(
+                loadSkillsFromDirectory(
+                    userAgentsSkills,
+                    sourceInfoFactory =
+                        sourceInfoFactory(
+                            source = "auto",
+                            scope = "user",
+                            baseDir = userAgentsSkills.parent,
+                        ),
+                    includeRootMarkdown = false,
+                ),
+            )
+        }
     }
     skillPaths.forEach { rawPath ->
         val path = resolveResourcePath(normalizedCwd, rawPath)
@@ -379,7 +398,7 @@ private fun resolveResourcePath(
     val trimmed = rawPath.trim()
     val expanded =
         if (trimmed == "~" || trimmed.startsWith("~/")) {
-            Path.of(System.getProperty("user.home")).resolve(trimmed.removePrefix("~/"))
+            defaultHomeDirectory().resolve(trimmed.removePrefix("~/"))
         } else {
             Path.of(trimmed)
         }

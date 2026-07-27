@@ -74,8 +74,9 @@ features outside that slice remain migration work.
 | Model catalog | Functional slice | Hydrated schema-v3 manifest and 37 chat-provider files verify by SHA-256; all 1,110 static chat model records plus the credential-backed dynamic Radius catalog are exposed through 38 executable chat providers, including 29 credential-filtered GitHub Copilot models; a separate immutable catalog exposes all 40 OpenRouter image models with an independent checksum |
 | Provider HTTP implementations | Functional slice | All 10 upstream chat API families plus `openrouter-images` have executable Kotlin paths. Coverage includes Google Generative AI, Google Vertex AI, Anthropic Messages plus Claude Pro/Max OAuth, OpenRouter Chat Completions and Images plus shared browser OAuth, xAI Chat Completions/Responses plus device OAuth, Kimi Coding Anthropic Messages plus device OAuth, Radius `pi-messages` plus discovered browser/device OAuth and dynamic models, OpenAI Chat Completions, OpenAI Responses, Azure OpenAI Responses, Mistral Conversations, Amazon Bedrock ConverseStream, OpenAI Codex Responses SSE/WebSocket plus browser/device OAuth, GitHub Copilot device OAuth and Anthropic/OpenAI Chat/OpenAI Responses delegates, Cloudflare Workers AI, and Cloudflare AI Gateway with independent payload/event/auth/image parity |
 | Agent loop | Functional slice | Streaming, tool calls, parallel execution, steering, follow-up, abort, and session tests using the faux provider; coding-message projection has independent parity for bash/custom/branch/compaction messages |
-| CLI argument contract | Partial | Parser tests and byte-for-byte `--help` oracle against the pinned TypeScript CLI; provider-prefixed and slash-containing model IDs, thinking suffixes, and interactive `/login`/`/logout` for OAuth providers are covered |
+| CLI argument contract | Partial | Parser tests and byte-for-byte `--help` oracle against the pinned TypeScript CLI; provider-prefixed and slash-containing model IDs, thinking suffixes, package install/remove/update/list, and interactive `/login`/`/logout` for OAuth providers are covered |
 | Context, skill, and prompt resources | Functional slice | Global and ancestor `AGENTS.md`/`CLAUDE.md`, `SYSTEM.md`/`APPEND_SYSTEM.md`, recursive `.pi`/`.agents` skills, prompt templates, YAML frontmatter, collisions, manual skill commands, template arguments, trusted project precedence, persisted trust inheritance, CLI/RPC commands, and interactive reload have an independent resource-loading oracle |
+| Package settings and resources | Functional slice | User/project `settings.json`, local/npm/git package identities and managed paths, install/remove/package-update/list commands, package manifests, autoload filters, top-level resource overrides, project precedence, package-sourced skills/prompts, and source metadata have an independent package-resources oracle; config TUI, self-update, and legacy package recovery remain |
 | Session JSONL compatibility | Functional slice | Independent TypeScript/Kotlin JSONL parity covers current/v1/v2 parsing, rewrite, migration, branching, compaction, model/thinking state, custom/tool/bash messages, and explicit empty-leaf context |
 | Built-in coding tools | Functional slice | Read, write, edit, bash, grep, find, and ls behavior tests with path and truncation handling |
 | Interactive terminal UI | Partial | Installed JLine process enters a PTY; initial `@text-file`/`@image` prompts, `/help`, session/model/thinking commands, shell commands, and `/exit` are covered; full-screen upstream UI is not ported |
@@ -90,7 +91,7 @@ features outside that slice remain migration work.
 Verified on July 27, 2026 against source commit
 `cee5ff7520d8828bed9955ef00419e995d1f91e0`:
 
-- `./gradlew clean test installDist`: passed, 268 tests, 0 failures, 0 errors,
+- `./gradlew clean test installDist`: passed, 279 tests, 0 failures, 0 errors,
   and 0 skipped.
 - `./migration/oracle/compare-cli-help.sh`: passed with byte-for-byte CLI help
   parity.
@@ -101,6 +102,11 @@ Verified on July 27, 2026 against source commit
   frontmatter, skills, prompt templates, command expansion, source metadata,
   collision precedence, trusted/untrusted project resources, context files,
   and inherited persisted trust decisions.
+- `./migration/oracle/compare-package-resources.sh`: passed for user/project
+  settings, local package manifests, filters, enabled state, source metadata,
+  project precedence, top-level overrides, configured-package listing, and
+  scope-relative settings mutation, plus npm/git/local source parsing and
+  user/project/temporary managed install paths.
 - `./migration/oracle/compare-anthropic-oauth.sh`: passed with independent
   browser/manual PKCE login, authorization-code and refresh-token JSON
   requests, rotated credentials, five-minute expiry skew, Claude Code Bearer
@@ -354,10 +360,11 @@ Verified on July 27, 2026 against source commit
 
 ## Remaining major gaps
 
-- Port the JavaScript extension runtime, themes, package management,
-  package/extension resource composition, interactive trust selection, and
-  related CLI commands. Core skills, prompt templates, persisted trust lookup,
-  and interactive resource reload are now migrated.
+- Port the JavaScript extension runtime, theme parsing/rendering,
+  extension-provided resource composition, interactive trust selection, the
+  package config selector, self-update, and remaining package recovery paths.
+  Core package manifests/filters/settings, skills, prompt templates, persisted
+  trust lookup, and interactive resource reload are now migrated.
 - Port the full-screen terminal component and rendering model, then compare
   terminal transcripts at multiple widths.
 - Close CLI behavior gaps for options that are parsed or documented but do not

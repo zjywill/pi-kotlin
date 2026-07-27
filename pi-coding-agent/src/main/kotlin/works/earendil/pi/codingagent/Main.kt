@@ -15,6 +15,13 @@ fun main(rawArguments: Array<String>) {
         }
         return
     }
+    val packageCommandExitCode = runPackageCommand(rawArguments.toList())
+    if (packageCommandExitCode != null) {
+        if (packageCommandExitCode != 0) {
+            kotlin.system.exitProcess(packageCommandExitCode)
+        }
+        return
+    }
 
     val arguments = parseArgs(rawArguments.toList())
     when {

@@ -20,6 +20,24 @@ internal suspend fun runModelCatalogCommand(
     if (arguments.firstOrNull() != "update" || "--models" !in arguments) {
         return null
     }
+    val invalid =
+        arguments
+            .drop(1)
+            .firstOrNull { argument ->
+                argument !in
+                    setOf(
+                        "--models",
+                        "--force",
+                        "-a",
+                        "--approve",
+                        "-na",
+                        "--no-approve",
+                    )
+            }
+    if (invalid != null) {
+        errorOutput.println("--models cannot be combined with $invalid")
+        return 1
+    }
 
     val models =
         loadBuiltInModels(

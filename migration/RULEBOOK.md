@@ -39,6 +39,7 @@ through the commit recorded in `sync-state.tsv`.
 - `./migration/oracle/compare-openai-codex-oauth.sh`
 - `./migration/oracle/compare-openrouter-images.sh`
 - `./migration/oracle/compare-openrouter-oauth.sh`
+- `./migration/oracle/compare-package-resources.sh`
 - `./migration/oracle/compare-provider-payloads.sh`
 - `./migration/oracle/compare-provider-stream-events.sh`
 - `./migration/oracle/compare-radius.sh`
