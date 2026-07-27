@@ -7,7 +7,7 @@ ab55c15fbdbca4ce2d5628f1613a3bd30d847868	not-applicable	Merge commit for the pre
 65ff8e7f6db447dcddb1a9c8fd05f081c5cda76a	not-applicable	TypeScript lint-only change
 37bedb7f0b189f2ed0aed4f715c490c791baa01f	covered-by-known-gap	Full-screen editor component is not migrated
 241431c69baf667e09a0eadf8ffc34ee2f643ef0	ported	Summary requests use cacheRetention NONE and unique session IDs; Responses explicit cache mode is supported
-6abb4b06409912ac4f0c58fde0f37fd5f1d4c76a	covered-by-known-gap	llama.cpp extension is not migrated
+6abb4b06409912ac4f0c58fde0f37fd5f1d4c76a	covered-by-known-gap	The partial extension host does not yet support llama.cpp native dependencies and custom provider streaming
 ec1a87e856502f29a55a5762d129bb845f094bd7	not-applicable	protobufjs package override has no JVM equivalent
 24bace27cf308c89707cf8005b4795d873e23f17	ported	Constrained sampling types, strict tools, grammar payloads, and custom-tool streams are implemented
 2d3f555429935ffccdf23d9adae09ef7e0b85ca7	covered-by-known-gap	The upstream clipboard command and its wl-copy/xclip fallback chain are part of the incomplete interactive terminal slice
@@ -27,8 +27,8 @@ a9f5b1c123a4f13457e88522a3be89aeb4823d66	ported	Radius browser discovery is auth
 a3ee1d286e95b501b3d9d7bb26367a0edea46166	covered-by-known-gap	Unavailable scoped-model editing depends on the unported full-screen scoped-model selector
 eafe11fb94fe7fcb89487da621a578278a6a67f1	not-applicable	Vitest eval harness is upstream test tooling; Kotlin uses Gradle tests and independent behavior oracles
 af3b934fa6ba3b6a273dcb1540a3fc391b686410	ported	Claude Opus 5 is inference-profile-only on Bedrock and supports adaptive thinking, xhigh, prompt caching, and preserved validation messages
-2a2b0a39f08923b3563a4f53d4b1cedf130d1391	covered-by-known-gap	The llama.cpp extension and its model cache are part of the missing extension runtime
-518855dd502220d0c6480fb8863e2e7f8799893f	covered-by-known-gap	Custom message renderers and outputPad belong to the missing extension/full-screen rendering surface
+2a2b0a39f08923b3563a4f53d4b1cedf130d1391	covered-by-known-gap	The partial extension host does not yet support llama.cpp native dependencies, model cache, or custom provider streaming
+518855dd502220d0c6480fb8863e2e7f8799893f	covered-by-known-gap	Custom message renderers and outputPad remain outside the partial extension/full-screen rendering surface
 b1c444d956b70e5c437d3d2782b01d157fa05ba3	ported	ModelsStore persists ETags; remote catalogs revalidate with If-None-Match and preserve cached overlays on 304/transient errors
 4cf0a729c4eeef6628b2687cd8238cc6874c9a73	ported	ModelsAuthException appends the underlying cause so OAuth refresh and credential failures retain provider details
 58c0bc2fba29baf5e3bb6268baac00a49d8df1cf	ported	Prompt context discovery skips directory candidates without warnings and falls through to the next supported filename

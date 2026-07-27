@@ -34,6 +34,7 @@ import works.earendil.pi.agent.AgentEvent
 import works.earendil.pi.agent.AgentInitialState
 import works.earendil.pi.agent.AgentOptions
 import works.earendil.pi.agent.AgentThinkingLevel
+import works.earendil.pi.agent.AgentTool
 import works.earendil.pi.agent.QueueMode
 import works.earendil.pi.ai.AssistantMessage
 import works.earendil.pi.ai.Context
@@ -77,6 +78,10 @@ data class RpcRuntimeOptions(
     val promptTemplatePaths: List<String> = emptyList(),
     val noPromptTemplates: Boolean = false,
     val projectTrusted: Boolean? = null,
+    val extensionPaths: List<String> = emptyList(),
+    val noExtensions: Boolean = false,
+    val extensionFlagValues: Map<String, Any> = emptyMap(),
+    val extensionMode: ExtensionMode = ExtensionMode.RPC,
     val noTools: Boolean = false,
     val noBuiltinTools: Boolean = false,
     val tools: List<String>? = null,
@@ -90,6 +95,8 @@ class RpcRuntime(
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val listeners = CopyOnWriteArrayList<(JsonObject) -> Unit>()
+    private val pendingEvents = mutableListOf<JsonObject>()
+    private var initializingExtensions = true
     private var sessionManager = createInitialSession()
     private var steeringMode = QueueMode.ONE_AT_A_TIME
     private var followUpMode = QueueMode.ONE_AT_A_TIME
@@ -98,10 +105,24 @@ class RpcRuntime(
     private var promptJob: Job? = null
     private var bashProcess: Process? = null
     private var promptResources: PromptResources? = null
+    private var extensionHost: ExtensionHost? = null
+    private var extensionContextProvider: () -> JsonObject = { JsonObject(emptyMap()) }
+    private var baseSystemPrompt: String = ""
+    private var availableTools: List<AgentTool> = emptyList()
     private var agent = createAgent()
+
+    init {
+        activateExtensionSession(if (agent.state.messages.isEmpty()) "startup" else "resume")
+        initializingExtensions = false
+    }
 
     fun subscribe(listener: (JsonObject) -> Unit): () -> Unit {
         listeners += listener
+        val pending =
+            synchronized(pendingEvents) {
+                pendingEvents.toList().also { pendingEvents.clear() }
+            }
+        pending.forEach(listener)
         return { listeners -= listener }
     }
 
@@ -296,6 +317,16 @@ class RpcRuntime(
                             val resources = promptResources
                             val commands =
                                 buildList {
+                                    extensionHost?.registrations?.commands.orEmpty().forEach { command ->
+                                        add(
+                                            buildJsonObject {
+                                                put("name", command.invocationName)
+                                                command.description?.let { put("description", it) }
+                                                put("source", "extension")
+                                                put("sourceInfo", sourceInfoJson(command.sourceInfo))
+                                            },
+                                        )
+                                    }
                                     resources?.promptTemplates.orEmpty().forEach { template ->
                                         add(
                                             buildJsonObject {
@@ -331,6 +362,16 @@ class RpcRuntime(
     suspend fun close() {
         promptJob?.cancel()
         bashProcess?.destroyForcibly()
+        runCatching {
+            emitExtensionEvent(
+                host = extensionHost,
+                event = buildJsonObject { put("type", "session_shutdown") },
+                context = extensionContextProvider,
+                onActions = { applyExtensionActions(it) },
+            )
+        }
+        extensionHost?.close()
+        extensionHost = null
         scope.cancel()
     }
 
@@ -341,13 +382,28 @@ class RpcRuntime(
 
     fun reloadResources() {
         ensureIdle("reload")
+        shutdownExtensionSession()
         agent = createAgent()
+        activateExtensionSession("reload")
     }
 
-    private fun handlePrompt(
+    private suspend fun handlePrompt(
         command: JsonObject,
         id: String?,
     ): JsonObject {
+        findExtensionCommand(extensionHost, command.string("message").orEmpty())?.let { (name, args) ->
+            val host = extensionHost
+                ?: return@let
+            val invocation =
+                withContext(Dispatchers.IO) {
+                    host.invokeCommand(name, args, extensionContextProvider())
+                }
+            applyExtensionActions(invocation.actions)
+            if (!agent.state.isStreaming) {
+                emit(buildJsonObject { put("type", "agent_settled") })
+            }
+            return successResponse(id, "prompt")
+        }
         if (agent.state.isStreaming) {
             return when (command.string("streamingBehavior")) {
                 "steer" -> {
@@ -367,6 +423,15 @@ class RpcRuntime(
         promptJob =
             scope.launch {
                 try {
+                    val before =
+                        emitExtensionBeforeAgentStart(
+                            host = extensionHost,
+                            prompt = contentText(prompt.content),
+                            systemPrompt = baseSystemPrompt,
+                            context = extensionContextProvider,
+                            onActions = { applyExtensionActions(it) },
+                        )
+                    agent.state.systemPrompt = before?.systemPrompt ?: baseSystemPrompt
                     agent.prompt(prompt)
                 } finally {
                     emit(buildJsonObject { put("type", "agent_settled") })
@@ -731,6 +796,8 @@ class RpcRuntime(
         }
 
     private fun createAgent(): Agent {
+        extensionHost?.close()
+        extensionHost = null
         val context = sessionManager.buildSessionContext()
         val model =
             resolveModel(context.model?.provider, context.model?.modelId)
@@ -739,7 +806,13 @@ class RpcRuntime(
             (options.thinking ?: parseModelReference(options.provider, options.model).thinking)?.toCoreThinking()
                 ?: context.thinkingLevel.toAgentThinking()
                 ?: AgentThinkingLevel.OFF
-        val tools =
+        val projectTrusted =
+            resolveProjectTrusted(
+                cwd = sessionManager.getCwd(),
+                agentDir = options.agentDir,
+                override = options.projectTrusted,
+            )
+        val initialBuiltInTools =
             createSelectedCodingTools(
                 cwd = sessionManager.getCwd(),
                 noTools = options.noTools,
@@ -758,49 +831,331 @@ class RpcRuntime(
                 noSkills = options.noSkills,
                 promptTemplatePaths = options.promptTemplatePaths,
                 noPromptTemplates = options.noPromptTemplates,
-                projectTrusted =
-                    resolveProjectTrusted(
-                        cwd = sessionManager.getCwd(),
-                        agentDir = options.agentDir,
-                        override = options.projectTrusted,
-                    ),
+                projectTrusted = projectTrusted,
             )
         this.promptResources = promptResources
-        return Agent(
-            AgentOptions(
-                streamFunction =
-                    StreamFunction { requestModel, requestContext: Context, streamOptions: SimpleStreamOptions ->
-                        models.streamSimple(requestModel, requestContext, streamOptions)
-                    },
-                convertToLlm = { messages -> convertCodingMessagesToLlm(messages) },
-                initialState =
-                    AgentInitialState(
-                        systemPrompt = buildCodingSystemPrompt(sessionManager.getCwd(), tools, promptResources),
+        val extensionSources =
+            resolveExtensionSources(
+                cwd = sessionManager.getCwd(),
+                explicitPaths = options.extensionPaths,
+                packageResources = promptResources.packageResources,
+                noExtensions = options.noExtensions,
+            )
+        var createdRef: Agent? = null
+        var selectedTools: List<AgentTool> = initialBuiltInTools
+
+        fun currentExtensionContext(): JsonObject {
+            val state = createdRef?.state
+            return extensionContextJson(
+                cwd = sessionManager.getCwd(),
+                mode = options.extensionMode,
+                projectTrusted = projectTrusted,
+                model = state?.model ?: model,
+                thinkingLevel = (state?.thinkingLevel ?: thinking).toProtocolValue(),
+                systemPrompt = state?.systemPrompt.orEmpty(),
+                activeTools = (state?.tools ?: selectedTools).map(AgentTool::name),
+                allTools = selectedTools,
+                sessionName = sessionManager.getSessionName(),
+                sessionId = sessionManager.getSessionId(),
+                sessionFile = sessionManager.getSessionFile(),
+                isIdle = state?.isStreaming != true,
+                hasPendingMessages = createdRef?.hasQueuedMessages() == true,
+                flagValues = options.extensionFlagValues,
+            )
+        }
+
+        val host =
+            ExtensionHost.start(
+                sources = extensionSources,
+                agentDir = options.agentDir,
+                cwd = sessionManager.getCwd(),
+                mode = options.extensionMode,
+                projectTrusted = projectTrusted,
+                flagValues = options.extensionFlagValues,
+                context =
+                    extensionContextJson(
+                        cwd = sessionManager.getCwd(),
+                        mode = options.extensionMode,
+                        projectTrusted = projectTrusted,
                         model = model,
-                        thinkingLevel = thinking,
-                        tools = tools,
-                        messages = context.messages,
+                        thinkingLevel = thinking.toProtocolValue(),
+                        systemPrompt = "",
+                        activeTools = initialBuiltInTools.map(AgentTool::name),
+                        allTools = initialBuiltInTools,
+                        sessionName = sessionManager.getSessionName(),
+                        sessionId = sessionManager.getSessionId(),
+                        sessionFile = sessionManager.getSessionFile(),
+                        isIdle = true,
+                        hasPendingMessages = false,
+                        flagValues = options.extensionFlagValues,
                     ),
-                steeringMode = steeringMode,
-                followUpMode = followUpMode,
-                streamOptions =
-                    SimpleStreamOptions(
-                        stream =
-                            StreamOptions(
-                                apiKey = options.apiKey,
-                                sessionId = sessionManager.getSessionId(),
-                            ),
-                        reasoning = thinking.toProviderThinking(),
-                    ),
-            ),
-        ).also { created ->
-            created.subscribe { event ->
-                emit(encodeAgentEvent(event))
-                if (event is AgentEvent.MessageEnd) {
-                    sessionManager.appendMessage(event.message)
+                onDiagnostic = ::emitExtensionError,
+                onLog = { line ->
+                    emit(
+                        buildJsonObject {
+                            put("type", "extension_log")
+                            put("message", line)
+                        },
+                    )
+                },
+            )
+        extensionHost = host
+        extensionContextProvider = ::currentExtensionContext
+        val extensionTools =
+            host
+                ?.registrations
+                ?.tools
+                .orEmpty()
+                .map { registration ->
+                    HostedExtensionTool(
+                        registration = registration,
+                        host = requireNotNull(host),
+                        context = ::currentExtensionContext,
+                        onActions = { applyExtensionActions(it) },
+                    )
                 }
+        selectedTools =
+            createSelectedCodingTools(
+                cwd = sessionManager.getCwd(),
+                noTools = options.noTools,
+                noBuiltinTools = options.noBuiltinTools,
+                allowedTools = options.tools,
+                excludedTools = options.excludeTools,
+                extensionTools = extensionTools,
+            )
+        availableTools = selectedTools
+        baseSystemPrompt = buildCodingSystemPrompt(sessionManager.getCwd(), selectedTools, promptResources)
+        val created =
+            Agent(
+                AgentOptions(
+                    streamFunction =
+                        StreamFunction { requestModel, requestContext: Context, streamOptions: SimpleStreamOptions ->
+                            models.streamSimple(requestModel, requestContext, streamOptions)
+                        },
+                    convertToLlm = { messages -> convertCodingMessagesToLlm(messages) },
+                    beforeToolCall = { call ->
+                        emitExtensionBeforeToolCall(
+                            host = host,
+                            context = ::currentExtensionContext,
+                            onActions = { applyExtensionActions(it) },
+                            call = call,
+                        )
+                    },
+                    afterToolCall = { call ->
+                        emitExtensionAfterToolCall(
+                            host = host,
+                            context = ::currentExtensionContext,
+                            onActions = { applyExtensionActions(it) },
+                            call = call,
+                        )
+                    },
+                    initialState =
+                        AgentInitialState(
+                            systemPrompt = baseSystemPrompt,
+                            model = model,
+                            thinkingLevel = thinking,
+                            tools = selectedTools,
+                            messages = context.messages,
+                        ),
+                    steeringMode = steeringMode,
+                    followUpMode = followUpMode,
+                    streamOptions =
+                        SimpleStreamOptions(
+                            stream =
+                                StreamOptions(
+                                    apiKey = options.apiKey,
+                                    sessionId = sessionManager.getSessionId(),
+                                ),
+                            reasoning = thinking.toProviderThinking(),
+                        ),
+                ),
+            )
+        createdRef = created
+        created.subscribe { event ->
+            emitExtensionAgentEvent(
+                host = host,
+                event = event,
+                context = ::currentExtensionContext,
+                onActions = { applyExtensionActions(it) },
+            )
+            emit(encodeAgentEvent(event))
+            if (event is AgentEvent.MessageEnd) {
+                sessionManager.appendMessage(event.message)
             }
         }
+        return created
+    }
+
+    private fun activateExtensionSession(reason: String) {
+        val host = extensionHost ?: return
+        runCatching {
+            val invocation =
+                host.emit(
+                    event =
+                        buildJsonObject {
+                            put("type", "session_start")
+                            put("reason", reason)
+                        },
+                    context = extensionContextProvider(),
+                )
+            applyExtensionActions(invocation.actions)
+        }.onFailure { error ->
+            emitExtensionError(
+                ExtensionDiagnostic(
+                    extensionPath = "<host>",
+                    event = "session_start",
+                    error = error.message ?: error::class.simpleName.orEmpty(),
+                ),
+            )
+        }
+    }
+
+    private fun shutdownExtensionSession() {
+        val host = extensionHost ?: return
+        runCatching {
+            val invocation =
+                host.emit(
+                    event = buildJsonObject { put("type", "session_shutdown") },
+                    context = extensionContextProvider(),
+                )
+            applyExtensionActions(invocation.actions)
+        }.onFailure { error ->
+            emitExtensionError(
+                ExtensionDiagnostic(
+                    extensionPath = "<host>",
+                    event = "session_shutdown",
+                    error = error.message ?: error::class.simpleName.orEmpty(),
+                ),
+            )
+        }
+        host.close()
+        extensionHost = null
+    }
+
+    private fun applyExtensionActions(actions: List<ExtensionAction>) {
+        actions.forEach { action ->
+            when (action.type) {
+                "ui" ->
+                    emit(
+                        JsonObject(
+                            mapOf("type" to JsonPrimitive("extension_ui_request")) + action.data,
+                        ),
+                    )
+
+                "append_entry" ->
+                    action.data.stringValue("customType")?.let { customType ->
+                        sessionManager.appendCustomEntry(customType, action.data["data"])
+                    }
+
+                "set_session_name" ->
+                    action.data.stringValue("name")?.let(sessionManager::appendSessionInfo)
+
+                "set_label" -> {
+                    val entryId = action.data.stringValue("entryId")
+                    if (entryId != null) {
+                        runCatching {
+                            sessionManager.appendLabelChange(entryId, action.data.stringValue("label"))
+                        }.onFailure { error ->
+                            emitExtensionError(
+                                ExtensionDiagnostic(
+                                    extensionPath = "<action>",
+                                    event = "set_label",
+                                    error = error.message ?: error::class.simpleName.orEmpty(),
+                                ),
+                            )
+                        }
+                    }
+                }
+
+                "set_active_tools" -> {
+                    val names =
+                        action.data["toolNames"]
+                            ?.jsonArray
+                            .orEmpty()
+                            .mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+                    agent.state.tools = availableTools.filter { it.name in names }
+                }
+
+                "set_thinking_level" ->
+                    action.data.stringValue("level")
+                        ?.toCoreThinkingLevel()
+                        ?.let { level ->
+                            agent.state.thinkingLevel = level
+                            sessionManager.appendThinkingLevelChange(level.toProtocolValue())
+                        }
+
+                "set_model" -> {
+                    val requested = action.data["model"] as? JsonObject
+                    val provider = requested?.stringValue("provider")
+                    val modelId = requested?.stringValue("id")
+                    val model =
+                        if (provider == null || modelId == null) {
+                            null
+                        } else {
+                            models.getModel(provider, modelId)
+                        }
+                    if (model == null) {
+                        emitExtensionError(
+                            ExtensionDiagnostic(
+                                extensionPath = "<action>",
+                                event = "set_model",
+                                error = "Extension requested an unavailable model",
+                            ),
+                        )
+                    } else {
+                        agent.state.model = model
+                        sessionManager.appendModelChange(model.provider, model.id)
+                    }
+                }
+
+                "send_message" ->
+                    appendExtensionMessage(sessionManager, action.data["message"])
+
+                "send_user_message" -> {
+                    if (!queueExtensionUserMessage(agent, action.data)) {
+                        emitExtensionError(
+                            ExtensionDiagnostic(
+                                extensionPath = "<action>",
+                                event = "send_user_message",
+                                error = "Idle extension-triggered turns are not migrated yet",
+                            ),
+                        )
+                    }
+                }
+
+                "unsupported",
+                "register_provider",
+                "unregister_provider",
+                "new_session",
+                "fork",
+                "navigate_tree",
+                "switch_session",
+                "reload",
+                "compact",
+                "abort",
+                "shutdown",
+                ->
+                    emitExtensionError(
+                        ExtensionDiagnostic(
+                            extensionPath = "<action>",
+                            event = action.type,
+                            error = "Extension action is not available in the Kotlin runtime yet",
+                        ),
+                    )
+            }
+        }
+    }
+
+    private fun emitExtensionError(diagnostic: ExtensionDiagnostic) {
+        emit(
+            buildJsonObject {
+                put("type", "extension_error")
+                put("extensionPath", diagnostic.extensionPath)
+                put("event", diagnostic.event)
+                put("error", diagnostic.error)
+                diagnostic.stack?.let { put("stack", it) }
+            },
+        )
     }
 
     private fun resolveModel(
@@ -828,8 +1183,10 @@ class RpcRuntime(
     }
 
     private fun replaceSession(session: SessionManager) {
+        shutdownExtensionSession()
         sessionManager = session
         agent = createAgent()
+        activateExtensionSession("new")
     }
 
     private fun ensureIdle(command: String) {
@@ -882,6 +1239,14 @@ class RpcRuntime(
         }
 
     private fun emit(value: JsonObject) {
+        if (initializingExtensions && listeners.isEmpty()) {
+            synchronized(pendingEvents) {
+                if (initializingExtensions && listeners.isEmpty()) {
+                    pendingEvents += value
+                    return
+                }
+            }
+        }
         listeners.forEach { listener -> listener(value) }
     }
 
@@ -981,8 +1346,6 @@ private fun String.toAgentThinking(): AgentThinkingLevel? =
         "max" -> AgentThinkingLevel.MAX
         else -> null
     }
-
-private fun AgentThinkingLevel.toProtocolValue(): String = name.lowercase().replace('_', '-')
 
 private fun AgentThinkingLevel.toProviderThinking(): ThinkingLevel? =
     when (this) {

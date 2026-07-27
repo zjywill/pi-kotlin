@@ -17,7 +17,10 @@ import works.earendil.pi.ai.FauxResponseStep
 import works.earendil.pi.ai.InMemoryCredentialStore
 import works.earendil.pi.ai.Models
 import works.earendil.pi.ai.OAuthCredential
+import works.earendil.pi.ai.StopReason
+import works.earendil.pi.ai.ToolResultMessage
 import works.earendil.pi.ai.fauxAssistantMessage
+import works.earendil.pi.ai.fauxToolCall
 import works.earendil.pi.ai.providers.builtInModels
 import works.earendil.pi.ai.providers.githubCopilotProvider
 import kotlin.test.Test
@@ -26,6 +29,136 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class RpcRuntimeTest {
+    @Test
+    fun `extensions contribute rpc commands tools flags and lifecycle hooks`() =
+        runTest {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                nodeAvailable(),
+                "Node.js 22+ is required for extension runtime tests",
+            )
+            val root = Files.createTempDirectory("pi-kotlin-rpc-extension")
+            val extension =
+                root.resolve("extension.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        import { Type } from "typebox";
+                        export default function(pi) {
+                          pi.registerFlag("shout", { type: "boolean", default: false });
+                          pi.registerTool({
+                            name: "extension_echo",
+                            label: "Extension echo",
+                            description: "Echo text from an extension",
+                            parameters: Type.Object({ text: Type.String() }),
+                            async execute(_id, params) {
+                              return {
+                                content: [{ type: "text", text: `echo:${'$'}{params.text}:${'$'}{pi.getFlag("shout")}` }],
+                                details: { extension: true },
+                              };
+                            },
+                          });
+                          pi.registerCommand("mark", {
+                            description: "Mark the session",
+                            async handler(args, ctx) {
+                              pi.appendEntry("mark", { args });
+                              ctx.ui.notify(`marked:${'$'}{args}`, "info");
+                            },
+                          });
+                          pi.on("session_start", (_event, ctx) => {
+                            ctx.ui.setStatus("fixture", "started");
+                          });
+                          pi.on("before_agent_start", event => ({
+                            systemPrompt: event.systemPrompt + "\nextension-system-prompt",
+                          }));
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val provider = FauxProvider()
+            provider.setResponses(
+                listOf(
+                    FauxResponseStep.Factory { context, _, _, _ ->
+                        assertTrue(context.systemPrompt.orEmpty().endsWith("extension-system-prompt"))
+                        assertTrue(context.tools.any { it.name == "extension_echo" })
+                        fauxAssistantMessage(
+                            content =
+                                listOf(
+                                    fauxToolCall(
+                                        name = "extension_echo",
+                                        arguments = buildJsonObject { put("text", "hello") },
+                                        id = "extension-call",
+                                    ),
+                                ),
+                            stopReason = StopReason.TOOL_USE,
+                        )
+                    },
+                    FauxResponseStep.Factory { context, _, _, _ ->
+                        val result =
+                            context.messages
+                                .filterIsInstance<ToolResultMessage>()
+                                .last()
+                        assertEquals("echo:hello:true", works.earendil.pi.ai.contentText(result.content))
+                        fauxAssistantMessage("done")
+                    },
+                ),
+            )
+            val runtime =
+                RpcRuntime(
+                    Models(listOf(provider)),
+                    RpcRuntimeOptions(
+                        cwd = root,
+                        agentDir = Files.createDirectories(root.resolve("agent")),
+                        noSession = true,
+                        provider = "faux",
+                        model = "faux-1",
+                        extensionPaths = listOf(extension.toString()),
+                        extensionFlagValues = mapOf("shout" to true),
+                    ),
+                )
+            val events = mutableListOf<JsonObject>()
+            runtime.subscribe(events::add)
+
+            val commands =
+                requireNotNull(runtime.handle(buildJsonObject { put("type", "get_commands") }))
+                    .data()["commands"]
+                    ?.jsonArray
+                    .orEmpty()
+            assertTrue(
+                commands.any {
+                    it.jsonObject["name"]?.jsonPrimitive?.content == "mark" &&
+                        it.jsonObject["source"]?.jsonPrimitive?.content == "extension"
+                },
+            )
+
+            assertSuccess(
+                runtime.handle(
+                    buildJsonObject {
+                        put("type", "prompt")
+                        put("message", "/mark checkpoint")
+                    },
+                ),
+            )
+            assertTrue(
+                events.any {
+                    it.eventType() == "extension_ui_request" &&
+                        it["method"]?.jsonPrimitive?.content == "notify"
+                },
+            )
+
+            assertSuccess(
+                runtime.handle(
+                    buildJsonObject {
+                        put("type", "prompt")
+                        put("message", "run extension tool")
+                    },
+                ),
+            )
+            runtime.waitForIdle()
+            assertEquals(2, provider.state.callCount)
+            assertTrue(events.any { it.eventType() == "tool_execution_start" && it["toolName"]?.jsonPrimitive?.content == "extension_echo" })
+            runtime.close()
+        }
+
     @Test
     fun `prompt emits lifecycle events and updates rpc state`() =
         runTest {
@@ -81,6 +214,14 @@ class RpcRuntimeTest {
             assertEquals(2, messages.data()["messages"]?.jsonArray?.size)
             runtime.close()
         }
+
+    private fun nodeAvailable(): Boolean =
+        runCatching {
+            val process = ProcessBuilder("node", "--version").start()
+            process.waitFor()
+            process.exitValue() == 0 &&
+                process.inputStream.bufferedReader().readText().trim().removePrefix("v").substringBefore('.').toInt() >= 22
+        }.getOrDefault(false)
 
     @Test
     fun `startup options configure prompt context tools and thinking`() =

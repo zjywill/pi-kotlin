@@ -21,6 +21,7 @@ Run the available comparisons from the Kotlin repository:
 ./migration/oracle/compare-anthropic-oauth.sh
 ./migration/oracle/compare-cli-help.sh
 ./migration/oracle/compare-coding-message-projection.sh
+./migration/oracle/compare-extension-runtime.sh
 ./migration/oracle/compare-github-copilot.sh
 ./migration/oracle/compare-kimi-coding-oauth.sh
 ./migration/oracle/compare-model-catalog-runtime.sh
@@ -87,6 +88,13 @@ manifests, package filters, enabled/disabled resource state, source metadata,
 project precedence, top-level overrides, configured-package listing, and
 scope-relative settings mutation. It also compares documented npm/git/local
 source parsing and user/project/temporary managed install paths.
+
+The extension-runtime comparison loads the same TypeScript fixture through the
+upstream jiti loader and the Kotlin distribution's Node JSONL host. It compares
+common pi/TypeBox imports, tool schemas and execution updates, commands, flags,
+static provider registration metadata, lifecycle actions, system-prompt
+replacement, tool-call blocking, tool-result chaining, and
+`resources_discover` event results.
 
 The model catalog runtime comparison covers bundled-versus-remote timestamp
 selection, a newer persisted overlay restored without network access, and

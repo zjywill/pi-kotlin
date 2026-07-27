@@ -168,11 +168,19 @@ internal fun createSelectedCodingTools(
     noBuiltinTools: Boolean,
     allowedTools: List<String>?,
     excludedTools: List<String>?,
+    extensionTools: List<AgentTool> = emptyList(),
 ): List<AgentTool> {
-    if (noTools || noBuiltinTools) {
+    if (noTools) {
         return emptyList()
     }
-    return createCodingTools(cwd).filter { tool ->
+    val extensionNames = extensionTools.mapTo(mutableSetOf(), AgentTool::name)
+    val builtInTools =
+        if (noBuiltinTools) {
+            emptyList()
+        } else {
+            createCodingTools(cwd).filterNot { it.name in extensionNames }
+        }
+    return (builtInTools + extensionTools).filter { tool ->
         (allowedTools == null || tool.name in allowedTools) &&
             (excludedTools == null || tool.name !in excludedTools)
     }

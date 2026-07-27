@@ -2,6 +2,9 @@
   "name": "pi-kotlin-package-smoke",
   "version": "1.0.0",
   "pi": {
+    "extensions": [
+      "extensions/main.ts"
+    ],
     "skills": [
       "skills/smoke/SKILL.md"
     ],

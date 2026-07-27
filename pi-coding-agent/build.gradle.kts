@@ -55,3 +55,10 @@ tasks.register<JavaExec>("packageResourcesOracle") {
     classpath = sourceSets["test"].runtimeClasspath
     mainClass = "works.earendil.pi.codingagent.PackageResourcesOracleKt"
 }
+
+tasks.register<JavaExec>("extensionRuntimeOracle") {
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass = "works.earendil.pi.codingagent.ExtensionRuntimeOracleKt"
+    args(rootProject.file("migration/fixtures/extension-runtime/basic.ts").absolutePath)
+}

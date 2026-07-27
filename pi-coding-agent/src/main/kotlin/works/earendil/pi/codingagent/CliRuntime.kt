@@ -5,10 +5,15 @@ import java.nio.file.Files
 import java.nio.file.Path
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.put
 import works.earendil.pi.agent.Agent
 import works.earendil.pi.agent.AgentEvent
 import works.earendil.pi.agent.AgentInitialState
 import works.earendil.pi.agent.AgentOptions
+import works.earendil.pi.agent.AgentTool
 import works.earendil.pi.ai.AssistantMessage
 import works.earendil.pi.ai.Context
 import works.earendil.pi.ai.Model
@@ -77,14 +82,6 @@ class CliRuntime(
                     return 1
                 }
         val runtimeCwd = sessionManager.getCwd()
-        val tools =
-            createSelectedCodingTools(
-                cwd = runtimeCwd,
-                noTools = args.noTools,
-                noBuiltinTools = args.noBuiltinTools,
-                allowedTools = args.tools,
-                excludedTools = args.excludeTools,
-            )
         val projectTrusted =
             try {
                 resolveProjectTrusted(
@@ -112,6 +109,163 @@ class CliRuntime(
             )
         val requestedThinking =
             args.thinking ?: parseModelReference(args.provider, args.model).thinking
+        val initialThinking =
+            (requestedThinking ?: initialContext.thinkingLevel.toCliThinkingLevel())
+                .toAgentThinkingLevel()
+        val initialBuiltInTools =
+            createSelectedCodingTools(
+                cwd = runtimeCwd,
+                noTools = args.noTools,
+                noBuiltinTools = args.noBuiltinTools,
+                allowedTools = args.tools,
+                excludedTools = args.excludeTools,
+            )
+        val extensionSources =
+            resolveExtensionSources(
+                cwd = runtimeCwd,
+                explicitPaths = args.extensions,
+                packageResources = promptResources.packageResources,
+                noExtensions = args.noExtensions,
+            )
+        var agentRef: Agent? = null
+        var selectedTools: List<AgentTool> = initialBuiltInTools
+        var extensionHost: ExtensionHost? = null
+
+        fun currentExtensionContext(): JsonObject {
+            val state = agentRef?.state
+            return extensionContextJson(
+                cwd = runtimeCwd,
+                mode = ExtensionMode.PRINT,
+                projectTrusted = projectTrusted,
+                model = state?.model ?: model,
+                thinkingLevel = (state?.thinkingLevel ?: initialThinking).toProtocolValue(),
+                systemPrompt = state?.systemPrompt.orEmpty(),
+                activeTools = (state?.tools ?: selectedTools).map(AgentTool::name),
+                allTools = selectedTools,
+                sessionName = sessionManager.getSessionName(),
+                sessionId = sessionManager.getSessionId(),
+                sessionFile = sessionManager.getSessionFile(),
+                isIdle = state?.isStreaming != true,
+                hasPendingMessages = agentRef?.hasQueuedMessages() == true,
+                flagValues = args.unknownFlags,
+            )
+        }
+
+        suspend fun applyExtensionActions(actions: List<ExtensionAction>) {
+            actions.forEach { action ->
+                when (action.type) {
+                    "ui" -> {
+                        if (action.data.stringValue("method") == "notify") {
+                            stderr.println(action.data.stringValue("message").orEmpty())
+                        }
+                    }
+
+                    "append_entry" ->
+                        action.data.stringValue("customType")?.let { customType ->
+                            sessionManager.appendCustomEntry(customType, action.data["data"])
+                        }
+
+                    "set_session_name" ->
+                        action.data.stringValue("name")?.let(sessionManager::appendSessionInfo)
+
+                    "set_label" -> {
+                        val entryId = action.data.stringValue("entryId")
+                        if (entryId != null) {
+                            runCatching {
+                                sessionManager.appendLabelChange(entryId, action.data.stringValue("label"))
+                            }.onFailure { error ->
+                                stderr.println("Warning: Extension set_label failed: ${error.message}")
+                            }
+                        }
+                    }
+
+                    "set_active_tools" -> {
+                        val names =
+                            action.data["toolNames"]
+                                ?.let { value -> value as? kotlinx.serialization.json.JsonArray }
+                                .orEmpty()
+                                .mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+                        agentRef?.state?.tools = selectedTools.filter { it.name in names }
+                    }
+
+                    "set_thinking_level" ->
+                        action.data.stringValue("level")
+                            ?.toCoreThinkingLevel()
+                            ?.let { level ->
+                                agentRef?.state?.thinkingLevel = level
+                                sessionManager.appendThinkingLevelChange(level.toProtocolValue())
+                            }
+
+                    "send_message" ->
+                        appendExtensionMessage(sessionManager, action.data["message"])
+
+                    "send_user_message" ->
+                        queueExtensionUserMessage(agentRef, action.data)
+
+                    "unsupported" ->
+                        stderr.println(
+                            "Warning: Extension UI method ${action.data.stringValue("method").orEmpty()} " +
+                                "is not available in print mode.",
+                        )
+                }
+            }
+        }
+
+        extensionHost =
+            ExtensionHost.start(
+                sources = extensionSources,
+                agentDir = agentDir,
+                cwd = runtimeCwd,
+                mode = ExtensionMode.PRINT,
+                projectTrusted = projectTrusted,
+                flagValues = args.unknownFlags,
+                context =
+                    extensionContextJson(
+                        cwd = runtimeCwd,
+                        mode = ExtensionMode.PRINT,
+                        projectTrusted = projectTrusted,
+                        model = model,
+                        thinkingLevel = initialThinking.toProtocolValue(),
+                        systemPrompt = "",
+                        activeTools = initialBuiltInTools.map(AgentTool::name),
+                        allTools = initialBuiltInTools,
+                        sessionName = sessionManager.getSessionName(),
+                        sessionId = sessionManager.getSessionId(),
+                        sessionFile = sessionManager.getSessionFile(),
+                        isIdle = true,
+                        hasPendingMessages = false,
+                        flagValues = args.unknownFlags,
+                    ),
+                onDiagnostic = { diagnostic ->
+                    stderr.println(
+                        "Warning: Extension ${diagnostic.extensionPath} ${diagnostic.event}: ${diagnostic.error}",
+                    )
+                },
+                onLog = stderr::println,
+            )
+        val extensionTools =
+            extensionHost
+                ?.registrations
+                ?.tools
+                .orEmpty()
+                .map { registration ->
+                    HostedExtensionTool(
+                        registration = registration,
+                        host = requireNotNull(extensionHost),
+                        context = ::currentExtensionContext,
+                        onActions = ::applyExtensionActions,
+                    )
+                }
+        selectedTools =
+            createSelectedCodingTools(
+                cwd = runtimeCwd,
+                noTools = args.noTools,
+                noBuiltinTools = args.noBuiltinTools,
+                allowedTools = args.tools,
+                excludedTools = args.excludeTools,
+                extensionTools = extensionTools,
+            )
+        val baseSystemPrompt = buildCodingSystemPrompt(runtimeCwd, selectedTools, promptResources)
         val agent =
             Agent(
                 AgentOptions(
@@ -120,35 +274,54 @@ class CliRuntime(
                             models.streamSimple(requestModel, context, options)
                         },
                     convertToLlm = { messages -> convertCodingMessagesToLlm(messages) },
+                    beforeToolCall = { call ->
+                        emitExtensionBeforeToolCall(
+                            host = extensionHost,
+                            context = ::currentExtensionContext,
+                            onActions = ::applyExtensionActions,
+                            call = call,
+                        )
+                    },
+                    afterToolCall = { call ->
+                        emitExtensionAfterToolCall(
+                            host = extensionHost,
+                            context = ::currentExtensionContext,
+                            onActions = ::applyExtensionActions,
+                            call = call,
+                        )
+                    },
                     initialState =
                         AgentInitialState(
-                            systemPrompt = buildCodingSystemPrompt(runtimeCwd, tools, promptResources),
+                            systemPrompt = baseSystemPrompt,
                             model = model,
-                            thinkingLevel =
-                                (requestedThinking ?: initialContext.thinkingLevel.toCliThinkingLevel())
-                                    .toAgentThinkingLevel(),
-                            tools = tools,
+                            thinkingLevel = initialThinking,
+                            tools = selectedTools,
                             messages = initialContext.messages,
                         ),
                     streamOptions =
                         SimpleStreamOptions(
                             stream =
                                 StreamOptions(
-                                    apiKey = args.apiKey,
-                                    sessionId = sessionManager.getSessionId(),
-                                ),
-                            reasoning =
-                                (requestedThinking ?: initialContext.thinkingLevel.toCliThinkingLevel())
-                                    .toProviderThinkingLevel(),
+                                apiKey = args.apiKey,
+                                sessionId = sessionManager.getSessionId(),
+                            ),
+                            reasoning = initialThinking.toProviderThinkingLevel(),
                         ),
                 ),
             )
+        agentRef = agent
         if (args.mode == OutputMode.JSON) {
             sessionManager.getHeader()?.let { header ->
                 stdout.println(protocolJson.encodeToString(JsonObject.serializer(), encodeEntry(header)))
             }
         }
         agent.subscribe { event ->
+            emitExtensionAgentEvent(
+                host = extensionHost,
+                event = event,
+                context = ::currentExtensionContext,
+                onActions = ::applyExtensionActions,
+            )
             if (args.mode == OutputMode.JSON) {
                 stdout.println(protocolJson.encodeToString(JsonObject.serializer(), encodeAgentEvent(event)))
             }
@@ -157,36 +330,82 @@ class CliRuntime(
             }
         }
 
-        val prompts =
-            try {
-                buildInitialPrompts(
-                    args = args,
-                    cwd = runtimeCwd,
-                    stdinContent = stdinContent,
-                    resources = promptResources,
-                    onWarning = { stderr.println("Warning: $it") },
+        try {
+            emitExtensionEvent(
+                host = extensionHost,
+                event =
+                    buildJsonObject {
+                        put("type", "session_start")
+                        put("reason", if (initialContext.messages.isEmpty()) "startup" else "resume")
+                    },
+                context = ::currentExtensionContext,
+                onActions = ::applyExtensionActions,
+            )
+            val prompts =
+                try {
+                    buildInitialPrompts(
+                        args = args,
+                        cwd = runtimeCwd,
+                        stdinContent = stdinContent,
+                        resources = promptResources,
+                        onWarning = { stderr.println("Warning: $it") },
+                    )
+                } catch (error: Exception) {
+                    stderr.println("Error: ${error.message}")
+                    return 1
+                }
+            if (prompts.isEmpty()) {
+                stderr.println("Error: A prompt is required in print mode.")
+                return 1
+            }
+            prompts.forEach { prompt ->
+                val promptText = works.earendil.pi.ai.contentText(prompt.content)
+                val extensionCommand = findExtensionCommand(extensionHost, promptText)
+                if (extensionCommand != null) {
+                    val (name, commandArgs) = extensionCommand
+                    val invocation =
+                        requireNotNull(extensionHost).invokeCommand(
+                            name = name,
+                            args = commandArgs,
+                            context = currentExtensionContext(),
+                        )
+                    applyExtensionActions(invocation.actions)
+                    return@forEach
+                }
+                val before =
+                    emitExtensionBeforeAgentStart(
+                        host = extensionHost,
+                        prompt = promptText,
+                        systemPrompt = baseSystemPrompt,
+                        context = ::currentExtensionContext,
+                        onActions = ::applyExtensionActions,
+                    )
+                agent.state.systemPrompt = before?.systemPrompt ?: baseSystemPrompt
+                agent.prompt(prompt)
+            }
+            val finalMessage = agent.state.messages.filterIsInstance<AssistantMessage>().lastOrNull()
+            if (args.mode != OutputMode.JSON && finalMessage != null) {
+                if (finalMessage.errorMessage != null) {
+                    stderr.println(finalMessage.errorMessage)
+                    return 1
+                }
+                val text = finalMessage.content.filterIsInstance<TextContent>().joinToString("") { it.text }
+                if (text.isNotEmpty()) {
+                    stdout.println(text)
+                }
+            }
+            return if (finalMessage?.errorMessage == null) 0 else 1
+        } finally {
+            runCatching {
+                emitExtensionEvent(
+                    host = extensionHost,
+                    event = buildJsonObject { put("type", "session_shutdown") },
+                    context = ::currentExtensionContext,
+                    onActions = ::applyExtensionActions,
                 )
-            } catch (error: Exception) {
-                stderr.println("Error: ${error.message}")
-                return 1
             }
-        if (prompts.isEmpty()) {
-            stderr.println("Error: A prompt is required in print mode.")
-            return 1
+            extensionHost?.close()
         }
-        prompts.forEach { prompt -> agent.prompt(prompt) }
-        val finalMessage = agent.state.messages.filterIsInstance<AssistantMessage>().lastOrNull()
-        if (args.mode != OutputMode.JSON && finalMessage != null) {
-            if (finalMessage.errorMessage != null) {
-                stderr.println(finalMessage.errorMessage)
-                return 1
-            }
-            val text = finalMessage.content.filterIsInstance<TextContent>().joinToString("") { it.text }
-            if (text.isNotEmpty()) {
-                stdout.println(text)
-            }
-        }
-        return if (finalMessage?.errorMessage == null) 0 else 1
     }
 
     private suspend fun listModels(query: String?) {

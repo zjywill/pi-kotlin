@@ -5,18 +5,23 @@ import java.io.StringWriter
 import java.nio.file.Files
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import works.earendil.pi.ai.BashExecutionMessage
 import works.earendil.pi.ai.FauxProvider
 import works.earendil.pi.ai.FauxResponseStep
 import works.earendil.pi.ai.InMemoryCredentialStore
 import works.earendil.pi.ai.Models
 import works.earendil.pi.ai.OAuthCredential
+import works.earendil.pi.ai.StopReason
+import works.earendil.pi.ai.ToolResultMessage
 import works.earendil.pi.ai.UserMessage
 import works.earendil.pi.ai.contentText
 import works.earendil.pi.ai.fauxAssistantMessage
+import works.earendil.pi.ai.fauxToolCall
 import works.earendil.pi.ai.providers.builtInModels
 import works.earendil.pi.ai.providers.githubCopilotProvider
 import works.earendil.pi.codingagent.session.NewSessionOptions
@@ -28,6 +33,99 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class CliRuntimeTest {
+    @Test
+    fun `print mode loads extension tools flags and before agent hooks`() =
+        runTest {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                nodeAvailable(),
+                "Node.js 22+ is required for extension runtime tests",
+            )
+            val root = Files.createTempDirectory("pi-kotlin-cli-extension")
+            val extension =
+                root.resolve("extension.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        import { Type } from "typebox";
+                        export default function(pi) {
+                          pi.registerFlag("shout", { type: "boolean", default: false });
+                          pi.registerTool({
+                            name: "extension_echo",
+                            label: "Extension echo",
+                            description: "Echo text from an extension",
+                            parameters: Type.Object({ text: Type.String() }),
+                            async execute(_id, params) {
+                              return {
+                                content: [{ type: "text", text: `echo:${'$'}{params.text}:${'$'}{pi.getFlag("shout")}` }],
+                              };
+                            },
+                          });
+                          pi.on("before_agent_start", event => ({
+                            systemPrompt: event.systemPrompt + "\ncli-extension-prompt",
+                          }));
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val provider = FauxProvider()
+            provider.setResponses(
+                listOf(
+                    FauxResponseStep.Factory { context, _, _, _ ->
+                        assertTrue(context.systemPrompt.orEmpty().endsWith("cli-extension-prompt"))
+                        assertTrue(context.tools.any { it.name == "extension_echo" })
+                        fauxAssistantMessage(
+                            content =
+                                listOf(
+                                    fauxToolCall(
+                                        name = "extension_echo",
+                                        arguments = buildJsonObject { put("text", "hello") },
+                                        id = "extension-call",
+                                    ),
+                                ),
+                            stopReason = StopReason.TOOL_USE,
+                        )
+                    },
+                    FauxResponseStep.Factory { context, _, _, _ ->
+                        val result = context.messages.filterIsInstance<ToolResultMessage>().last()
+                        assertEquals("echo:hello:true", contentText(result.content))
+                        fauxAssistantMessage("extension complete")
+                    },
+                ),
+            )
+            val stdout = StringWriter()
+            val stderr = StringWriter()
+            val runtime =
+                CliRuntime(
+                    models = Models(listOf(provider)),
+                    cwd = root,
+                    agentDir = Files.createDirectories(root.resolve("agent")),
+                    stdout = PrintWriter(stdout, true),
+                    stderr = PrintWriter(stderr, true),
+                )
+
+            val exit =
+                runtime.run(
+                    parseArgs(
+                        listOf(
+                            "--provider",
+                            "faux",
+                            "--model",
+                            "faux-1",
+                            "--no-session",
+                            "--extension",
+                            extension.toString(),
+                            "--shout",
+                            "-p",
+                            "run extension",
+                        ),
+                    ),
+                )
+
+            assertEquals(0, exit)
+            assertEquals("extension complete\n", stdout.toString())
+            assertEquals("", stderr.toString())
+        }
+
     @Test
     fun `print mode runs a provider and emits text`() =
         runTest {
@@ -62,6 +160,14 @@ class CliRuntimeTest {
             assertEquals("ok\n", stdout.toString())
             assertEquals("", stderr.toString())
         }
+
+    private fun nodeAvailable(): Boolean =
+        runCatching {
+            val process = ProcessBuilder("node", "--version").start()
+            process.waitFor()
+            process.exitValue() == 0 &&
+                process.inputStream.bufferedReader().readText().trim().removePrefix("v").substringBefore('.').toInt() >= 22
+        }.getOrDefault(false)
 
     @Test
     fun `list models supports fuzzy provider model queries`() =

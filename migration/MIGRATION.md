@@ -77,6 +77,7 @@ features outside that slice remain migration work.
 | CLI argument contract | Partial | Parser tests and byte-for-byte `--help` oracle against the pinned TypeScript CLI; provider-prefixed and slash-containing model IDs, thinking suffixes, package install/remove/update/list, and interactive `/login`/`/logout` for OAuth providers are covered |
 | Context, skill, and prompt resources | Functional slice | Global and ancestor `AGENTS.md`/`CLAUDE.md`, `SYSTEM.md`/`APPEND_SYSTEM.md`, recursive `.pi`/`.agents` skills, prompt templates, YAML frontmatter, collisions, manual skill commands, template arguments, trusted project precedence, persisted trust inheritance, CLI/RPC commands, and interactive reload have an independent resource-loading oracle |
 | Package settings and resources | Functional slice | User/project `settings.json`, local/npm/git package identities and managed paths, install/remove/package-update/list commands, package manifests, autoload filters, top-level resource overrides, project precedence, package-sourced skills/prompts, and source metadata have an independent package-resources oracle; config TUI, self-update, and legacy package recovery remain |
+| JavaScript/TypeScript extensions | Partial | A bundled Node 22 JSONL host loads `.js`/`.ts` extensions and common pi/TypeBox virtual imports; tools, commands, flags, package discovery, lifecycle/tool hooks, command actions, and RPC fire-and-forget UI events run through CLI/RPC/interactive paths with an independent extension-runtime oracle. Full jiti syntax/import compatibility, blocking UI dialogs, shortcuts/renderers, extension resource composition, project trust handlers, live provider registration, and dynamic registration refresh remain |
 | Session JSONL compatibility | Functional slice | Independent TypeScript/Kotlin JSONL parity covers current/v1/v2 parsing, rewrite, migration, branching, compaction, model/thinking state, custom/tool/bash messages, and explicit empty-leaf context |
 | Built-in coding tools | Functional slice | Read, write, edit, bash, grep, find, and ls behavior tests with path and truncation handling |
 | Interactive terminal UI | Partial | Installed JLine process enters a PTY; initial `@text-file`/`@image` prompts, `/help`, session/model/thinking commands, shell commands, and `/exit` are covered; full-screen upstream UI is not ported |
@@ -91,7 +92,7 @@ features outside that slice remain migration work.
 Verified on July 27, 2026 against source commit
 `cee5ff7520d8828bed9955ef00419e995d1f91e0`:
 
-- `./gradlew clean test installDist`: passed, 279 tests, 0 failures, 0 errors,
+- `./gradlew clean test installDist`: passed, 282 tests, 0 failures, 0 errors,
   and 0 skipped.
 - `./migration/oracle/compare-cli-help.sh`: passed with byte-for-byte CLI help
   parity.
@@ -107,6 +108,15 @@ Verified on July 27, 2026 against source commit
   project precedence, top-level overrides, configured-package listing, and
   scope-relative settings mutation, plus npm/git/local source parsing and
   user/project/temporary managed install paths.
+- `./migration/oracle/compare-extension-runtime.sh`: passed for TypeScript
+  module loading, common virtual imports, tool/command/flag/provider
+  registration metadata, tool execution and partial updates, command/UI
+  actions, lifecycle hooks, tool-call blocking, tool-result chaining, and
+  resource-discovery event results.
+- The installed `bin/pi` loaded a TypeScript extension from an installed local
+  package, exposed `package-extension-smoke` before package prompt/skill
+  commands in RPC `get_commands`, executed the slash command, emitted its
+  `extension_ui_request`, and returned a successful prompt response.
 - `./migration/oracle/compare-anthropic-oauth.sh`: passed with independent
   browser/manual PKCE login, authorization-code and refresh-token JSON
   requests, rotated credentials, five-minute expiry skew, Claude Code Bearer
@@ -360,11 +370,14 @@ Verified on July 27, 2026 against source commit
 
 ## Remaining major gaps
 
-- Port the JavaScript extension runtime, theme parsing/rendering,
-  extension-provided resource composition, interactive trust selection, the
-  package config selector, self-update, and remaining package recovery paths.
-  Core package manifests/filters/settings, skills, prompt templates, persisted
-  trust lookup, and interactive resource reload are now migrated.
+- Finish extension parity beyond the migrated Node host: jiti-complete
+  transpilation/imports, blocking interactive/RPC dialogs, shortcuts and custom
+  renderers, extension-provided resource composition, `project_trust`, live
+  provider registration, and dynamic registration refresh. Theme
+  parsing/rendering, interactive trust selection, the package config selector,
+  self-update, and remaining package recovery paths also remain. Core package
+  manifests/filters/settings, skills, prompt templates, persisted trust lookup,
+  and interactive resource reload are migrated.
 - Port the full-screen terminal component and rendering model, then compare
   terminal transcripts at multiple widths.
 - Close CLI behavior gaps for options that are parsed or documented but do not
