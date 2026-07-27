@@ -95,8 +95,11 @@ common pi/TypeBox imports, tool schemas and execution updates, commands, flags,
 static provider registration metadata, lifecycle actions, system-prompt
 replacement, tool-call blocking, tool-result chaining, and
 `project_trust` decisions, `resources_discover` composition, and serializable
-provider model validation. Kotlin runtime tests additionally cover
-registration, model selection, and invalid re-registration rollback.
+provider model validation. Command-time tool, command, and flag registrations
+are compared after the host refreshes its live registration metadata. Kotlin
+runtime tests additionally cover registration, model selection, interactive
+trust choices, immediate active-tool refresh, and invalid re-registration
+rollback.
 
 The model catalog runtime comparison covers bundled-versus-remote timestamp
 selection, a newer persisted overlay restored without network access, and

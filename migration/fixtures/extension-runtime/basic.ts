@@ -55,6 +55,29 @@ export default function extensionRuntimeFixture(pi: ExtensionAPI) {
 		async handler(args, ctx) {
 			pi.appendEntry("fixture-command", { args });
 			ctx.ui.notify(`recorded:${args}`, "info");
+			pi.registerTool(
+				defineTool({
+					name: "dynamic_echo",
+					label: "Dynamic echo",
+					description: "Registered from a command",
+					parameters: Type.Object({ text: Type.String() }),
+					async execute(_toolCallId, params) {
+						return {
+							content: [{ type: "text", text: `dynamic:${params.text}` }],
+							details: {},
+						};
+					},
+				}),
+			);
+			pi.registerCommand("dynamic-record", {
+				description: "Dynamically registered command",
+				handler() {},
+			});
+			pi.registerFlag("dynamic-flag", {
+				type: "boolean",
+				description: "Dynamically registered flag",
+				default: true,
+			});
 		},
 	});
 

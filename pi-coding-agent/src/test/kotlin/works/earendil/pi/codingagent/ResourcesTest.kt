@@ -199,6 +199,46 @@ class ResourcesTest {
     }
 
     @Test
+    fun `interactive project trust options support parent and session-only decisions`() {
+        val root = Files.createTempDirectory("pi-kotlin-trust-options")
+        val agentDir = Files.createDirectories(root.resolve("agent"))
+        val parent = Files.createDirectories(root.resolve("workspace"))
+        val project = Files.createDirectories(parent.resolve("project"))
+        Files.createDirectories(project.resolve(".pi"))
+        Files.writeString(project.resolve(".pi").resolve("settings.json"), "{}")
+        var labels = emptyList<String>()
+
+        val trusted =
+            resolveProjectTrusted(
+                cwd = project,
+                agentDir = agentDir,
+                override = null,
+                onTrustPrompt = { _, options ->
+                    labels = options.map(ProjectTrustOption::label)
+                    options.first { it.savedPath == canonicalPath(parent) }
+                },
+            )
+
+        assertTrue(trusted)
+        assertEquals(
+            listOf(
+                "Trust",
+                "Trust parent folder (${canonicalPath(parent)})",
+                "Trust (this session only)",
+                "Do not trust",
+                "Do not trust (this session only)",
+            ),
+            labels,
+        )
+        assertEquals(canonicalPath(parent), ProjectTrustStore(agentDir).getEntry(project)?.path)
+
+        val sessionOnly =
+            projectTrustOptions(project).first { it.label == "Do not trust (this session only)" }
+        assertFalse(sessionOnly.trusted)
+        assertTrue(sessionOnly.updates.isEmpty())
+    }
+
+    @Test
     fun `project trust accepts legacy null entries`() {
         val root = Files.createTempDirectory("pi-kotlin-trust-null")
         val agentDir = Files.createDirectories(root.resolve("agent"))

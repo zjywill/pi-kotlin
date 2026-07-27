@@ -271,11 +271,38 @@ internal class ExtensionHost private constructor(
             .orEmpty()
             .mapNotNull(::parseDiagnostic)
             .forEach(onDiagnostic)
+        val registrationsChanged = refreshRegistrationsIfNeeded(response)
+        val actions =
+            buildList {
+                addAll(parseActions(response))
+                if (registrationsChanged) {
+                    add(
+                        ExtensionAction(
+                            type = "registrations_changed",
+                            data = buildJsonObject { put("version", registrations.version) },
+                        ),
+                    )
+                }
+            }
         return ExtensionInvocation(
             result = response["result"]?.takeUnless { it is JsonNull },
-            actions = parseActions(response),
+            actions = actions,
             resources = response["resources"]?.let(::parseResourcePaths),
         )
+    }
+
+    private fun refreshRegistrationsIfNeeded(response: JsonObject): Boolean {
+        val responseVersion =
+            response["registrationVersion"]
+                ?.jsonPrimitive
+                ?.contentOrNull
+                ?.toIntOrNull()
+                ?: return false
+        if (responseVersion == registrations.version) {
+            return false
+        }
+        refreshRegistrations()
+        return true
     }
 
     private fun parseActions(response: JsonObject): List<ExtensionAction> =

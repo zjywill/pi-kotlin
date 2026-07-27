@@ -210,6 +210,79 @@ class CliRuntimeTest {
         }
 
     @Test
+    fun `session start registrations refresh print mode tools before the first prompt`() =
+        runTest {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                nodeAvailable(),
+                "Node.js 22+ is required for extension runtime tests",
+            )
+            val root = Files.createTempDirectory("pi-kotlin-cli-dynamic-tool")
+            val extension =
+                root.resolve("dynamic.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        import { Type } from "typebox";
+                        export default function(pi) {
+                          pi.on("session_start", () => {
+                            pi.registerTool({
+                              name: "dynamic_tool",
+                              label: "Dynamic tool",
+                              description: "Registered during session_start",
+                              parameters: Type.Object({}),
+                              async execute() {
+                                return { content: [], details: {} };
+                              },
+                            });
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val provider = FauxProvider()
+            provider.setResponses(
+                listOf(
+                    FauxResponseStep.Factory { context, _, _, _ ->
+                        assertTrue(context.tools.any { it.name == "dynamic_tool" })
+                        assertTrue(context.systemPrompt.orEmpty().contains("dynamic_tool"))
+                        fauxAssistantMessage("dynamic tool ready")
+                    },
+                ),
+            )
+            val stdout = StringWriter()
+            val stderr = StringWriter()
+            val runtime =
+                CliRuntime(
+                    models = Models(listOf(provider)),
+                    cwd = root,
+                    agentDir = Files.createDirectories(root.resolve("agent")),
+                    stdout = PrintWriter(stdout, true),
+                    stderr = PrintWriter(stderr, true),
+                )
+
+            val exit =
+                runtime.run(
+                    parseArgs(
+                        listOf(
+                            "--provider",
+                            "faux",
+                            "--model",
+                            "faux-1",
+                            "--no-session",
+                            "--extension",
+                            extension.toString(),
+                            "-p",
+                            "hello",
+                        ),
+                    ),
+                )
+
+            assertEquals(0, exit, stderr.toString())
+            assertEquals("dynamic tool ready\n", stdout.toString())
+            assertEquals("", stderr.toString())
+        }
+
+    @Test
     fun `print mode runs a provider and emits text`() =
         runTest {
             val provider = FauxProvider()

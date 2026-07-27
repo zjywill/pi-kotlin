@@ -25,6 +25,7 @@ internal fun bootstrapExtensions(
     onDiagnostic: (ExtensionDiagnostic) -> Unit = {},
     onLog: (String) -> Unit = {},
     onBootstrapActions: (List<ExtensionAction>) -> Unit = {},
+    onProjectTrustPrompt: ((Path, List<ProjectTrustOption>) -> ProjectTrustOption?)? = null,
 ): ExtensionBootstrapResult {
     val normalizedCwd = cwd.toAbsolutePath().normalize()
     val requiresDecision =
@@ -36,6 +37,7 @@ internal fun bootstrapExtensions(
                 agentDir = agentDir,
                 override = trustOverride,
                 homeDir = homeDir,
+                onTrustPrompt = onProjectTrustPrompt,
             )
         val resources =
             resolvePackageResources(
@@ -106,6 +108,7 @@ internal fun bootstrapExtensions(
             extensionHost = preTrustHost,
             extensionContext = context(false),
             onExtensionActions = onBootstrapActions,
+            onTrustPrompt = onProjectTrustPrompt,
         )
     val finalResources =
         if (trusted) {

@@ -93,6 +93,9 @@ class CliRuntime(
         var agentRef: Agent? = null
         var selectedTools: List<AgentTool> = initialBuiltInTools
         var extensionHost: ExtensionHost? = null
+        var promptResourcesRef: PromptResources? = null
+        var baseSystemPrompt = ""
+        var refreshExtensionRegistrations: () -> Unit = {}
         var projectTrusted = false
         var modelRef: Model? =
             initialContext.model?.let { models.getModel(it.provider, it.modelId) }
@@ -176,6 +179,14 @@ class CliRuntime(
                             stderr.println("Warning: Extension provider registration is invalid.")
                         } else {
                             runCatching { providerRegistry.register(name, config) }
+                                .onSuccess {
+                                    val current = agentRef?.state?.model
+                                    if (current != null) {
+                                        models.getModel(current.provider, current.id)?.let { refreshed ->
+                                            agentRef?.state?.model = refreshed
+                                        }
+                                    }
+                                }
                                 .onFailure { error ->
                                     stderr.println("Warning: ${error.message}")
                                 }
@@ -183,7 +194,17 @@ class CliRuntime(
                     }
 
                     "unregister_provider" ->
-                        action.data.stringValue("name")?.let(providerRegistry::unregister)
+                        action.data.stringValue("name")?.let { name ->
+                            providerRegistry.unregister(name)
+                            val current = agentRef?.state?.model
+                            if (current != null) {
+                                models.getModel(current.provider, current.id)?.let { refreshed ->
+                                    agentRef?.state?.model = refreshed
+                                }
+                            }
+                        }
+
+                    "registrations_changed" -> refreshExtensionRegistrations()
 
                     "unsupported" ->
                         stderr.println(
@@ -262,6 +283,7 @@ class CliRuntime(
                 resolvedPackageResources = bootstrap.packageResources,
                 onWarning = { stderr.println("Warning: $it") },
             )
+        promptResourcesRef = promptResources
         val extensionTools =
             extensionHost
                 ?.registrations
@@ -284,7 +306,7 @@ class CliRuntime(
                 excludedTools = args.excludeTools,
                 extensionTools = extensionTools,
             )
-        var baseSystemPrompt = buildCodingSystemPrompt(runtimeCwd, selectedTools, promptResources)
+        baseSystemPrompt = buildCodingSystemPrompt(runtimeCwd, selectedTools, promptResources)
         val agent =
             Agent(
                 AgentOptions(
@@ -329,6 +351,42 @@ class CliRuntime(
                 ),
             )
         agentRef = agent
+        refreshExtensionRegistrations = refresh@{
+            val host = extensionHost ?: return@refresh
+            val previousRegistryNames = selectedTools.mapTo(mutableSetOf(), AgentTool::name)
+            val previousActiveNames = agent.state.tools.mapTo(mutableSetOf(), AgentTool::name)
+            val refreshedExtensionTools =
+                host.registrations.tools.map { registration ->
+                    HostedExtensionTool(
+                        registration = registration,
+                        host = host,
+                        context = ::currentExtensionContext,
+                        onActions = ::applyExtensionActions,
+                    )
+                }
+            val refreshedTools =
+                createSelectedCodingTools(
+                    cwd = runtimeCwd,
+                    noTools = args.noTools,
+                    noBuiltinTools = args.noBuiltinTools,
+                    allowedTools = args.tools,
+                    excludedTools = args.excludeTools,
+                    extensionTools = refreshedExtensionTools,
+                )
+            val newlyRegisteredNames =
+                refreshedTools
+                    .mapTo(mutableSetOf(), AgentTool::name)
+                    .apply { removeAll(previousRegistryNames) }
+            selectedTools = refreshedTools
+            agent.state.tools =
+                refreshedTools.filter { tool ->
+                    tool.name in previousActiveNames || tool.name in newlyRegisteredNames
+                }
+            promptResourcesRef?.let { resources ->
+                baseSystemPrompt = buildCodingSystemPrompt(runtimeCwd, agent.state.tools, resources)
+                agent.state.systemPrompt = baseSystemPrompt
+            }
+        }
         if (args.mode == OutputMode.JSON) {
             sessionManager.getHeader()?.let { header ->
                 stdout.println(protocolJson.encodeToString(JsonObject.serializer(), encodeEntry(header)))
@@ -388,6 +446,7 @@ class CliRuntime(
                         resolvedPackageResources = bootstrap.packageResources.merge(extensionResources),
                         onWarning = { stderr.println("Warning: $it") },
                     )
+                promptResourcesRef = promptResources
                 baseSystemPrompt = buildCodingSystemPrompt(runtimeCwd, selectedTools, promptResources)
                 agent.state.systemPrompt = baseSystemPrompt
             }

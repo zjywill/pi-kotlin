@@ -311,6 +311,63 @@ class InteractiveRuntimeTest {
             assertTrue(console.output.contains("Logged out of Faux."))
         }
 
+    @Test
+    fun `interactive trust prompt persists selection before project extensions load`() =
+        runTest {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                nodeAvailable(),
+                "Node.js 22+ is required for extension runtime tests",
+            )
+            val root = Files.createTempDirectory("pi-kotlin-interactive-trust")
+            val agentDir = Files.createDirectories(root.resolve("agent"))
+            val projectExtensions = Files.createDirectories(root.resolve(".pi").resolve("extensions"))
+            Files.writeString(
+                projectExtensions.resolve("project.ts"),
+                """
+                export default function(pi) {
+                  pi.on("session_start", (_event, ctx) => {
+                    ctx.ui.notify("trusted project extension loaded", "info");
+                  });
+                }
+                """.trimIndent(),
+            )
+            val console = ScriptedConsole(listOf("1", "/exit"))
+            val runtime =
+                InteractiveRuntime(
+                    Models(listOf(FauxProvider())),
+                    cwd = root,
+                    agentDir = agentDir,
+                    consoleFactory = { console },
+                )
+
+            val exit =
+                runtime.run(
+                    parseArgs(
+                        listOf(
+                            "--provider",
+                            "faux",
+                            "--model",
+                            "faux-1",
+                            "--no-session",
+                        ),
+                    ),
+                )
+
+            assertEquals(0, exit)
+            assertEquals(true, ProjectTrustStore(agentDir).get(root))
+            assertTrue(console.output.contains("Trust project folder?"))
+            assertTrue(console.output.contains("Trust parent folder"))
+            assertTrue(console.output.contains("trusted project extension loaded"))
+        }
+
+    private fun nodeAvailable(): Boolean =
+        runCatching {
+            val process = ProcessBuilder("node", "--version").start()
+            process.waitFor()
+            process.exitValue() == 0 &&
+                process.inputStream.bufferedReader().readText().trim().removePrefix("v").substringBefore('.').toInt() >= 22
+        }.getOrDefault(false)
+
     private class ScriptedConsole(
         private val inputs: List<String>,
     ) : InteractiveConsole {

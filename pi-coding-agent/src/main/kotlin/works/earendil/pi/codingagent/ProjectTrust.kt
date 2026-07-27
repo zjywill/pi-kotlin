@@ -25,6 +25,13 @@ internal data class ProjectTrustUpdate(
     val decision: Boolean?,
 )
 
+internal data class ProjectTrustOption(
+    val label: String,
+    val trusted: Boolean,
+    val updates: List<ProjectTrustUpdate>,
+    val savedPath: Path? = null,
+)
+
 internal class ProjectTrustStore(
     agentDir: Path,
 ) {
@@ -161,6 +168,7 @@ internal fun resolveProjectTrusted(
     extensionHost: ExtensionHost? = null,
     extensionContext: JsonObject = JsonObject(emptyMap()),
     onExtensionActions: (List<ExtensionAction>) -> Unit = {},
+    onTrustPrompt: ((Path, List<ProjectTrustOption>) -> ProjectTrustOption?)? = null,
 ): Boolean {
     if (override != null) {
         return override
@@ -195,16 +203,81 @@ internal fun resolveProjectTrusted(
         }
     }
     trustStore.get(cwd)?.let { return it }
-    return when (
+    when (
         SettingsStore(
             cwd = cwd,
             agentDir = agentDir,
             projectTrusted = false,
         ).global().raw.stringValue("defaultProjectTrust")
     ) {
-        "always" -> true
-        "never" -> false
-        else -> false
+        "always" -> return true
+        "never" -> return false
+    }
+    val normalizedCwd = canonicalPath(cwd)
+    val selected = onTrustPrompt?.invoke(normalizedCwd, projectTrustOptions(normalizedCwd))
+    if (selected != null) {
+        if (selected.updates.isNotEmpty()) {
+            trustStore.setMany(selected.updates)
+        }
+        return selected.trusted
+    }
+    return false
+}
+
+internal fun projectTrustOptions(
+    cwd: Path,
+    includeSessionOnly: Boolean = true,
+): List<ProjectTrustOption> {
+    val trustPath = canonicalPath(cwd)
+    return buildList {
+        add(
+            ProjectTrustOption(
+                label = "Trust",
+                trusted = true,
+                updates = listOf(ProjectTrustUpdate(trustPath, true)),
+                savedPath = trustPath,
+            ),
+        )
+        trustPath.parent?.let { parentPath ->
+            add(
+                ProjectTrustOption(
+                    label = "Trust parent folder ($parentPath)",
+                    trusted = true,
+                    updates =
+                        listOf(
+                            ProjectTrustUpdate(parentPath, true),
+                            ProjectTrustUpdate(trustPath, null),
+                        ),
+                    savedPath = parentPath,
+                ),
+            )
+        }
+        if (includeSessionOnly) {
+            add(
+                ProjectTrustOption(
+                    label = "Trust (this session only)",
+                    trusted = true,
+                    updates = emptyList(),
+                ),
+            )
+        }
+        add(
+            ProjectTrustOption(
+                label = "Do not trust",
+                trusted = false,
+                updates = listOf(ProjectTrustUpdate(trustPath, false)),
+                savedPath = trustPath,
+            ),
+        )
+        if (includeSessionOnly) {
+            add(
+                ProjectTrustOption(
+                    label = "Do not trust (this session only)",
+                    trusted = false,
+                    updates = emptyList(),
+                ),
+            )
+        }
     }
 }
 

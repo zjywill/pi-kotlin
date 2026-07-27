@@ -50,6 +50,7 @@ interface InteractiveConsole : AutoCloseable {
 class InteractiveRuntime(
     private val models: Models,
     private val cwd: Path = Path.of("").toAbsolutePath().normalize(),
+    private val agentDir: Path = defaultAgentDirectory(),
     private val consoleFactory: () -> InteractiveConsole = { JLineConsole() },
 ) {
     suspend fun run(args: Args): Int {
@@ -88,12 +89,14 @@ class InteractiveRuntime(
                         return 1
                     }
             }
+        val console = consoleFactory()
         val runtime =
             try {
                 RpcRuntime(
                     models,
                     RpcRuntimeOptions(
                         cwd = cwd,
+                        agentDir = agentDir,
                         sessionDir = sessionDirectory,
                         noSession = args.noSession,
                         sessionId = args.sessionId,
@@ -120,14 +123,18 @@ class InteractiveRuntime(
                         tools = args.tools,
                         excludeTools = args.excludeTools,
                         thinking = args.thinking,
+                        projectTrustPrompt = { projectPath, labels ->
+                            selectProjectTrust(projectPath, labels, console)
+                        },
                     ),
                 )
             } catch (error: Exception) {
+                console.close()
                 System.err.println("Error: ${error.message}")
                 return 1
             }
 
-        consoleFactory().use { console ->
+        console.use {
             val settled = AtomicReference<CompletableDeferred<Unit>?>(null)
             val streamedText = AtomicBoolean(false)
             val unsubscribe =
@@ -155,6 +162,8 @@ class InteractiveRuntime(
                                 console.error("${event.string("toolName").orEmpty()} failed")
                             }
                         }
+
+                        "extension_ui_request" -> renderExtensionUiRequest(event, console)
 
                         "agent_settled" -> settled.getAndSet(null)?.complete(Unit)
                     }
@@ -279,6 +288,64 @@ class InteractiveRuntime(
                 unsubscribe()
                 runtime.close()
             }
+        }
+    }
+
+    private fun selectProjectTrust(
+        projectPath: Path,
+        labels: List<String>,
+        console: InteractiveConsole,
+    ): Int? {
+        console.println("Trust project folder?")
+        console.println(projectPath.toString())
+        console.println()
+        console.println(
+            "This allows pi to load .pi settings and resources, install missing project packages, " +
+                "and execute project extensions.",
+        )
+        labels.forEachIndexed { index, label ->
+            console.println("${index + 1}. $label")
+        }
+        while (true) {
+            val value =
+                console.readLine("Select 1-${labels.size} (Enter cancels): ")
+                    ?.trim()
+                    ?: return null
+            if (value.isEmpty()) {
+                return null
+            }
+            val index = value.toIntOrNull()
+            if (index != null && index in 1..labels.size) {
+                return index - 1
+            }
+            labels.indexOf(value).takeIf { it >= 0 }?.let { return it }
+            console.error("Select a trust option by number or label.")
+        }
+    }
+
+    private fun renderExtensionUiRequest(
+        event: JsonObject,
+        console: InteractiveConsole,
+    ) {
+        when (event.string("method")) {
+            "notify" -> {
+                val message = event.string("message").orEmpty()
+                if (event.string("notifyType") == "error") {
+                    console.error(message)
+                } else {
+                    console.println(message)
+                }
+            }
+
+            "setStatus" -> {
+                val key = event.string("key") ?: event.string("statusKey") ?: return
+                val text = event.string("text") ?: event.string("statusText")
+                if (!text.isNullOrEmpty()) {
+                    console.println("[$key] $text")
+                }
+            }
+
+            "setTitle" -> event.string("title")?.let { console.println(it) }
         }
     }
 

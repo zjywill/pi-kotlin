@@ -70,6 +70,7 @@ fun main(args: Array<String>) {
                 args = "checkpoint",
                 context = context,
             )
+        val dynamicRegistration = host.registrations
         val session =
             host.emit(
                 event =
@@ -270,6 +271,14 @@ fun main(args: Array<String>) {
                     },
                 )
                 put(
+                    "dynamicRegistrations",
+                    buildJsonObject {
+                        put("tools", JsonArray(dynamicRegistration.tools.map { JsonPrimitive(it.name) }))
+                        put("commands", JsonArray(dynamicRegistration.commands.map { JsonPrimitive(it.name) }))
+                        put("flags", JsonArray(dynamicRegistration.flags.map { JsonPrimitive(it.name) }))
+                    },
+                )
+                put(
                     "tool",
                     buildJsonObject {
                         put("result", requireNotNull(toolInvocation.result))
@@ -366,7 +375,7 @@ private fun oracleExtensionContext(cwd: Path): JsonObject =
 
 private fun normalizedActions(actions: List<ExtensionAction>): JsonArray =
     JsonArray(
-        actions.map { action ->
+        actions.filterNot { it.type == "registrations_changed" }.map { action ->
             buildJsonObject {
                 put("type", action.type)
                 action.data

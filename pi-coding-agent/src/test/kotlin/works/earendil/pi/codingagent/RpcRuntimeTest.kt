@@ -160,6 +160,133 @@ class RpcRuntimeTest {
         }
 
     @Test
+    fun `runtime extension registrations refresh commands and active tools immediately`() =
+        runTest {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                nodeAvailable(),
+                "Node.js 22+ is required for extension runtime tests",
+            )
+            val root = Files.createTempDirectory("pi-kotlin-rpc-dynamic-extension")
+            val extension =
+                root.resolve("dynamic.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        import { Type } from "typebox";
+                        export default function(pi) {
+                          pi.registerCommand("enable-dynamic", {
+                            handler() {
+                              pi.registerTool({
+                                name: "dynamic_echo",
+                                label: "Dynamic echo",
+                                description: "Dynamically registered echo tool",
+                                parameters: Type.Object({ text: Type.String() }),
+                                async execute(_id, params) {
+                                  return {
+                                    content: [{ type: "text", text: `dynamic:${'$'}{params.text}` }],
+                                    details: {},
+                                  };
+                                },
+                              });
+                              pi.registerCommand("dynamic-command", {
+                                handler(_args, ctx) {
+                                  ctx.ui.notify(
+                                    `dynamic-tools:${'$'}{pi.getAllTools().map(tool => tool.name).join(",")}`,
+                                    "info",
+                                  );
+                                },
+                              });
+                              pi.registerFlag("dynamic-flag", { type: "boolean", default: true });
+                            },
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val provider = FauxProvider()
+            provider.setResponses(
+                listOf(
+                    FauxResponseStep.Factory { context, _, _, _ ->
+                        assertTrue(context.tools.any { it.name == "dynamic_echo" })
+                        assertTrue(context.systemPrompt.orEmpty().contains("dynamic_echo"))
+                        fauxAssistantMessage(
+                            content =
+                                listOf(
+                                    fauxToolCall(
+                                        name = "dynamic_echo",
+                                        arguments = buildJsonObject { put("text", "ready") },
+                                        id = "dynamic-call",
+                                    ),
+                                ),
+                            stopReason = StopReason.TOOL_USE,
+                        )
+                    },
+                    FauxResponseStep.Factory { context, _, _, _ ->
+                        val result = context.messages.filterIsInstance<ToolResultMessage>().last()
+                        assertEquals("dynamic:ready", works.earendil.pi.ai.contentText(result.content))
+                        fauxAssistantMessage("dynamic complete")
+                    },
+                ),
+            )
+            val runtime =
+                RpcRuntime(
+                    Models(listOf(provider)),
+                    RpcRuntimeOptions(
+                        cwd = root,
+                        agentDir = Files.createDirectories(root.resolve("agent")),
+                        noSession = true,
+                        provider = "faux",
+                        model = "faux-1",
+                        extensionPaths = listOf(extension.toString()),
+                    ),
+                )
+            val events = mutableListOf<JsonObject>()
+            runtime.subscribe(events::add)
+
+            assertSuccess(
+                runtime.handle(
+                    buildJsonObject {
+                        put("type", "prompt")
+                        put("message", "/enable-dynamic")
+                    },
+                ),
+            )
+            val commands =
+                requireNotNull(runtime.handle(buildJsonObject { put("type", "get_commands") }))
+                    .data()["commands"]
+                    ?.jsonArray
+                    .orEmpty()
+            assertTrue(commands.any { it.jsonObject["name"]?.jsonPrimitive?.content == "dynamic-command" })
+            assertSuccess(
+                runtime.handle(
+                    buildJsonObject {
+                        put("type", "prompt")
+                        put("message", "/dynamic-command")
+                    },
+                ),
+            )
+            assertTrue(
+                events.any {
+                    it.eventType() == "extension_ui_request" &&
+                        it["message"]?.jsonPrimitive?.content.orEmpty().contains("dynamic_echo")
+                },
+            )
+
+            assertSuccess(
+                runtime.handle(
+                    buildJsonObject {
+                        put("type", "prompt")
+                        put("message", "use the dynamic tool")
+                    },
+                ),
+            )
+            runtime.waitForIdle()
+
+            assertEquals(2, provider.state.callCount)
+            runtime.close()
+        }
+
+    @Test
     fun `prompt emits lifecycle events and updates rpc state`() =
         runTest {
             val provider =

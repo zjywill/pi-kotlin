@@ -87,6 +87,7 @@ data class RpcRuntimeOptions(
     val tools: List<String>? = null,
     val excludeTools: List<String>? = null,
     val thinking: works.earendil.pi.codingagent.AgentThinkingLevel? = null,
+    val projectTrustPrompt: ((Path, List<String>) -> Int?)? = null,
 )
 
 class RpcRuntime(
@@ -831,7 +832,7 @@ class RpcRuntime(
                 thinkingLevel = (state?.thinkingLevel ?: thinking).toProtocolValue(),
                 systemPrompt = state?.systemPrompt.orEmpty(),
                 activeTools = (state?.tools ?: selectedTools).map(AgentTool::name),
-                allTools = selectedTools,
+                allTools = availableTools.ifEmpty { selectedTools },
                 sessionName = sessionManager.getSessionName(),
                 sessionId = sessionManager.getSessionId(),
                 sessionFile = sessionManager.getSessionFile(),
@@ -883,6 +884,13 @@ class RpcRuntime(
                     )
                 },
                 onBootstrapActions = ::applyBootstrapExtensionActions,
+                onProjectTrustPrompt =
+                    options.projectTrustPrompt?.let { prompt ->
+                        { path, choices ->
+                            prompt(path, choices.map(ProjectTrustOption::label))
+                                ?.let(choices::getOrNull)
+                        }
+                    },
             )
         projectTrusted = bootstrap.projectTrusted
         val host = bootstrap.host
@@ -1178,6 +1186,7 @@ class RpcRuntime(
                         )
                     } else {
                         runCatching { extensionProviders.register(name, config) }
+                            .onSuccess { refreshCurrentModelFromRegistry() }
                             .onFailure { error ->
                                 emitExtensionError(
                                     ExtensionDiagnostic(
@@ -1191,7 +1200,12 @@ class RpcRuntime(
                 }
 
                 "unregister_provider" ->
-                    action.data.stringValue("name")?.let(extensionProviders::unregister)
+                    action.data.stringValue("name")?.let { name ->
+                        extensionProviders.unregister(name)
+                        refreshCurrentModelFromRegistry()
+                    }
+
+                "registrations_changed" -> refreshExtensionRegistrations()
 
                 "unsupported",
                 "new_session",
@@ -1211,6 +1225,50 @@ class RpcRuntime(
                         ),
                     )
             }
+        }
+    }
+
+    private fun refreshExtensionRegistrations() {
+        val host = extensionHost ?: return
+        val previousRegistryNames = availableTools.mapTo(mutableSetOf(), AgentTool::name)
+        val previousActiveNames = agent.state.tools.mapTo(mutableSetOf(), AgentTool::name)
+        val extensionTools =
+            host.registrations.tools.map { registration ->
+                HostedExtensionTool(
+                    registration = registration,
+                    host = host,
+                    context = extensionContextProvider,
+                    onActions = { applyExtensionActions(it) },
+                )
+            }
+        val refreshed =
+            createSelectedCodingTools(
+                cwd = sessionManager.getCwd(),
+                noTools = options.noTools,
+                noBuiltinTools = options.noBuiltinTools,
+                allowedTools = options.tools,
+                excludedTools = options.excludeTools,
+                extensionTools = extensionTools,
+            )
+        val newlyRegisteredNames =
+            refreshed
+                .mapTo(mutableSetOf(), AgentTool::name)
+                .apply { removeAll(previousRegistryNames) }
+        availableTools = refreshed
+        agent.state.tools =
+            refreshed.filter { tool ->
+                tool.name in previousActiveNames || tool.name in newlyRegisteredNames
+            }
+        promptResources?.let { resources ->
+            baseSystemPrompt = buildCodingSystemPrompt(sessionManager.getCwd(), agent.state.tools, resources)
+            agent.state.systemPrompt = baseSystemPrompt
+        }
+    }
+
+    private fun refreshCurrentModelFromRegistry() {
+        val current = agent.state.model
+        models.getModel(current.provider, current.id)?.let { refreshed ->
+            agent.state.model = refreshed
         }
     }
 

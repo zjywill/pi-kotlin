@@ -44,6 +44,9 @@ const tool = extension.tools.get("extension_echo")?.definition;
 if (!tool) throw new Error("extension_echo was not registered");
 const command = [...extension.commands.values()].find((value) => value.name === "record");
 if (!command) throw new Error("record was not registered");
+const initialTools = [...extension.tools.values()];
+const initialCommands = [...extension.commands.values()];
+const initialFlags = [...extension.flags.values()];
 
 function context(actions: unknown[]) {
 	return {
@@ -204,18 +207,18 @@ try {
 const output = {
 	errors: loaded.errors,
 	registrations: {
-		tools: [...extension.tools.values()].map(({ definition }) => ({
+		tools: initialTools.map(({ definition }) => ({
 			name: definition.name,
 			label: definition.label,
 			description: definition.description,
 			parameters: definition.parameters,
 			executionMode: definition.executionMode ?? null,
 		})),
-		commands: [...extension.commands.values()].map(value => ({
+		commands: initialCommands.map(value => ({
 			name: value.name,
 			description: value.description ?? null,
 		})),
-		flags: [...extension.flags.values()].map(value => ({
+		flags: initialFlags.map(value => ({
 			name: value.name,
 			description: value.description ?? null,
 			type: value.type,
@@ -227,6 +230,11 @@ const output = {
 			config: value.config,
 		})),
 		events: [...extension.handlers.keys()].sort(),
+	},
+	dynamicRegistrations: {
+		tools: [...extension.tools.values()].map(({ definition }) => definition.name),
+		commands: [...extension.commands.values()].map(value => value.name),
+		flags: [...extension.flags.values()].map(value => value.name),
 	},
 	tool: {
 		result: toolResult,
