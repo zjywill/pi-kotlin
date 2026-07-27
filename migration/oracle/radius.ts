@@ -57,7 +57,7 @@ globalThis.fetch = async (input: string | URL | Request, init?: RequestInit): Pr
 		body: String(init?.body ?? ""),
 	};
 	oauthRequests.push(request);
-	if (url.endsWith("/v1/oauth")) return jsonResponse(oauthConfig());
+	if (url.endsWith("/v1/oauth")) return jsonResponse(oauthDiscovery());
 	if (url.endsWith("/device")) {
 		return jsonResponse({
 			device_code: "device-code",
@@ -292,7 +292,9 @@ const browserAuthUrl = String(
 const browserQuery = Object.fromEntries(new URL(browserAuthUrl).searchParams.entries());
 const deviceRequest = requiredRequest((request) => request.url.endsWith("/device"));
 const pollRequests = oauthRequests.filter(
-	(request) => form(request.body).grant_type === "urn:radius:device",
+	(request) =>
+		form(request.body).grant_type ===
+		"urn:ietf:params:oauth:grant-type:device_code",
 );
 const refreshRequest = requiredRequest(
 	(request) => form(request.body).grant_type === "refresh_token",
@@ -343,17 +345,9 @@ console.log(
 	),
 );
 
-function oauthConfig(): Record<string, unknown> {
+function oauthDiscovery(): Record<string, unknown> {
 	return {
-		issuer: "https://issuer.example",
 		authorizationEndpoint: "https://oauth.example/authorize",
-		tokenEndpoint: "https://oauth.example/token",
-		deviceAuthorizationEndpoint: "https://oauth.example/device",
-		deviceAuthorizationEventsEndpoint: "https://oauth.example/events",
-		verificationEndpoint: "https://oauth.example/verify",
-		clientId: "radius-client",
-		scope: "openid profile",
-		deviceCodeGrantType: "urn:radius:device",
 	};
 }
 

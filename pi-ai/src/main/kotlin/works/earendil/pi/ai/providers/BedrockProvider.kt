@@ -1044,6 +1044,7 @@ private fun supportsBedrockPromptCaching(
     }
     return candidates.any { candidate ->
         "fable-5" in candidate ||
+            "opus-5" in candidate ||
             "sonnet-5" in candidate ||
             "-4-" in candidate ||
             "claude-3-7-sonnet" in candidate ||
@@ -1056,6 +1057,7 @@ private fun supportsAdaptiveBedrockThinking(model: Model): Boolean =
         "opus-4-6" in candidate ||
             "opus-4-7" in candidate ||
             "opus-4-8" in candidate ||
+            "opus-5" in candidate ||
             "sonnet-4-6" in candidate ||
             "sonnet-5" in candidate ||
             "fable-5" in candidate
@@ -1065,6 +1067,7 @@ private fun supportsNativeBedrockXhigh(model: Model): Boolean =
     bedrockModelCandidates(model).any { candidate ->
         "opus-4-7" in candidate ||
             "opus-4-8" in candidate ||
+            "opus-5" in candidate ||
             "sonnet-5" in candidate ||
             "fable-5" in candidate
     }

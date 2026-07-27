@@ -107,25 +107,32 @@ private class RemoteCatalogProvider(
             return
         }
 
+        val validator = stored?.etag?.takeIf { stored.models.isNotEmpty() }
+        val requestBuilder =
+            HttpRequest
+                .newBuilder(catalogUri())
+                .header("accept", "application/json")
+                .header("User-Agent", userAgent)
+        validator?.let { requestBuilder.header("If-None-Match", it) }
         val response =
             client
                 .sendAsync(
-                    HttpRequest
-                        .newBuilder(catalogUri())
-                        .header("accept", "application/json")
-                        .header("User-Agent", userAgent)
-                        .GET()
-                        .build(),
+                    requestBuilder.GET().build(),
                     HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8),
                 ).await()
         currentCoroutineContext().ensureActive()
         val checkedAt = currentTimeMillis()
+        if (response.statusCode() == 304 && stored != null) {
+            context.store.write(stored.copy(checkedAt = checkedAt))
+            return
+        }
         when (response.statusCode()) {
             404, 501 -> {
                 context.store.write(
                     (stored ?: ModelsStoreEntry(models = emptyList())).copy(
                         checkedAt = checkedAt,
                         lastModified = 0,
+                        etag = null,
                     ),
                 )
                 return
@@ -144,6 +151,7 @@ private class RemoteCatalogProvider(
                 models = refreshed,
                 checkedAt = checkedAt,
                 lastModified = parseLastModified(response.headers().firstValue("last-modified").orElse(null)),
+                etag = response.headers().firstValue("etag").orElse(null),
             )
         currentCoroutineContext().ensureActive()
         dynamicModels = remoteModels(entry)

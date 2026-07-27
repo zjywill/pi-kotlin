@@ -57,7 +57,7 @@ fun main() =
                 oauthRequests += request
                 when {
                     request.method == "GET" ->
-                        OAuthHttpResponse(200, radiusOAuthConfig())
+                        OAuthHttpResponse(200, radiusOAuthDiscovery())
 
                     request.url.endsWith("/device") ->
                         OAuthHttpResponse(
@@ -336,7 +336,8 @@ fun main() =
         val deviceRequest = oauthRequests.first { it.url.endsWith("/device") }
         val pollRequests =
             oauthRequests.filter {
-                parseRadiusOracleForm(it.body)["grant_type"] == "urn:radius:device"
+                parseRadiusOracleForm(it.body)["grant_type"] ==
+                    "urn:ietf:params:oauth:grant-type:device_code"
             }
         val refreshRequest =
             oauthRequests.first {
@@ -465,18 +466,10 @@ private fun HttpExchange.respondRadiusSse(body: String) {
     responseBody.use { it.write(bytes) }
 }
 
-private fun radiusOAuthConfig(): String =
+private fun radiusOAuthDiscovery(): String =
     """
     {
-      "issuer":"https://issuer.example",
-      "authorizationEndpoint":"https://oauth.example/authorize",
-      "tokenEndpoint":"https://oauth.example/token",
-      "deviceAuthorizationEndpoint":"https://oauth.example/device",
-      "deviceAuthorizationEventsEndpoint":"https://oauth.example/events",
-      "verificationEndpoint":"https://oauth.example/verify",
-      "clientId":"radius-client",
-      "scope":"openid profile",
-      "deviceCodeGrantType":"urn:radius:device"
+      "authorizationEndpoint":"https://oauth.example/authorize"
     }
     """.trimIndent()
 

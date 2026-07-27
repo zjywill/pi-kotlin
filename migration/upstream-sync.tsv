@@ -10,3 +10,29 @@ ab55c15fbdbca4ce2d5628f1613a3bd30d847868	not-applicable	Merge commit for the pre
 6abb4b06409912ac4f0c58fde0f37fd5f1d4c76a	covered-by-known-gap	llama.cpp extension is not migrated
 ec1a87e856502f29a55a5762d129bb845f094bd7	not-applicable	protobufjs package override has no JVM equivalent
 24bace27cf308c89707cf8005b4795d873e23f17	ported	Constrained sampling types, strict tools, grammar payloads, and custom-tool streams are implemented
+2d3f555429935ffccdf23d9adae09ef7e0b85ca7	covered-by-known-gap	The upstream clipboard command and its wl-copy/xclip fallback chain are part of the incomplete interactive terminal slice
+ee0dca45b4542c38df5547d3fe113e31a869101a	not-applicable	Changelog-only audit
+fc8048d2370ab4252966aa3bf220373d1358dce2	not-applicable	Node/Bun source-archive packaging has no JVM distribution equivalent; Gradle resources already bundle verified model data
+8472c486f424d716e4d0a9f71c0cbe9590bfc1dd	not-applicable	Changelog-only clipboard entry
+f87468131fac4c4e53cf2f9c1ad4a253acbe4e75	covered-by-known-gap	models.json picker hot reload belongs to the incomplete full-screen model-selection workflow
+e16172069ff3e1bf3c335157001c6ca0d61c4248	not-applicable	Changelog-only model reload entry
+e8d97fee1a9cc583c60c77d52ecca0e755b274ec	ported	OpenRouter image catalog now exposes 40 models including microsoft/mai-image-2.5-pro with checksum parity
+083e61621276bff9f6faefab87ce07fcd98734e2	not-applicable	Package release/version metadata only
+7df73a00c6cf85c000bf1ce1594c9284067a92f0	not-applicable	Changelog section only
+24e5cc04f413206956cfd21839a7026de673f354	ported	ANTHROPIC_AUTH_TOKEN resolves to bearer headers without Claude OAuth shaping; CLI help, unit tests, compaction path, and oracle cover it
+a9f5b1c123a4f13457e88522a3be89aeb4823d66	ported	Radius browser discovery is authorization-only while device, token, and refresh calls use gateway endpoints and fixed client contract
+7304d8f8af892893868b66254d34ffb9382fdec1	not-applicable	Upstream test fixture model substitutions only
+921c3543522ee7f4f7be2032ef28a8f64f2289fb	ported	Hydrated catalog metadata gives Claude Opus 5 adaptive thinking, xhigh, and temperature compatibility
+8eef62ed3ea62d646a7fad92fa583fc8d71fec17	not-applicable	Upstream test-only correction
+a3ee1d286e95b501b3d9d7bb26367a0edea46166	covered-by-known-gap	Unavailable scoped-model editing depends on the unported full-screen scoped-model selector
+eafe11fb94fe7fcb89487da621a578278a6a67f1	not-applicable	Vitest eval harness is upstream test tooling; Kotlin uses Gradle tests and independent behavior oracles
+af3b934fa6ba3b6a273dcb1540a3fc391b686410	ported	Claude Opus 5 is inference-profile-only on Bedrock and supports adaptive thinking, xhigh, prompt caching, and preserved validation messages
+2a2b0a39f08923b3563a4f53d4b1cedf130d1391	covered-by-known-gap	The llama.cpp extension and its model cache are part of the missing extension runtime
+518855dd502220d0c6480fb8863e2e7f8799893f	covered-by-known-gap	Custom message renderers and outputPad belong to the missing extension/full-screen rendering surface
+b1c444d956b70e5c437d3d2782b01d157fa05ba3	ported	ModelsStore persists ETags; remote catalogs revalidate with If-None-Match and preserve cached overlays on 304/transient errors
+4cf0a729c4eeef6628b2687cd8238cc6874c9a73	ported	ModelsAuthException appends the underlying cause so OAuth refresh and credential failures retain provider details
+58c0bc2fba29baf5e3bb6268baac00a49d8df1cf	ported	Prompt context discovery skips directory candidates without warnings and falls through to the next supported filename
+62a7074188b98ea3a7ebfe03aa3a7975c7091fce	not-applicable	Changelog-only audit
+b4f293684bba718d59cc1157679bcf6157b3a7f5	not-applicable	Package release/version metadata only
+5bc1c2c0a6f07e00e8c240304182f213ab8d311f	not-applicable	Changelog section only
+cee5ff7520d8828bed9955ef00419e995d1f91e0	not-applicable	README reference cleanup only

@@ -22,6 +22,7 @@ data class ModelsStoreEntry(
     val models: List<Model>,
     val lastModified: Long? = null,
     val checkedAt: Long? = null,
+    val etag: String? = null,
 )
 
 interface ModelsStore {

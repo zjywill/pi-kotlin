@@ -26,11 +26,11 @@ class BuiltInCatalogTest {
         assertEquals(3, catalog.schemaVersion)
         Instant.parse(assertNotNull(catalog.generatedAt))
         assertEquals(
-            "57655e637e6c882faa1975fa64df872aef3803dc2a1214b7ee0b58c57387354f",
+            "cac44ff4772a2e26b4f4e4bd0ce9cb76de07754662a70f5cfea2dd5b3eb56406",
             catalog.structureHash,
         )
         assertEquals(37, catalog.modelsByProvider.size)
-        assertEquals(1_109, catalog.modelsByProvider.values.sumOf(List<works.earendil.pi.ai.Model>::size))
+        assertEquals(1_110, catalog.modelsByProvider.values.sumOf(List<works.earendil.pi.ai.Model>::size))
         assertEquals("openai-responses", sol.api)
         assertEquals(272_000, sol.contextWindow)
         assertEquals(128_000, sol.maxTokens)
@@ -45,7 +45,7 @@ class BuiltInCatalogTest {
         val ids = providers.map { it.id }.toSet()
 
         assertEquals(38, providers.size)
-        assertEquals(1_109, providers.sumOf { it.getModels().size })
+        assertEquals(1_110, providers.sumOf { it.getModels().size })
         assertTrue(
             ids.containsAll(
                 setOf(
@@ -69,10 +69,10 @@ class BuiltInCatalogTest {
         )
         val copilot = providers.single { it.id == "github-copilot" }
         assertEquals("GitHub Copilot", copilot.name)
-        assertEquals(28, copilot.getModels().size)
+        assertEquals(29, copilot.getModels().size)
         assertEquals(
             mapOf(
-                "anthropic-messages" to 9,
+                "anthropic-messages" to 10,
                 "openai-completions" to 7,
                 "openai-responses" to 12,
             ),
@@ -81,13 +81,13 @@ class BuiltInCatalogTest {
         assertNotNull(copilot.oauth)
         val azure = providers.single { it.id == "azure-openai-responses" }
         assertEquals("Azure OpenAI", azure.name)
-        assertEquals(46, azure.getModels().size)
+        assertEquals(38, azure.getModels().size)
         val mistral = providers.single { it.id == "mistral" }
         assertEquals("Mistral", mistral.name)
         assertEquals(30, mistral.getModels().size)
         val cloudflareGateway = providers.single { it.id == "cloudflare-ai-gateway" }
         assertEquals("Cloudflare AI Gateway", cloudflareGateway.name)
-        assertEquals(42, cloudflareGateway.getModels().size)
+        assertEquals(43, cloudflareGateway.getModels().size)
         val cloudflareWorkers = providers.single { it.id == "cloudflare-workers-ai" }
         assertEquals("Cloudflare Workers AI", cloudflareWorkers.name)
         assertEquals(13, cloudflareWorkers.getModels().size)
@@ -96,7 +96,9 @@ class BuiltInCatalogTest {
         assertEquals(12, vertex.getModels().size)
         val bedrock = providers.single { it.id == "amazon-bedrock" }
         assertEquals("Amazon Bedrock", bedrock.name)
-        assertEquals(109, bedrock.getModels().size)
+        assertEquals(114, bedrock.getModels().size)
+        assertNotNull(bedrock.getModels().singleOrNull { it.id == "global.anthropic.claude-opus-5" })
+        assertFalse(bedrock.getModels().any { it.id == "anthropic.claude-opus-5" })
         val codex = providers.single { it.id == "openai-codex" }
         assertEquals("OpenAI Codex", codex.name)
         assertEquals(7, codex.getModels().size)

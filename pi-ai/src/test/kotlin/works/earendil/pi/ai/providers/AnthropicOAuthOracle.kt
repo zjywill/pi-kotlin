@@ -20,6 +20,7 @@ import works.earendil.pi.ai.AuthInteraction
 import works.earendil.pi.ai.AuthPrompt
 import works.earendil.pi.ai.CacheRetention
 import works.earendil.pi.ai.Context
+import works.earendil.pi.ai.Models
 import works.earendil.pi.ai.OAuthCredential
 import works.earendil.pi.ai.StreamOptions
 import works.earendil.pi.ai.TextContent
@@ -173,6 +174,20 @@ fun main() =
                         cacheRetention = CacheRetention.NONE,
                     ),
                 ).result()
+        val bearerResult =
+            Models(
+                providers = listOf(provider),
+                environment = { name ->
+                    if (name == "ANTHROPIC_AUTH_TOKEN") "gateway-token" else null
+                },
+            )
+                .stream(
+                    model,
+                    context,
+                    StreamOptions(
+                        cacheRetention = CacheRetention.NONE,
+                    ),
+                ).result()
         fixture.close()
 
         val auth = URI.create(authorizationUrl)
@@ -195,7 +210,8 @@ fun main() =
                     "refresh_token"
             }
         val refreshBody = providerJson.parseToJsonElement(refresh.body).jsonObject
-        val request = requireNotNull(fixture.request)
+        val request = fixture.requests[0]
+        val bearerRequest = fixture.requests[1]
         val output =
             buildJsonObject {
                 put(
@@ -298,6 +314,33 @@ fun main() =
                         )
                     },
                 )
+                put(
+                    "bearer",
+                    buildJsonObject {
+                        put(
+                            "headers",
+                            buildJsonObject {
+                                put("authorization", bearerRequest.header("authorization"))
+                                putNullable("xApiKey", bearerRequest.headerOrNull("x-api-key"))
+                                bearerRequest.headerOrNull("anthropic-beta")?.let {
+                                    put("anthropicBeta", it)
+                                }
+                                putNullable("xApp", bearerRequest.headerOrNull("x-app"))
+                            },
+                        )
+                        put("body", bearerRequest.body)
+                        put(
+                            "result",
+                            buildJsonObject {
+                                put("stopReason", "toolUse")
+                                put(
+                                    "toolName",
+                                    bearerResult.content.filterIsInstance<ToolCall>().single().name,
+                                )
+                            },
+                        )
+                    },
+                )
             }
         println(oracleJson.encodeToString(JsonObject.serializer(), output))
     }
@@ -325,7 +368,7 @@ private fun createProviderFixture(): AnthropicOracleFixture {
             exchange.requestHeaders.entries.associate { (name, values) ->
                 name.lowercase() to values.joinToString(",")
             }
-        fixture.request =
+        fixture.requests +=
             AnthropicOracleRequest(
                 path = exchange.requestURI.path,
                 headers = headers,
@@ -374,7 +417,7 @@ private data class AnthropicOracleRequest(
 private class AnthropicOracleFixture(
     private val server: HttpServer,
 ) : AutoCloseable {
-    var request: AnthropicOracleRequest? = null
+    val requests = mutableListOf<AnthropicOracleRequest>()
     val baseUrl: String = "http://127.0.0.1:${server.address.port}"
 
     override fun close() {

@@ -14,6 +14,8 @@ import kotlinx.serialization.json.put
 import works.earendil.pi.ai.AssistantMessage
 import works.earendil.pi.ai.CacheRetention
 import works.earendil.pi.ai.Context
+import works.earendil.pi.ai.Models
+import works.earendil.pi.ai.SimpleStreamOptions
 import works.earendil.pi.ai.StopReason
 import works.earendil.pi.ai.StreamOptions
 import works.earendil.pi.ai.TextContent
@@ -268,6 +270,166 @@ class AnthropicOAuthProviderTest {
                         .jsonArray
                         .map { it.jsonObject.getValue("text").jsonPrimitive.content },
                 )
+            } finally {
+                fixture.close()
+            }
+        }
+
+    @Test
+    fun `Anthropic auth token env uses bearer auth without OAuth request shaping`() =
+        runTest {
+            val fixture = anthropicOAuthFixture()
+            try {
+                val model =
+                    model(
+                        id = "claude-test",
+                        api = "anthropic-messages",
+                        provider = "anthropic",
+                        baseUrl = fixture.baseUrl,
+                    )
+                val provider =
+                    AnthropicProvider(
+                        id = "anthropic",
+                        name = "Anthropic",
+                        baseUrl = fixture.baseUrl,
+                        models = listOf(model),
+                        apiKeyEnvNames = listOf("ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"),
+                    )
+
+                val result =
+                    provider
+                        .stream(
+                            model,
+                            Context(
+                                systemPrompt = "Project instructions",
+                                messages = mutableListOf(UserMessage("Hello", 1)),
+                            ),
+                            StreamOptions(
+                                env =
+                                    mapOf(
+                                        "ANTHROPIC_AUTH_TOKEN" to "gateway-token",
+                                        "ANTHROPIC_OAUTH_TOKEN" to "sk-ant-oat-ignored",
+                                        "ANTHROPIC_API_KEY" to "api-key-ignored",
+                                    ),
+                                cacheRetention = CacheRetention.NONE,
+                            ),
+                        ).result()
+
+                assertEquals(StopReason.TOOL_USE, result.stopReason)
+                val request = fixture.requests.single()
+                assertEquals("Bearer gateway-token", request.header("authorization"))
+                assertNull(request.header("x-api-key"))
+                assertNull(request.header("x-app"))
+                assertFalse(request.header("anthropic-beta").orEmpty().contains("oauth-2025-04-20"))
+                assertEquals(
+                    listOf("Project instructions"),
+                    providerJson
+                        .parseToJsonElement(request.body)
+                        .jsonObject
+                        .getValue("system")
+                        .jsonArray
+                        .map { it.jsonObject.getValue("text").jsonPrimitive.content },
+                )
+            } finally {
+                fixture.close()
+            }
+        }
+
+    @Test
+    fun `Models resolves Anthropic auth token as ambient bearer auth`() =
+        runTest {
+            val model =
+                model(
+                    id = "claude-test",
+                    api = "anthropic-messages",
+                    provider = "anthropic",
+                    baseUrl = "https://api.anthropic.com",
+                )
+            val models =
+                Models(
+                    providers =
+                        listOf(
+                            AnthropicProvider(
+                                id = "anthropic",
+                                name = "Anthropic",
+                                baseUrl = "https://api.anthropic.com",
+                                models = listOf(model),
+                                apiKeyEnvNames =
+                                    listOf(
+                                        "ANTHROPIC_OAUTH_TOKEN",
+                                        "ANTHROPIC_API_KEY",
+                                    ),
+                            ),
+                        ),
+                    environment = { name ->
+                        mapOf(
+                            "ANTHROPIC_AUTH_TOKEN" to "auth-token",
+                            "ANTHROPIC_OAUTH_TOKEN" to "oauth-token",
+                            "ANTHROPIC_API_KEY" to "api-key",
+                        )[name]
+                    },
+                )
+
+            val auth = requireNotNull(models.getAuth("anthropic"))
+
+            assertEquals("ANTHROPIC_AUTH_TOKEN", auth.source)
+            assertNull(auth.auth.apiKey)
+            assertEquals(
+                mapOf("Authorization" to "Bearer auth-token"),
+                auth.auth.headers,
+            )
+        }
+
+    @Test
+    fun `Models explicit API key suppresses ambient Anthropic bearer auth`() =
+        runTest {
+            val fixture = anthropicOAuthFixture()
+            try {
+                val model =
+                    model(
+                        id = "claude-test",
+                        api = "anthropic-messages",
+                        provider = "anthropic",
+                        baseUrl = fixture.baseUrl,
+                    )
+                val models =
+                    Models(
+                        providers =
+                            listOf(
+                                AnthropicProvider(
+                                    id = "anthropic",
+                                    name = "Anthropic",
+                                    baseUrl = fixture.baseUrl,
+                                    models = listOf(model),
+                                    apiKeyEnvNames =
+                                        listOf(
+                                            "ANTHROPIC_OAUTH_TOKEN",
+                                            "ANTHROPIC_API_KEY",
+                                        ),
+                                ),
+                            ),
+                        environment = { name ->
+                            if (name == "ANTHROPIC_AUTH_TOKEN") "ambient-token" else null
+                        },
+                    )
+
+                val result =
+                    models.completeSimple(
+                        model,
+                        Context(messages = mutableListOf(UserMessage("Hello", 1))),
+                        SimpleStreamOptions(
+                            stream =
+                                StreamOptions(
+                                    apiKey = "explicit-key",
+                                    cacheRetention = CacheRetention.NONE,
+                                ),
+                        ),
+                    )
+
+                assertEquals(StopReason.TOOL_USE, result.stopReason)
+                val request = fixture.requests.single()
+                assertEquals("explicit-key", request.header("x-api-key"))
+                assertNull(request.header("authorization"))
             } finally {
                 fixture.close()
             }

@@ -21,7 +21,7 @@ import kotlin.test.assertTrue
 
 class RadiusOAuthTest {
     @Test
-    fun `device flow discovers endpoints handles pending and slow down and returns skewed credentials`() =
+    fun `device flow uses gateway endpoints handles pending and slow down and returns skewed credentials`() =
         runTest {
             var now = 1_000_000L
             val sleeps = mutableListOf<Long>()
@@ -29,8 +29,7 @@ class RadiusOAuthTest {
             val transport =
                 RecordingTransport { request ->
                     when {
-                        request.method == "GET" -> OAuthHttpResponse(200, oauthConfig())
-                        request.url.endsWith("/device") ->
+                        request.url == "https://radius.example/v1/oauth/device" ->
                             OAuthHttpResponse(
                                 200,
                                 """
@@ -45,7 +44,7 @@ class RadiusOAuthTest {
                                 """.trimIndent(),
                             )
 
-                        request.url.endsWith("/token") -> {
+                        request.url == "https://radius.example/v1/oauth/token" -> {
                             tokenPoll++
                             when (tokenPoll) {
                                 1 -> OAuthHttpResponse(400, """{"error":"authorization_pending"}""")
@@ -86,18 +85,26 @@ class RadiusOAuthTest {
             assertEquals(0.25, event.intervalSeconds)
             assertEquals(120, event.expiresInSeconds)
 
-            assertEquals("https://radius.example/v1/oauth", transport.requests[0].url)
             assertEquals(
-                mapOf("client_id" to "radius-client", "scope" to "openid profile"),
-                decodeForm(transport.requests[1].body),
+                listOf(
+                    "https://radius.example/v1/oauth/device",
+                    "https://radius.example/v1/oauth/token",
+                    "https://radius.example/v1/oauth/token",
+                    "https://radius.example/v1/oauth/token",
+                ),
+                transport.requests.map(OAuthHttpRequest::url),
+            )
+            assertEquals(
+                mapOf("client_id" to "pi-gateway", "scope" to "gateway offline_access"),
+                decodeForm(transport.requests[0].body),
             )
             assertEquals(
                 mapOf(
-                    "grant_type" to "urn:radius:device",
-                    "client_id" to "radius-client",
+                    "grant_type" to "urn:ietf:params:oauth:grant-type:device_code",
+                    "client_id" to "pi-gateway",
                     "device_code" to "device-1",
                 ),
-                decodeForm(transport.requests[2].body),
+                decodeForm(transport.requests[1].body),
             )
         }
 
@@ -109,8 +116,8 @@ class RadiusOAuthTest {
             val transport =
                 RecordingTransport { request ->
                     when {
-                        request.method == "GET" -> OAuthHttpResponse(200, oauthConfig())
-                        request.url.endsWith("/token") ->
+                        request.method == "GET" -> OAuthHttpResponse(200, oauthDiscovery())
+                        request.url == "https://radius.example/v1/oauth/token" ->
                             OAuthHttpResponse(
                                 200,
                                 """{"access_token":"browser-access","refresh_token":"browser-refresh","expires_in":120}""",
@@ -146,8 +153,9 @@ class RadiusOAuthTest {
             val authUrl = assertIs<AuthEvent.AuthUrl>(interaction.events[1]).url
             val query = decodeForm(requireNotNull(URI(authUrl).rawQuery))
             assertEquals("code", query["response_type"])
-            assertEquals("radius-client", query["client_id"])
+            assertEquals("pi-gateway", query["client_id"])
             assertEquals("http://127.0.0.1:1456/oauth/callback", query["redirect_uri"])
+            assertEquals("gateway offline_access", query["scope"])
             assertEquals("S256", query["code_challenge_method"])
             assertEquals("url", query["handoff"])
             assertEquals("fixed-state", query["state"])
@@ -166,18 +174,14 @@ class RadiusOAuthTest {
         }
 
     @Test
-    fun `refresh rediscovers OAuth config and rotates tokens`() =
+    fun `refresh uses the gateway token endpoint directly and rotates tokens`() =
         runTest {
             val transport =
-                RecordingTransport { request ->
-                    if (request.method == "GET") {
-                        OAuthHttpResponse(200, oauthConfig())
-                    } else {
-                        OAuthHttpResponse(
-                            200,
-                            """{"access_token":"new-access","refresh_token":"new-refresh","expires_in":600,"scope":"scope-2"}""",
-                        )
-                    }
+                RecordingTransport {
+                    OAuthHttpResponse(
+                        200,
+                        """{"access_token":"new-access","refresh_token":"new-refresh","expires_in":600,"scope":"scope-2"}""",
+                    )
                 }
             val oauth =
                 RadiusOAuth(
@@ -202,10 +206,14 @@ class RadiusOAuthTest {
             assertEquals(
                 mapOf(
                     "grant_type" to "refresh_token",
-                    "client_id" to "radius-client",
+                    "client_id" to "pi-gateway",
                     "refresh_token" to "old-refresh",
                 ),
                 decodeForm(transport.requests.last().body),
+            )
+            assertEquals(
+                listOf("https://radius.example/v1/oauth/token"),
+                transport.requests.map(OAuthHttpRequest::url),
             )
             assertEquals("new-access", oauth.toAuth(refreshed).apiKey)
         }
@@ -216,11 +224,17 @@ class RadiusOAuthTest {
             val deniedTransport =
                 RecordingTransport { request ->
                     when {
-                        request.method == "GET" -> OAuthHttpResponse(200, oauthConfig())
                         request.url.endsWith("/device") ->
                             OAuthHttpResponse(
                                 200,
-                                """{"device_code":"device","user_code":"code","expires_in":60}""",
+                                """
+                                {
+                                  "device_code":"device",
+                                  "user_code":"code",
+                                  "verification_uri":"https://verify.example/device",
+                                  "expires_in":60
+                                }
+                                """.trimIndent(),
                             )
 
                         else -> OAuthHttpResponse(400, """{"error":"access_denied","error_description":"No access"}""")
@@ -282,18 +296,10 @@ class RadiusOAuthTest {
         }
     }
 
-    private fun oauthConfig(): String =
+    private fun oauthDiscovery(): String =
         """
         {
-          "issuer":"https://issuer.example",
-          "authorizationEndpoint":"https://oauth.example/authorize",
-          "tokenEndpoint":"https://oauth.example/token",
-          "deviceAuthorizationEndpoint":"https://oauth.example/device",
-          "deviceAuthorizationEventsEndpoint":"https://oauth.example/events",
-          "verificationEndpoint":"https://oauth.example/verify",
-          "clientId":"radius-client",
-          "scope":"openid profile",
-          "deviceCodeGrantType":"urn:radius:device"
+          "authorizationEndpoint":"https://oauth.example/authorize"
         }
         """.trimIndent()
 

@@ -152,6 +152,88 @@ class RemoteCatalogProviderTest {
             }
         }
 
+    @Test
+    fun `stored catalogs revalidate with etag and keep the overlay on 304`() =
+        runTest {
+            val requests = AtomicInteger()
+            val ifNoneMatch = AtomicReference<String?>()
+            val server =
+                catalogServer { exchange ->
+                    ifNoneMatch.set(exchange.requestHeaders.getFirst("If-None-Match"))
+                    if (requests.getAndIncrement() == 0) {
+                        exchange.responseHeaders.add("ETag", "\"catalog-1\"")
+                        respond(exchange, 200, keyedCatalog(model("dynamic")))
+                    } else {
+                        respond(exchange, 304, "")
+                    }
+                }
+            try {
+                val provider =
+                    StaticProvider()
+                        .withRemoteCatalog(catalogBaseUrl = baseUrl(server))
+                val store = InMemoryModelsStore()
+                val context = refreshContext(store)
+
+                provider.refreshModels(context)
+                assertEquals("\"catalog-1\"", store.read(provider.id)?.etag)
+
+                provider.refreshModels(context.copy(force = true))
+
+                assertEquals("\"catalog-1\"", ifNoneMatch.get())
+                assertEquals(listOf("static", "dynamic"), provider.getModels().map(Model::id))
+                assertEquals(listOf("dynamic"), store.read(provider.id)?.models?.map(Model::id))
+                assertEquals("\"catalog-1\"", store.read(provider.id)?.etag)
+            } finally {
+                server.stop(0)
+            }
+        }
+
+    @Test
+    fun `unavailable overlays clear stale etags while transient failures preserve them`() =
+        runTest {
+            val responses = ArrayDeque(listOf(501, 429))
+            val server =
+                catalogServer { exchange ->
+                    respond(exchange, responses.removeFirst(), "fixture")
+                }
+            try {
+                val provider =
+                    StaticProvider()
+                        .withRemoteCatalog(catalogBaseUrl = baseUrl(server))
+                val store = InMemoryModelsStore()
+                store.write(
+                    provider.id,
+                    ModelsStoreEntry(
+                        models = listOf(model("cached")),
+                        lastModified = 1,
+                        checkedAt = 1,
+                        etag = "\"stale\"",
+                    ),
+                )
+                val context = refreshContext(store).copy(force = true)
+
+                provider.refreshModels(context)
+                assertEquals(null, store.read(provider.id)?.etag)
+
+                store.write(
+                    provider.id,
+                    ModelsStoreEntry(
+                        models = listOf(model("cached")),
+                        lastModified = 1,
+                        checkedAt = 1,
+                        etag = "\"valid\"",
+                    ),
+                )
+                kotlin.test.assertFailsWith<IllegalStateException> {
+                    provider.refreshModels(context)
+                }
+                assertEquals("\"valid\"", store.read(provider.id)?.etag)
+                assertEquals(listOf("cached"), store.read(provider.id)?.models?.map(Model::id))
+            } finally {
+                server.stop(0)
+            }
+        }
+
     private fun refreshContext(store: InMemoryModelsStore) =
         works.earendil.pi.ai.RefreshModelsContext(
             store =
@@ -184,6 +266,11 @@ class RemoteCatalogProviderTest {
         status: Int,
         body: String,
     ) {
+        if (status == 304) {
+            exchange.sendResponseHeaders(status, -1)
+            exchange.close()
+            return
+        }
         val bytes = body.toByteArray(StandardCharsets.UTF_8)
         exchange.responseHeaders.add("content-type", "application/json")
         exchange.sendResponseHeaders(status, bytes.size.toLong())

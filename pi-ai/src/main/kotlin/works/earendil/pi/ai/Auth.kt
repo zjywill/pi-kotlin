@@ -181,7 +181,21 @@ class ModelsAuthException(
     val code: String,
     message: String,
     cause: Throwable? = null,
-) : RuntimeException(message, cause)
+) : RuntimeException(withAuthCauseDetail(message, cause), cause)
+
+private fun withAuthCauseDetail(
+    message: String,
+    cause: Throwable?,
+): String {
+    val detail =
+        cause
+            ?.message
+            ?.trim()
+            ?.takeIf(String::isNotEmpty)
+            ?: cause?.toString()?.trim()?.takeIf(String::isNotEmpty)
+            ?: return message
+    return if (detail in message) message else "$message: $detail"
+}
 
 fun Credential.typeName(): String =
     when (this) {

@@ -81,7 +81,10 @@ selection, a newer persisted overlay restored without network access, and
 The GitHub Copilot comparison covers enterprise-domain device OAuth, the
 GitHub-to-Copilot token exchange, policy enablement for every known model,
 account-specific model filtering, `proxy-ep` API URL derivation, catalog
-protocol counts, and `X-Initiator`/vision request headers.
+protocol counts, and `X-Initiator`/vision request headers. When the pinned
+checkout contains the intentionally stale pre-hydration model-data schema, the
+comparison hydrates a temporary source archive and leaves the source checkout
+unchanged.
 
 The provider stream comparison projects the documented public event transcript:
 event type, index, delta/end content, tool calls, and terminal messages. It does

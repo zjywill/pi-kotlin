@@ -195,6 +195,9 @@ private fun loadContextFileFromDirectory(
             continue
         }
         try {
+            if (!Files.isRegularFile(path)) {
+                continue
+            }
             return ProjectContextFile(path, Files.readString(path))
         } catch (error: Exception) {
             onWarning("Could not read $path: ${error.message}")

@@ -8,6 +8,10 @@ const { anthropicOAuth } = await import(
 const { stream } = await import(
 	pathToFileURL(`${tsRoot}/packages/ai/src/api/anthropic-messages.ts`).href
 );
+const { createModels } = await import(pathToFileURL(`${tsRoot}/packages/ai/src/models.ts`).href);
+const { anthropicProvider } = await import(
+	pathToFileURL(`${tsRoot}/packages/ai/src/providers/anthropic.ts`).href
+);
 
 type OAuthRequest = {
 	url: string;
@@ -62,17 +66,17 @@ type CapturedProviderRequest = {
 	body: Record<string, unknown>;
 };
 
-let providerRequest: CapturedProviderRequest | undefined;
+const providerRequests: CapturedProviderRequest[] = [];
 const fixture = createServer(async (request, response) => {
 	const chunks: Buffer[] = [];
 	for await (const chunk of request) {
 		chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
 	}
-	providerRequest = {
+	providerRequests.push({
 		path: request.url ?? "",
 		headers: request.headers,
 		body: JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>,
-	};
+	});
 	const sse = [
 		'event: message_start\ndata: {"type":"message_start","message":{"id":"msg-1","usage":{"input_tokens":1,"output_tokens":0}}}',
 		'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool-1","name":"Read","input":{}}}',
@@ -152,8 +156,18 @@ for await (const event of stream(model, context, {
 })) {
 	if (event.type === "done" || event.type === "error") terminal = event;
 }
+const models = createModels({
+	authContext: {
+		env: async (name) => (name === "ANTHROPIC_AUTH_TOKEN" ? "gateway-token" : undefined),
+		fileExists: async () => false,
+	},
+});
+models.setProvider({ ...anthropicProvider(), getModels: () => [model] });
+const bearerResult = await models.completeSimple(model, context, { cacheRetention: "none" });
 await new Promise<void>((resolve) => fixture.close(() => resolve()));
-if (!providerRequest) throw new Error("Provider request was not captured");
+const providerRequest = providerRequests[0];
+const bearerRequest = providerRequests[1];
+if (!providerRequest || !bearerRequest) throw new Error("Provider requests were not captured");
 
 const auth = new URL(authorizationUrl);
 const verifier = auth.searchParams.get("state") ?? "";
@@ -231,6 +245,19 @@ console.log(
 				result: {
 					stopReason: terminal?.reason,
 					toolName: terminal?.message?.content?.find((block: any) => block.type === "toolCall")?.name,
+				},
+			},
+			bearer: {
+				headers: {
+					authorization: bearerRequest.headers.authorization,
+					xApiKey: bearerRequest.headers["x-api-key"] ?? null,
+					anthropicBeta: bearerRequest.headers["anthropic-beta"],
+					xApp: bearerRequest.headers["x-app"] ?? null,
+				},
+				body: bearerRequest.body,
+				result: {
+					stopReason: bearerResult.stopReason,
+					toolName: bearerResult.content.find((block: any) => block.type === "toolCall")?.name,
 				},
 			},
 		},

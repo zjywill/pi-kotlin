@@ -14,11 +14,13 @@ import works.earendil.pi.ai.AssistantError
 import works.earendil.pi.ai.AssistantMessage
 import works.earendil.pi.ai.AssistantMessageEventStream
 import works.earendil.pi.ai.AssistantStart
+import works.earendil.pi.ai.AuthResult
 import works.earendil.pi.ai.CacheRetention
 import works.earendil.pi.ai.Context
 import works.earendil.pi.ai.ImageContent
 import works.earendil.pi.ai.MessageContent
 import works.earendil.pi.ai.Model
+import works.earendil.pi.ai.ModelAuth
 import works.earendil.pi.ai.OAuthAuth
 import works.earendil.pi.ai.Provider
 import works.earendil.pi.ai.StopReason
@@ -52,6 +54,31 @@ class AnthropicProvider(
 ) : Provider {
     override fun getModels(): List<Model> = models
 
+    override fun resolveAmbientAuth(environment: (String) -> String?): AuthResult? {
+        environment(ANTHROPIC_AUTH_TOKEN_ENV)
+            ?.takeIf(String::isNotBlank)
+            ?.let { token ->
+                return AuthResult(
+                    auth =
+                        ModelAuth(
+                            headers = mapOf("Authorization" to "Bearer $token"),
+                        ),
+                    source = ANTHROPIC_AUTH_TOKEN_ENV,
+                )
+            }
+        apiKeyEnvNames.forEach { name ->
+            environment(name)
+                ?.takeIf(String::isNotBlank)
+                ?.let { apiKey ->
+                    return AuthResult(
+                        auth = ModelAuth(apiKey = apiKey),
+                        source = name,
+                    )
+                }
+        }
+        return null
+    }
+
     override suspend fun stream(
         model: Model,
         context: Context,
@@ -83,8 +110,33 @@ class AnthropicProvider(
         options: StreamOptions,
         stream: AssistantMessageEventStream,
     ) {
-        val apiKey = resolveApiKeyOrNull(options.apiKey, options.env, apiKeyEnvNames)
-        requireAnthropicRequestAuth(id, apiKey, options.headers)
+        val bearerToken =
+            if (options.apiKey.isNullOrBlank()) {
+                resolveApiKeyOrNull(
+                    explicit = null,
+                    env = options.env,
+                    names = listOf(ANTHROPIC_AUTH_TOKEN_ENV),
+                )
+            } else {
+                null
+            }
+        val apiKey =
+            if (bearerToken == null) {
+                resolveApiKeyOrNull(options.apiKey, options.env, apiKeyEnvNames)
+            } else {
+                null
+            }
+        val bearerHeaders =
+            bearerToken
+                ?.let { mapOf("Authorization" to "Bearer $it") }
+                .orEmpty()
+        val requestHeaders =
+            mergedHeaders(
+                bearerHeaders,
+                model.headers,
+                options.headers,
+            )
+        requireAnthropicRequestAuth(id, apiKey, requestHeaders)
         val isOAuthToken =
             model.provider != "github-copilot" &&
                 apiKey?.let(::isAnthropicOAuthToken) == true
@@ -114,7 +166,8 @@ class AnthropicProvider(
             body = providerJson.encodeToString(JsonObject.serializer(), body),
             headers =
                 mergedHeaders(
-                    anthropicRequestHeaders(model, context, options, apiKey, isOAuthToken),
+                    anthropicRequestHeaders(model, context, options, apiKey, isOAuthToken) +
+                        bearerHeaders,
                     model.headers,
                     options.headers,
                 ),
@@ -534,6 +587,8 @@ private fun anthropicBetaFeatures(
     }
 
 private fun isAnthropicOAuthToken(apiKey: String): Boolean = "sk-ant-oat" in apiKey
+
+private const val ANTHROPIC_AUTH_TOKEN_ENV = "ANTHROPIC_AUTH_TOKEN"
 
 private fun anthropicToolName(
     name: String,

@@ -185,7 +185,7 @@ class ModelsAuthTest {
                 )
 
             assertEquals(StopReason.ERROR, result.stopReason)
-            assertEquals("OAuth refresh failed for faux", result.errorMessage)
+            assertEquals("OAuth refresh failed for faux: invalid_grant", result.errorMessage)
             assertEquals(0, provider.state.callCount)
             assertIs<OAuthCredential>(store.read("faux"))
         }

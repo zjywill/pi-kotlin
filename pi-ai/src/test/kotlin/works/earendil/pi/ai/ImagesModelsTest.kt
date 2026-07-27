@@ -305,10 +305,16 @@ class ImagesModelsTest {
             assertEquals(listOf("openrouter"), providers.map(ImagesProvider::id))
             assertEquals("OpenRouter", providers.single().name)
             assertNotNull(providers.single().oauth)
-            assertEquals(39, providers.single().getModels().size)
+            assertEquals(40, providers.single().getModels().size)
             assertTrue(providers.single().getModels().all { it.api == "openrouter-images" })
+            assertNotNull(
+                providers
+                    .single()
+                    .getModels()
+                    .singleOrNull { it.id == "microsoft/mai-image-2.5-pro" },
+            )
             assertEquals(
-                "8d32873b3425e4f0dd82327440ce56dedcbf6cc0313319ecd96478b81e078ecc",
+                "7261305ede1d4fe6059920b1cb4eb9fff23129586f6d372bc86c8b5b0ca2f74f",
                 builtInImageCatalogHash(),
             )
 

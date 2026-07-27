@@ -25,16 +25,8 @@ import works.earendil.pi.ai.ModelAuth
 import works.earendil.pi.ai.OAuthAuth
 import works.earendil.pi.ai.OAuthCredential
 
-internal data class RadiusOAuthConfig(
-    val issuer: String,
+internal data class RadiusOAuthDiscovery(
     val authorizationEndpoint: String,
-    val tokenEndpoint: String,
-    val deviceAuthorizationEndpoint: String,
-    val deviceAuthorizationEventsEndpoint: String,
-    val verificationEndpoint: String,
-    val clientId: String,
-    val scope: String,
-    val deviceCodeGrantType: String,
 )
 
 internal data class RadiusPkce(
@@ -62,7 +54,6 @@ internal class RadiusOAuth(
     private val gateway = normalizeRadiusGatewayUrl(gateway)
 
     override suspend fun login(interaction: AuthInteraction): OAuthCredential {
-        val oauth = loadConfig()
         val method =
             interaction.prompt(
                 AuthPrompt.Select(
@@ -78,19 +69,17 @@ internal class RadiusOAuth(
                 ),
             )
         return when (method) {
-            "browser" -> loginWithBrowser(oauth, interaction)
-            "device-code" -> loginWithDeviceCode(oauth, interaction)
+            "browser" -> loginWithBrowser(loadDiscovery().authorizationEndpoint, interaction)
+            "device-code" -> loginWithDeviceCode(interaction)
             else -> error("Unknown $name sign-in method: $method")
         }
     }
 
     override suspend fun refresh(credential: OAuthCredential): OAuthCredential {
-        val oauth = loadConfig()
         return requestToken(
-            oauth,
             formBody(
                 "grant_type" to "refresh_token",
-                "client_id" to oauth.clientId,
+                "client_id" to RADIUS_OAUTH_CLIENT_ID,
                 "refresh_token" to credential.refresh,
             ),
         )
@@ -99,7 +88,7 @@ internal class RadiusOAuth(
     override suspend fun toAuth(credential: OAuthCredential): ModelAuth =
         ModelAuth(apiKey = credential.access)
 
-    private suspend fun loadConfig(): RadiusOAuthConfig {
+    private suspend fun loadDiscovery(): RadiusOAuthDiscovery {
         val response =
             transport.execute(
                 OAuthHttpRequest(
@@ -114,21 +103,13 @@ internal class RadiusOAuth(
         val body =
             runCatching { providerJson.parseToJsonElement(response.body).jsonObject }
                 .getOrElse { error("Invalid Radius OAuth config from $gateway") }
-        return RadiusOAuthConfig(
-            issuer = body.requiredRadiusString("issuer"),
+        return RadiusOAuthDiscovery(
             authorizationEndpoint = body.requiredRadiusString("authorizationEndpoint"),
-            tokenEndpoint = body.requiredRadiusString("tokenEndpoint"),
-            deviceAuthorizationEndpoint = body.requiredRadiusString("deviceAuthorizationEndpoint"),
-            deviceAuthorizationEventsEndpoint = body.requiredRadiusString("deviceAuthorizationEventsEndpoint"),
-            verificationEndpoint = body.requiredRadiusString("verificationEndpoint"),
-            clientId = body.requiredRadiusString("clientId"),
-            scope = body.requiredRadiusString("scope"),
-            deviceCodeGrantType = body.requiredRadiusString("deviceCodeGrantType"),
         )
     }
 
     private suspend fun loginWithBrowser(
-        oauth: RadiusOAuthConfig,
+        authorizationEndpoint: String,
         interaction: AuthInteraction,
     ): OAuthCredential {
         val pkce = createRadiusPkce(random)
@@ -136,11 +117,11 @@ internal class RadiusOAuth(
         val callback = callbackServerFactory(state)
         val authorizationUrl =
             radiusUrl(
-                oauth.authorizationEndpoint,
+                authorizationEndpoint,
                 "response_type" to "code",
-                "client_id" to oauth.clientId,
+                "client_id" to RADIUS_OAUTH_CLIENT_ID,
                 "redirect_uri" to RADIUS_REDIRECT_URI,
-                "scope" to oauth.scope,
+                "scope" to RADIUS_OAUTH_SCOPE,
                 "code_challenge" to pkce.challenge,
                 "code_challenge_method" to "S256",
                 "handoff" to "url",
@@ -161,10 +142,9 @@ internal class RadiusOAuth(
             val code = callback?.code?.await()
                 ?: error("OAuth callback did not complete.")
             requestToken(
-                oauth,
                 formBody(
                     "grant_type" to "authorization_code",
-                    "client_id" to oauth.clientId,
+                    "client_id" to RADIUS_OAUTH_CLIENT_ID,
                     "redirect_uri" to RADIUS_REDIRECT_URI,
                     "code" to code,
                     "code_verifier" to pkce.verifier,
@@ -175,19 +155,16 @@ internal class RadiusOAuth(
         }
     }
 
-    private suspend fun loginWithDeviceCode(
-        oauth: RadiusOAuthConfig,
-        interaction: AuthInteraction,
-    ): OAuthCredential {
+    private suspend fun loginWithDeviceCode(interaction: AuthInteraction): OAuthCredential {
         val response =
             transport.execute(
                 OAuthHttpRequest(
-                    url = oauth.deviceAuthorizationEndpoint,
+                    url = URI.create(gateway).resolve("/v1/oauth/device").toString(),
                     headers = RADIUS_FORM_HEADERS,
                     body =
                         formBody(
-                            "client_id" to oauth.clientId,
-                            "scope" to oauth.scope,
+                            "client_id" to RADIUS_OAUTH_CLIENT_ID,
+                            "scope" to RADIUS_OAUTH_SCOPE,
                         ),
                 ),
             )
@@ -204,17 +181,22 @@ internal class RadiusOAuth(
                 }
         val deviceCode = body.stringValue("device_code")
         val userCode = body.stringValue("user_code")
+        val verificationUri = body.stringValue("verification_uri")
         val expiresIn = body.numberValue("expires_in")
-        if (deviceCode.isNullOrEmpty() || userCode.isNullOrEmpty() || expiresIn == null || expiresIn <= 0.0) {
+        if (
+            deviceCode.isNullOrEmpty() ||
+            userCode.isNullOrEmpty() ||
+            verificationUri.isNullOrEmpty() ||
+            expiresIn == null ||
+            expiresIn <= 0.0
+        ) {
             error("Radius OAuth device authorization response is missing required fields")
         }
         val interval = body.numberValue("interval")
         interaction.notify(
             AuthEvent.DeviceCode(
                 userCode = userCode,
-                verificationUri =
-                    body.stringValue("verification_uri")
-                        ?: oauth.verificationEndpoint,
+                verificationUri = verificationUri,
                 intervalSeconds = interval,
                 expiresInSeconds = expiresIn.toInt(),
             ),
@@ -229,10 +211,9 @@ internal class RadiusOAuth(
         while (now() < deadline) {
             try {
                 return requestToken(
-                    oauth,
                     formBody(
-                        "grant_type" to oauth.deviceCodeGrantType,
-                        "client_id" to oauth.clientId,
+                        "grant_type" to RADIUS_DEVICE_CODE_GRANT_TYPE,
+                        "client_id" to RADIUS_OAUTH_CLIENT_ID,
                         "device_code" to deviceCode,
                     ),
                 )
@@ -262,13 +243,12 @@ internal class RadiusOAuth(
     }
 
     private suspend fun requestToken(
-        oauth: RadiusOAuthConfig,
         body: String,
     ): OAuthCredential {
         val response =
             transport.execute(
                 OAuthHttpRequest(
-                    url = oauth.tokenEndpoint,
+                    url = URI.create(gateway).resolve("/v1/oauth/token").toString(),
                     headers = RADIUS_FORM_HEADERS,
                     body = body,
                 ),
@@ -471,6 +451,9 @@ private const val RADIUS_CALLBACK_HOST = "127.0.0.1"
 private const val RADIUS_CALLBACK_PORT = 1456
 private const val RADIUS_CALLBACK_PATH = "/oauth/callback"
 private const val RADIUS_REDIRECT_URI = "http://$RADIUS_CALLBACK_HOST:$RADIUS_CALLBACK_PORT$RADIUS_CALLBACK_PATH"
+private const val RADIUS_OAUTH_CLIENT_ID = "pi-gateway"
+private const val RADIUS_OAUTH_SCOPE = "gateway offline_access"
+private const val RADIUS_DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
 private const val RADIUS_TOKEN_EXPIRY_SKEW_MS = 60_000L
 private const val MINIMUM_RADIUS_POLL_INTERVAL_MS = 1_000L
 private const val DEFAULT_RADIUS_POLL_INTERVAL_SECONDS = 5.0

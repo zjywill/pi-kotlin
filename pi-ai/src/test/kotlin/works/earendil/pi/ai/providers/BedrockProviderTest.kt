@@ -238,6 +238,17 @@ class BedrockProviderTest {
         assertEquals("xhigh", adaptive.getValue("output_config").jsonObject.getValue("effort").jsonPrimitive.content)
         assertFalse("anthropic_beta" in adaptive)
 
+        val opus5 =
+            buildBedrockRequestBody(
+                bedrockModel("global.anthropic.claude-opus-5", name = "Claude Opus 5"),
+                context,
+                StreamOptions(reasoning = ThinkingLevel.XHIGH),
+                { null },
+            ).getValue("additionalModelRequestFields").jsonObject
+        assertEquals("adaptive", opus5.getValue("thinking").jsonObject.getValue("type").jsonPrimitive.content)
+        assertEquals("xhigh", opus5.getValue("output_config").jsonObject.getValue("effort").jsonPrimitive.content)
+        assertFalse("anthropic_beta" in opus5)
+
         val fixed =
             buildBedrockRequestBody(
                 bedrockModel("us.anthropic.claude-sonnet-4-5-20250929-v1:0"),
@@ -293,6 +304,27 @@ class BedrockProviderTest {
             )
         assertEquals(2_000, adaptive.maxTokens)
         assertEquals(ThinkingLevel.HIGH, adaptive.reasoning)
+    }
+
+    @Test
+    fun `Claude Opus 5 supports prompt caching`() {
+        val body =
+            buildBedrockRequestBody(
+                bedrockModel("global.anthropic.claude-opus-5", name = "Claude Opus 5"),
+                Context(
+                    systemPrompt = "system",
+                    messages = mutableListOf(UserMessage("hello")),
+                ),
+                StreamOptions(cacheRetention = CacheRetention.SHORT),
+                { null },
+            )
+
+        assertTrue(
+            body
+                .getValue("system")
+                .jsonArray
+                .any { "cachePoint" in it.jsonObject },
+        )
     }
 
     @Test

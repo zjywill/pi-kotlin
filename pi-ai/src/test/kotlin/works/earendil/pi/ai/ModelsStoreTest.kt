@@ -18,12 +18,20 @@ class ModelsStoreTest {
                 val path = directory.resolve("models-store.json")
                 val store = JsonFileModelsStore(path)
 
-                store.write("one", ModelsStoreEntry(listOf(model("one", "m1")), checkedAt = 100))
+                store.write(
+                    "one",
+                    ModelsStoreEntry(
+                        listOf(model("one", "m1")),
+                        checkedAt = 100,
+                        etag = "\"catalog-one\"",
+                    ),
+                )
                 store.write("two", ModelsStoreEntry(listOf(model("two", "m2")), checkedAt = 200))
 
                 val reloaded = JsonFileModelsStore(path)
                 assertEquals(listOf("m1"), reloaded.read("one")?.models?.map(Model::id))
                 assertEquals(100, reloaded.read("one")?.checkedAt)
+                assertEquals("\"catalog-one\"", reloaded.read("one")?.etag)
                 assertEquals(listOf("m2"), reloaded.read("two")?.models?.map(Model::id))
                 assertTrue("\"one\"" in path.readText())
                 assertTrue("\"two\"" in path.readText())

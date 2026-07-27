@@ -61,8 +61,16 @@ const responses = [
 		headers: { "last-modified": new Date(bundledAt + 60_000).toUTCString() },
 	}),
 	new Response("not implemented", { status: 501 }),
+	new Response(JSON.stringify({ dynamic: model("etagged") }), {
+		headers: { etag: '"catalog-1"' },
+	}),
+	new Response(null, { status: 304 }),
 ];
-globalThis.fetch = async () => responses.shift() as Response;
+const validators: Array<string | undefined> = [];
+globalThis.fetch = async (_input, init) => {
+	validators.push(new Headers(init?.headers).get("if-none-match") ?? undefined);
+	return responses.shift() as Response;
+};
 
 const selectionStore = store();
 const selectionProvider = withRemoteCatalog(staticProvider(), "https://pi.dev", bundledAt);
@@ -84,6 +92,16 @@ const unavailableProvider = withRemoteCatalog(staticProvider(), "https://pi.dev"
 await unavailableProvider.refreshModels(context(unavailableStore, true));
 const unavailableEntry = unavailableStore.read() as { checkedAt?: number; lastModified?: number };
 
+const etagStore = store();
+const etagProvider = withRemoteCatalog(staticProvider(), "https://pi.dev");
+await etagProvider.refreshModels(context(etagStore, true));
+await etagProvider.refreshModels(context(etagStore, true, true));
+const etagEntry = etagStore.read() as {
+	models: Array<{ id: string }>;
+	checkedAt?: number;
+	etag?: string;
+};
+
 console.log(
 	JSON.stringify({
 		older,
@@ -93,6 +111,13 @@ console.log(
 			models: unavailableProvider.getModels().map((entry: { id: string }) => entry.id),
 			lastModified: unavailableEntry.lastModified,
 			hasCheckedAt: typeof unavailableEntry.checkedAt === "number",
+		},
+		etag: {
+			sent: validators.at(-1),
+			models: etagProvider.getModels().map((entry: { id: string }) => entry.id),
+			storedModels: etagEntry.models.map((entry) => entry.id),
+			storedEtag: etagEntry.etag,
+			hasCheckedAt: typeof etagEntry.checkedAt === "number",
 		},
 	}),
 );

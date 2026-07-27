@@ -8,6 +8,7 @@ import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -31,6 +32,7 @@ fun main() =
     runBlocking {
         val bundledAt = Instant.parse("2026-07-23T10:00:00Z").toEpochMilli()
         val request = AtomicInteger()
+        val validator = AtomicReference<String?>()
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/") { exchange ->
             when (request.getAndIncrement()) {
@@ -44,7 +46,16 @@ fun main() =
                     respond(exchange, 200, keyedCatalog(model("newer")))
                 }
 
-                else -> respond(exchange, 501, "not implemented")
+                2 -> respond(exchange, 501, "not implemented")
+                3 -> {
+                    exchange.responseHeaders.add("ETag", "\"catalog-1\"")
+                    respond(exchange, 200, keyedCatalog(model("etagged")))
+                }
+
+                else -> {
+                    validator.set(exchange.requestHeaders.getFirst("If-None-Match"))
+                    respond(exchange, 304, "")
+                }
             }
         }
         server.start()
@@ -89,6 +100,16 @@ fun main() =
             unavailableProvider.refreshModels(refreshContext(unavailableStore, allowNetwork = true))
             val unavailableEntry = requireNotNull(unavailableStore.read("test-provider"))
 
+            val etagStore = InMemoryModelsStore()
+            val etagProvider =
+                StaticProvider()
+                    .withRemoteCatalog(catalogBaseUrl = baseUrl)
+            etagProvider.refreshModels(refreshContext(etagStore, allowNetwork = true))
+            etagProvider.refreshModels(
+                refreshContext(etagStore, allowNetwork = true, force = true),
+            )
+            val etagEntry = requireNotNull(etagStore.read("test-provider"))
+
             println(
                 buildJsonObject {
                     put("older", strings(older))
@@ -100,6 +121,16 @@ fun main() =
                             put("models", strings(unavailableProvider.getModels().map(Model::id)))
                             put("lastModified", unavailableEntry.lastModified)
                             put("hasCheckedAt", unavailableEntry.checkedAt != null)
+                        },
+                    )
+                    put(
+                        "etag",
+                        buildJsonObject {
+                            validator.get()?.let { put("sent", it) }
+                            put("models", strings(etagProvider.getModels().map(Model::id)))
+                            put("storedModels", strings(etagEntry.models.map(Model::id)))
+                            etagEntry.etag?.let { put("storedEtag", it) }
+                            put("hasCheckedAt", etagEntry.checkedAt != null)
                         },
                     )
                 },
@@ -146,6 +177,11 @@ private fun respond(
     status: Int,
     body: String,
 ) {
+    if (status == 304) {
+        exchange.sendResponseHeaders(status, -1)
+        exchange.close()
+        return
+    }
     val bytes = body.toByteArray(StandardCharsets.UTF_8)
     exchange.responseHeaders.add("content-type", "application/json")
     exchange.sendResponseHeaders(status, bytes.size.toLong())

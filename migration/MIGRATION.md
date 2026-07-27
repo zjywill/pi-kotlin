@@ -13,7 +13,7 @@ The source commit is immutable for the first migration pass. Upstream changes
 land in a later synchronization pass so that parity failures have one cause.
 
 The latest reviewed synchronization pass reaches
-`24bace27cf308c89707cf8005b4795d873e23f17` (July 23, 2026). The original
+`cee5ff7520d8828bed9955ef00419e995d1f91e0` (July 26, 2026). The original
 baseline remains recorded so regressions can be attributed either to the first
 translation or to a later upstream sync.
 
@@ -71,7 +71,7 @@ features outside that slice remain migration work.
 | --- | --- | --- |
 | Gradle multi-module build | Functional slice | Six JVM 21 modules; `clean test installDist` passes with warnings as errors |
 | Core AI messages and stream protocol | Functional slice | Message, event-stream, image-generation result, UUIDv7, tool validation, and faux-provider tests |
-| Model catalog | Functional slice | Hydrated schema-v3 manifest and 37 chat-provider files verify by SHA-256; all 1,109 static chat model records plus the credential-backed dynamic Radius catalog are exposed through 38 executable chat providers, including 28 credential-filtered GitHub Copilot models; a separate immutable catalog exposes all 39 OpenRouter image models with an independent checksum |
+| Model catalog | Functional slice | Hydrated schema-v3 manifest and 37 chat-provider files verify by SHA-256; all 1,110 static chat model records plus the credential-backed dynamic Radius catalog are exposed through 38 executable chat providers, including 29 credential-filtered GitHub Copilot models; a separate immutable catalog exposes all 40 OpenRouter image models with an independent checksum |
 | Provider HTTP implementations | Functional slice | All 10 upstream chat API families plus `openrouter-images` have executable Kotlin paths. Coverage includes Google Generative AI, Google Vertex AI, Anthropic Messages plus Claude Pro/Max OAuth, OpenRouter Chat Completions and Images plus shared browser OAuth, xAI Chat Completions/Responses plus device OAuth, Kimi Coding Anthropic Messages plus device OAuth, Radius `pi-messages` plus discovered browser/device OAuth and dynamic models, OpenAI Chat Completions, OpenAI Responses, Azure OpenAI Responses, Mistral Conversations, Amazon Bedrock ConverseStream, OpenAI Codex Responses SSE/WebSocket plus browser/device OAuth, GitHub Copilot device OAuth and Anthropic/OpenAI Chat/OpenAI Responses delegates, Cloudflare Workers AI, and Cloudflare AI Gateway with independent payload/event/auth/image parity |
 | Agent loop | Functional slice | Streaming, tool calls, parallel execution, steering, follow-up, abort, and session tests using the faux provider; coding-message projection has independent parity for bash/custom/branch/compaction messages |
 | CLI argument contract | Partial | Parser tests and byte-for-byte `--help` oracle against the pinned TypeScript CLI; provider-prefixed and slash-containing model IDs, thinking suffixes, and interactive `/login`/`/logout` for OAuth providers are covered |
@@ -87,25 +87,27 @@ features outside that slice remain migration work.
 
 ## Verification snapshot
 
-Verified on July 24, 2026 against source commit
-`24bace27cf308c89707cf8005b4795d873e23f17`:
+Verified on July 27, 2026 against source commit
+`cee5ff7520d8828bed9955ef00419e995d1f91e0`:
 
-- `./gradlew clean test installDist`: passed, 251 tests, 0 failures, 0 errors,
+- `./gradlew clean test installDist`: passed, 258 tests, 0 failures, 0 errors,
   and 0 skipped.
 - `./migration/oracle/compare-cli-help.sh`: passed with byte-for-byte CLI help
   parity.
 - `./migration/oracle/compare-model-catalog-runtime.sh`: passed for bundled,
-  persisted-newer, remote-newer, and unavailable-catalog selection behavior.
+  persisted-newer, remote-newer, unavailable-catalog, and ETag/304
+  revalidation behavior.
 - `./migration/oracle/compare-anthropic-oauth.sh`: passed with independent
   browser/manual PKCE login, authorization-code and refresh-token JSON
   requests, rotated credentials, five-minute expiry skew, Claude Code Bearer
   authentication, content negotiation and identity headers, mandatory system
-  identity, complete Messages payload parity, and canonical tool-name mapping
-  in both directions.
+  identity, `ANTHROPIC_AUTH_TOKEN` bearer headers without OAuth shaping,
+  complete Messages payload parity, and canonical tool-name mapping in both
+  directions.
 - `./migration/oracle/compare-github-copilot.sh`: passed with independent
   enterprise-domain device OAuth, GitHub and Copilot token requests, all-model
   policy enablement, account model filtering, credential-specific
-  `proxy-ep` base URL derivation, 9 Anthropic/7 Chat Completions/12 Responses
+  `proxy-ep` base URL derivation, 10 Anthropic/7 Chat Completions/12 Responses
   model counts, and user/agent/vision dynamic headers.
 - `./migration/oracle/compare-kimi-coding-oauth.sh`: passed with independent
   device authorization, wait-before-first-poll, pending and server-directed
@@ -123,7 +125,7 @@ Verified on July 24, 2026 against source commit
   no-op refresh, request-auth derivation, and a real local OpenRouter-compatible
   provider request consuming the stored OAuth credential.
 - `./migration/oracle/compare-openrouter-images.sh`: passed with exact parity
-  for the 39-model image catalog and checksum, final `/chat/completions`
+  for the 40-model image catalog and checksum, final `/chat/completions`
   URL/headers/payload, text and valid/invalid data-URL image parsing, response
   IDs, cache-aware usage/cost, payload and response callbacks, retry behavior,
   HTTP status/body errors, missing-key results, stored OpenRouter OAuth
@@ -248,11 +250,15 @@ Verified on July 24, 2026 against source commit
   empty-leaf behavior.
 - `./migration/audit-migration.sh sync`: passed for every target-package commit
   between the original baseline and
-  `24bace27cf308c89707cf8005b4795d873e23f17`.
+  `cee5ff7520d8828bed9955ef00419e995d1f91e0`.
 - The July 23 incremental sync adds JSON-schema and grammar constrained
   sampling, strict-tool negotiation across supported providers, OpenAI custom
   tool streaming, abortable provider retry backoff, explicit cache-write
   suppression, bracketed model-ID coverage, and RPC bash output update events.
+- The July 26 incremental sync adds Anthropic bearer-token authentication,
+  gateway-owned Radius OAuth endpoints, Claude Opus 5 and Bedrock inference
+  profile behavior, 40 OpenRouter image models, ETag model-catalog
+  revalidation, auth-cause diagnostics, and directory-safe context discovery.
 - Installed `pi` PTY smoke: entered interactive mode, rendered `/help`, and
   preserved `openrouter/moonshotai/kimi-k2.6` through `/model`, then exited
   normally through `/exit`.
@@ -271,7 +277,7 @@ Verified on July 24, 2026 against source commit
   variables, and persisted as `{}` with mode `0600`.
 - Installed image-catalog smoke loaded the distributed `pi-ai` JAR through the
   `pi-server` installation and exposed one OpenRouter image provider with all
-  39 bundled models and OAuth support.
+  40 bundled models and OAuth support.
 - Installed xAI authentication smoke: an isolated OAuth fixture was loaded by
   `/logout xai`, removed without touching ambient variables, and persisted as
   `{}` with mode `0600`.
@@ -317,11 +323,11 @@ Verified on July 24, 2026 against source commit
   `openrouter/moonshotai/kimi-k2.6`, API `openai-completions`, and thinking
   level `high`.
 - With an isolated xAI OAuth fixture, the installed server exposed all 3 xAI
-  models and 1,109 models total. RPC `set_model`, `set_thinking_level`, and
+  models and 1,110 models total. RPC `set_model`, `set_thinking_level`, and
   piped `rpc-stream get_state` preserved `xai/grok-4.5`, API
   `openai-responses`, and thinking level `high`.
 - With an isolated Kimi Code OAuth fixture, the installed server exposed all 3
-  Kimi Coding models and 1,109 models total. RPC `set_model`,
+  Kimi Coding models and 1,110 models total. RPC `set_model`,
   `set_thinking_level`, and piped `rpc-stream get_state` preserved
   `kimi-coding/k3`, API `anthropic-messages`, and thinking level `high`.
 - With an isolated Radius OAuth fixture and legacy gateway config, the
@@ -335,7 +341,7 @@ Verified on July 24, 2026 against source commit
   0 after stdin EOF.
 - The pinned TypeScript source worktree remained clean.
 - A detached source snapshot at
-  `24bace27cf308c89707cf8005b4795d873e23f17` passed
+  `cee5ff7520d8828bed9955ef00419e995d1f91e0` passed
   `npm ci --ignore-scripts`, `npm run hydrate:model-data`,
   `npm run build:offline`, and the full `npm test` workspace suite with an
   isolated home directory. The tracked source checkout remains clean; its

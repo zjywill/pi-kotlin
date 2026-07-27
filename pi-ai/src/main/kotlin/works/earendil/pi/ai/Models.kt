@@ -26,6 +26,8 @@ interface Provider {
     val oauth: OAuthAuth?
         get() = null
 
+    fun resolveAmbientAuth(environment: (String) -> String?): AuthResult? = null
+
     fun getModels(): List<Model>
 
     fun filterModels(
@@ -80,6 +82,7 @@ class Models(
     providers: Iterable<Provider> = emptyList(),
     private val modelsStore: ModelsStore = InMemoryModelsStore(),
     private val credentials: CredentialStore = InMemoryCredentialStore(),
+    private val environment: (String) -> String? = System::getenv,
     private val currentTimeMillis: () -> Long = System::currentTimeMillis,
 ) {
     private val providersById = ConcurrentHashMap<String, Provider>()
@@ -135,8 +138,12 @@ class Models(
 
     suspend fun getAuth(providerId: String): AuthResult? {
         val provider = providersById[providerId] ?: return null
-        val stored = readStoredCredential(provider.id) ?: return null
-        return resolveStoredAuth(provider, stored)
+        val stored = readStoredCredential(provider.id)
+        return if (stored == null) {
+            provider.resolveAmbientAuth(environment)
+        } else {
+            resolveStoredAuth(provider, stored)
+        }
     }
 
     suspend fun listCredentials(): List<CredentialInfo> =
@@ -368,12 +375,22 @@ class Models(
         provider: Provider,
         options: StreamOptions,
     ): PreparedRequest {
-        val stored = readStoredCredential(provider.id) ?: return PreparedRequest(model, options)
-        if (!options.apiKey.isNullOrBlank() && stored !is OAuthCredential) {
+        val stored = readStoredCredential(provider.id)
+        if (stored == null && !options.apiKey.isNullOrBlank()) {
             return PreparedRequest(model, options)
         }
         val resolution =
-            resolveStoredAuth(provider, stored)
+            stored
+                ?.let {
+                    if (!options.apiKey.isNullOrBlank() && stored !is OAuthCredential) {
+                        return PreparedRequest(model, options)
+                    }
+                    resolveStoredAuth(provider, stored)
+                }
+                ?: provider.resolveAmbientAuth { name ->
+                    options.env[name]?.takeIf(String::isNotBlank)
+                        ?: environment(name)?.takeIf(String::isNotBlank)
+                }
                 ?: return PreparedRequest(model, options)
         return PreparedRequest(
             model =
@@ -383,8 +400,9 @@ class Models(
                     ?: model,
             options =
                 options.copy(
-                    apiKey = resolution.auth.apiKey,
+                    apiKey = resolution.auth.apiKey ?: options.apiKey,
                     headers = mergeAuthHeaders(resolution.auth.headers, options.headers),
+                    env = resolution.env + options.env,
                 ),
         )
     }

@@ -76,4 +76,19 @@ class PromptResourcesTest {
             loadPromptResources(project, agentDir, projectTrusted = true).customPrompt,
         )
     }
+
+    @Test
+    fun `context discovery skips directory candidates and uses the next file`() {
+        val root = Files.createTempDirectory("pi-kotlin-context-directory")
+        val agentDir = Files.createDirectories(root.resolve("agent"))
+        val project = Files.createDirectories(root.resolve("project"))
+        Files.createDirectories(project.resolve("AGENTS.md"))
+        Files.writeString(project.resolve("CLAUDE.md"), "fallback instructions")
+        val warnings = mutableListOf<String>()
+
+        val files = loadProjectContextFiles(project, agentDir, warnings::add)
+
+        assertEquals(listOf("fallback instructions"), files.map(ProjectContextFile::content))
+        assertTrue(warnings.isEmpty())
+    }
 }
