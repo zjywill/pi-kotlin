@@ -23,6 +23,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("org.jline:jline:3.26.3")
+    implementation("org.snakeyaml:snakeyaml-engine:3.0.1")
 
     testImplementation(kotlin("test-junit5"))
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
@@ -41,4 +42,10 @@ tasks.register<JavaExec>("codingMessageProjectionOracle") {
     classpath = sourceSets["test"].runtimeClasspath
     mainClass = "works.earendil.pi.codingagent.CodingMessageProjectionOracleKt"
     args(rootProject.file("migration/oracle/coding-messages.json").absolutePath)
+}
+
+tasks.register<JavaExec>("resourceLoadingOracle") {
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass = "works.earendil.pi.codingagent.ResourceLoadingOracleKt"
 }

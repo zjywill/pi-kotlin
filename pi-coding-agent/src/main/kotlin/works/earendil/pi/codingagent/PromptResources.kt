@@ -14,6 +14,9 @@ internal data class PromptResources(
     val customPrompt: String?,
     val appendPrompts: List<String>,
     val contextFiles: List<ProjectContextFile>,
+    val skills: List<Skill>,
+    val promptTemplates: List<PromptTemplate>,
+    val diagnostics: List<ResourceDiagnostic>,
 )
 
 internal fun defaultAgentDirectory(): Path {
@@ -30,7 +33,12 @@ internal fun loadPromptResources(
     systemPromptSource: String? = null,
     appendPromptSources: List<String> = emptyList(),
     noContextFiles: Boolean = false,
+    skillPaths: List<String> = emptyList(),
+    noSkills: Boolean = false,
+    promptTemplatePaths: List<String> = emptyList(),
+    noPromptTemplates: Boolean = false,
     projectTrusted: Boolean = false,
+    homeDir: Path = Path.of(System.getProperty("user.home")),
     onWarning: (String) -> Unit = {},
 ): PromptResources {
     val normalizedCwd = cwd.toAbsolutePath().normalize()
@@ -56,6 +64,28 @@ internal fun loadPromptResources(
                 ),
             )
         }
+    val loadedSkills =
+        loadSkills(
+            cwd = normalizedCwd,
+            agentDir = normalizedAgentDir,
+            skillPaths = skillPaths,
+            includeDefaults = !noSkills,
+            projectTrusted = projectTrusted,
+            homeDir = homeDir,
+        )
+    val loadedPrompts =
+        loadPromptTemplates(
+            cwd = normalizedCwd,
+            agentDir = normalizedAgentDir,
+            promptPaths = promptTemplatePaths,
+            includeDefaults = !noPromptTemplates,
+            projectTrusted = projectTrusted,
+        )
+    val diagnostics = loadedSkills.diagnostics + loadedPrompts.diagnostics
+    diagnostics.forEach { diagnostic ->
+        val path = diagnostic.path?.let { ": $it" }.orEmpty()
+        onWarning("${diagnostic.message}$path")
+    }
 
     return PromptResources(
         customPrompt =
@@ -72,6 +102,9 @@ internal fun loadPromptResources(
             } else {
                 loadProjectContextFiles(normalizedCwd, normalizedAgentDir, onWarning)
             },
+        skills = loadedSkills.skills,
+        promptTemplates = loadedPrompts.prompts,
+        diagnostics = diagnostics,
     )
 }
 
@@ -163,6 +196,9 @@ internal fun buildCodingSystemPrompt(
                 append("\n</project_instructions>\n\n")
             }
             append("</project_context>\n")
+        }
+        if (tools.any { it.name == "read" } && resources.skills.isNotEmpty()) {
+            append(formatSkillsForPrompt(resources.skills))
         }
         append("\nCurrent working directory: ")
         append(normalizedCwd)

@@ -85,6 +85,17 @@ class CliRuntime(
                 allowedTools = args.tools,
                 excludedTools = args.excludeTools,
             )
+        val projectTrusted =
+            try {
+                resolveProjectTrusted(
+                    cwd = runtimeCwd,
+                    agentDir = agentDir,
+                    override = args.projectTrustOverride,
+                )
+            } catch (error: Exception) {
+                stderr.println("Error: ${error.message}")
+                return 1
+            }
         val promptResources =
             loadPromptResources(
                 cwd = runtimeCwd,
@@ -92,7 +103,11 @@ class CliRuntime(
                 systemPromptSource = args.systemPrompt,
                 appendPromptSources = args.appendSystemPrompt,
                 noContextFiles = args.noContextFiles,
-                projectTrusted = args.projectTrustOverride == true,
+                skillPaths = args.skills,
+                noSkills = args.noSkills,
+                promptTemplatePaths = args.promptTemplates,
+                noPromptTemplates = args.noPromptTemplates,
+                projectTrusted = projectTrusted,
                 onWarning = { stderr.println("Warning: $it") },
             )
         val requestedThinking =
@@ -144,7 +159,13 @@ class CliRuntime(
 
         val prompts =
             try {
-                buildInitialPrompts(args, runtimeCwd, stdinContent)
+                buildInitialPrompts(
+                    args = args,
+                    cwd = runtimeCwd,
+                    stdinContent = stdinContent,
+                    resources = promptResources,
+                    onWarning = { stderr.println("Warning: $it") },
+                )
             } catch (error: Exception) {
                 stderr.println("Error: ${error.message}")
                 return 1

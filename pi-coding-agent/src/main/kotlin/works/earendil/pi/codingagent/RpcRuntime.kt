@@ -72,7 +72,11 @@ data class RpcRuntimeOptions(
     val systemPrompt: String? = null,
     val appendSystemPrompt: List<String> = emptyList(),
     val noContextFiles: Boolean = false,
-    val projectTrusted: Boolean = false,
+    val skillPaths: List<String> = emptyList(),
+    val noSkills: Boolean = false,
+    val promptTemplatePaths: List<String> = emptyList(),
+    val noPromptTemplates: Boolean = false,
+    val projectTrusted: Boolean? = null,
     val noTools: Boolean = false,
     val noBuiltinTools: Boolean = false,
     val tools: List<String>? = null,
@@ -93,6 +97,7 @@ class RpcRuntime(
     private var autoRetryEnabled = true
     private var promptJob: Job? = null
     private var bashProcess: Process? = null
+    private var promptResources: PromptResources? = null
     private var agent = createAgent()
 
     fun subscribe(listener: (JsonObject) -> Unit): () -> Unit {
@@ -287,7 +292,33 @@ class RpcRuntime(
                     successResponse(
                         id,
                         type,
-                        buildJsonObject { put("commands", JsonArray(emptyList())) },
+                        buildJsonObject {
+                            val resources = promptResources
+                            val commands =
+                                buildList {
+                                    resources?.promptTemplates.orEmpty().forEach { template ->
+                                        add(
+                                            buildJsonObject {
+                                                put("name", template.name)
+                                                put("description", template.description)
+                                                put("source", "prompt")
+                                                put("sourceInfo", sourceInfoJson(template.sourceInfo))
+                                            },
+                                        )
+                                    }
+                                    resources?.skills.orEmpty().forEach { skill ->
+                                        add(
+                                            buildJsonObject {
+                                                put("name", "skill:${skill.name}")
+                                                put("description", skill.description)
+                                                put("source", "skill")
+                                                put("sourceInfo", sourceInfoJson(skill.sourceInfo))
+                                            },
+                                        )
+                                    }
+                                }
+                            put("commands", JsonArray(commands))
+                        },
                     )
 
                 else -> errorResponse(id, type, "Unknown command: $type")
@@ -306,6 +337,11 @@ class RpcRuntime(
     suspend fun waitForIdle() {
         promptJob?.join()
         agent.waitForIdle()
+    }
+
+    fun reloadResources() {
+        ensureIdle("reload")
+        agent = createAgent()
     }
 
     private fun handlePrompt(
@@ -718,8 +754,18 @@ class RpcRuntime(
                 systemPromptSource = options.systemPrompt,
                 appendPromptSources = options.appendSystemPrompt,
                 noContextFiles = options.noContextFiles,
-                projectTrusted = options.projectTrusted,
+                skillPaths = options.skillPaths,
+                noSkills = options.noSkills,
+                promptTemplatePaths = options.promptTemplatePaths,
+                noPromptTemplates = options.noPromptTemplates,
+                projectTrusted =
+                    resolveProjectTrusted(
+                        cwd = sessionManager.getCwd(),
+                        agentDir = options.agentDir,
+                        override = options.projectTrusted,
+                    ),
             )
+        this.promptResources = promptResources
         return Agent(
             AgentOptions(
                 streamFunction =
@@ -791,7 +837,18 @@ class RpcRuntime(
     }
 
     private fun userMessage(command: JsonObject): UserMessage {
-        val text = command.string("message").orEmpty()
+        val rawText = command.string("message").orEmpty()
+        val resources = promptResources
+        val text =
+            if (resources == null) {
+                rawText
+            } else {
+                expandResourceCommand(
+                    text = rawText,
+                    skills = resources.skills,
+                    templates = resources.promptTemplates,
+                )
+            }
         val images =
             command["images"]
                 ?.jsonArray
@@ -827,6 +884,15 @@ class RpcRuntime(
     private fun emit(value: JsonObject) {
         listeners.forEach { listener -> listener(value) }
     }
+
+    private fun sourceInfoJson(sourceInfo: ResourceSourceInfo): JsonObject =
+        buildJsonObject {
+            put("path", sourceInfo.path.toString())
+            put("source", sourceInfo.source)
+            put("scope", sourceInfo.scope)
+            put("origin", sourceInfo.origin)
+            sourceInfo.baseDir?.let { put("baseDir", it.toString()) }
+        }
 }
 
 suspend fun runRpcJsonLines(

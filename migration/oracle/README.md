@@ -30,6 +30,7 @@ Run the available comparisons from the Kotlin repository:
 ./migration/oracle/compare-provider-payloads.sh
 ./migration/oracle/compare-provider-stream-events.sh
 ./migration/oracle/compare-radius.sh
+./migration/oracle/compare-resource-loading.sh
 ./migration/oracle/compare-session-jsonl.sh
 ./migration/oracle/compare-xai-oauth.sh
 ```
@@ -49,7 +50,7 @@ PKCE authorization, permanent API-key exchange, callback response headers,
 no-op refresh, request-auth derivation, and a real local OpenRouter-compatible
 provider request using the stored OAuth credential.
 
-The OpenRouter Images comparison covers the exact 39-model generated catalog
+The OpenRouter Images comparison covers the exact 40-model generated catalog
 and checksum, final `/chat/completions` URL/headers/payload, text and data-URL
 image parsing, invalid image filtering, response ID, cache-aware usage and
 cost, payload/response callbacks, retry behavior, HTTP error-body passthrough,
@@ -73,6 +74,12 @@ loading, cached and legacy credential catalog restoration, and a real local
 `pi-messages` SSE request using the stored OAuth credential. It compares the
 final request, public text/tool/terminal events, usage, response ID, and Radius
 rewrite diagnostics.
+
+The resource-loading comparison covers YAML frontmatter, quoted prompt
+arguments, positional/default/slice substitution, project-over-user collision
+precedence, `.pi` and `.agents` skill discovery, manual-only skills, prompt
+templates, source metadata, context/system/append prompts, trusted versus
+untrusted project resources, and inherited persisted trust decisions.
 
 The model catalog runtime comparison covers bundled-versus-remote timestamp
 selection, a newer persisted overlay restored without network access, and

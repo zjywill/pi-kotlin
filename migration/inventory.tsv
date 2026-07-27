@@ -5,7 +5,11 @@ Provider protocols	packages/ai/src/api	pi-ai	complete	Provider payload, stream, 
 Agent loop	packages/agent/src	pi-agent-core	complete	Agent loop and session tests
 SQLite session storage	packages/storage/sqlite-node	pi-storage-sqlite	complete	SQLite repository tests
 CLI argument and print modes	packages/coding-agent/src	pi-coding-agent	partial	CLI help oracle and CLI tests	API-key login, package workflows, and several parsed flags remain incomplete
-Extensions and resources	packages/coding-agent/src/core/extensions	pi-coding-agent	missing	None	Extensions, skills, prompt templates, themes, packages, reload, and persisted trust are missing
+Context, skills, and prompt templates	packages/coding-agent/src/core/resource-loader.ts packages/coding-agent/src/core/skills.ts packages/coding-agent/src/core/prompt-templates.ts	pi-coding-agent	complete	Resource loading oracle plus CLI, RPC, and resource tests
+Project trust	packages/coding-agent/src/core/project-trust.ts packages/coding-agent/src/core/trust-manager.ts	pi-coding-agent	partial	Resource loading oracle and trust-store tests	Interactive trust selection and extension project_trust handlers are missing
+Package management	packages/coding-agent/src/core/package-manager.ts packages/coding-agent/src/package-manager-cli.ts	pi-coding-agent	missing	None	Install, remove, update, list, config, package manifests, filters, and package-sourced resources are missing
+Extension runtime	packages/coding-agent/src/core/extensions	pi-coding-agent	missing	None	JavaScript extension loading, lifecycle events, tools, commands, flags, providers, and extension UI bridges are missing
+Themes and resource composition	packages/coding-agent/src/modes/interactive/theme packages/coding-agent/src/core/resource-loader.ts	pi-coding-agent	missing	None	Theme loading, package and extension resource contributions, settings overrides, and collision composition are missing
 Interactive terminal	packages/tui packages/coding-agent/src/modes/interactive	pi-tui pi-coding-agent	partial	PTY smoke and utility tests	Full-screen components, overlays, editor, and transcript parity are missing
 HTML export	packages/coding-agent/src/core/export-html	pi-coding-agent	partial	Exporter tests	Theme, Markdown, and syntax highlighting parity are missing
 RPC and server	packages/coding-agent/src/modes/rpc packages/server	pi-coding-agent pi-server	partial	RPC and server integration tests	Process recovery and full command/event parity are incomplete

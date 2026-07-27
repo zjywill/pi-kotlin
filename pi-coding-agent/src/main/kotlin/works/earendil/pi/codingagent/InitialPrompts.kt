@@ -17,6 +17,8 @@ internal fun buildInitialPrompts(
     args: Args,
     cwd: Path,
     stdinContent: String? = null,
+    resources: PromptResources? = null,
+    onWarning: (String) -> Unit = {},
 ): List<UserMessage> {
     val fileText = StringBuilder()
     val images = mutableListOf<ImageContent>()
@@ -44,6 +46,15 @@ internal fun buildInitialPrompts(
             stdinContent?.trim()?.takeIf(String::isNotEmpty)?.let(::append)
             append(fileText)
             firstMessage?.let(::append)
+        }.let { text ->
+            resources?.let {
+                expandResourceCommand(
+                    text = text,
+                    skills = it.skills,
+                    templates = it.promptTemplates,
+                    onWarning = onWarning,
+                )
+            } ?: text
         }
     return buildList {
         if (initialText.isNotEmpty() || images.isNotEmpty()) {
@@ -59,7 +70,18 @@ internal fun buildInitialPrompts(
                 add(UserMessage(blocks))
             }
         }
-        args.messages.drop(1).forEach { add(UserMessage(it)) }
+        args.messages.drop(1).forEach { text ->
+            val expanded =
+                resources?.let {
+                    expandResourceCommand(
+                        text = text,
+                        skills = it.skills,
+                        templates = it.promptTemplates,
+                        onWarning = onWarning,
+                    )
+                } ?: text
+            add(UserMessage(expanded))
+        }
     }
 }
 

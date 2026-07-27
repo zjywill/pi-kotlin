@@ -15,6 +15,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -105,7 +106,11 @@ class InteractiveRuntime(
                         systemPrompt = args.systemPrompt,
                         appendSystemPrompt = args.appendSystemPrompt,
                         noContextFiles = args.noContextFiles,
-                        projectTrusted = args.projectTrustOverride == true,
+                        skillPaths = args.skills,
+                        noSkills = args.noSkills,
+                        promptTemplatePaths = args.promptTemplates,
+                        noPromptTemplates = args.noPromptTemplates,
+                        projectTrusted = args.projectTrustOverride,
                         noTools = args.noTools,
                         noBuiltinTools = args.noBuiltinTools,
                         tools = args.tools,
@@ -202,6 +207,15 @@ class InteractiveRuntime(
 
                         input == "/session" -> printSession(runtime, console)
                         input == "/stats" -> printStats(runtime, console)
+                        input == "/reload" -> {
+                            try {
+                                runtime.reloadResources()
+                                console.println("Reloaded resources.")
+                            } catch (error: Exception) {
+                                console.error(error.message ?: "Reload failed")
+                            }
+                        }
+
                         input.startsWith("/name ") ->
                             printCommandResponse(
                                 runtime.handle(
@@ -241,7 +255,15 @@ class InteractiveRuntime(
                             )
 
                         input.startsWith("!") -> runBash(runtime, input.drop(1), console)
-                        input.startsWith("/") -> console.error("Unknown command: ${input.substringBefore(' ')}")
+                        input.startsWith("/") ->
+                            if (isResourceCommand(runtime, input)) {
+                                if (!sendPrompt(runtime, UserMessage(input), console, settled, streamedText)) {
+                                    return 1
+                                }
+                            } else {
+                                console.error("Unknown command: ${input.substringBefore(' ')}")
+                            }
+
                         else ->
                             if (!sendPrompt(runtime, UserMessage(input), console, settled, streamedText)) {
                                 return 1
@@ -496,6 +518,24 @@ class InteractiveRuntime(
         )
     }
 
+    private suspend fun isResourceCommand(
+        runtime: RpcRuntime,
+        input: String,
+    ): Boolean {
+        val name = input.removePrefix("/").substringBefore(' ')
+        val commands =
+            runtime
+                .handle(buildJsonObject { put("type", "get_commands") })
+                ?.get("data")
+                ?.jsonObject
+                ?.get("commands")
+                ?.jsonArray
+                .orEmpty()
+        return commands.any { command ->
+            command.jsonObject.string("name") == name
+        }
+    }
+
     private suspend fun currentModel(runtime: RpcRuntime): String {
         val model =
             runtime.handle(buildJsonObject { put("type", "get_state") })
@@ -709,6 +749,7 @@ private fun printInteractiveHelp(console: InteractiveConsole) {
         /new, /clear                  Start a new session
         /session                      Show session information
         /stats                        Show token and cost totals
+        /reload                       Reload skills, prompt templates, and context files
         /name <name>                  Set the session name
         /model [provider/model]       Show or change the model
         /login [provider]             Sign in to a provider
