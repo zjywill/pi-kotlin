@@ -80,3 +80,10 @@ tasks.register<JavaExec>("extensionShortcutsOracle") {
     mainClass = "works.earendil.pi.codingagent.ExtensionShortcutsOracleKt"
     args(rootProject.file("migration/fixtures/extension-shortcuts").absolutePath)
 }
+
+tasks.register<JavaExec>("extensionRenderersOracle") {
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass = "works.earendil.pi.codingagent.ExtensionRenderersOracleKt"
+    args(rootProject.file("migration/fixtures/extension-renderers").absolutePath)
+}

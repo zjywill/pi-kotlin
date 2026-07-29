@@ -24,6 +24,132 @@ import kotlin.test.assertTrue
 
 class ExtensionHostTest {
     @Test
+    fun `extension host invokes registered message and entry renderers`() =
+        runTest {
+            assumeTrue(nodeAvailable(), "Node.js 22+ is required for extension runtime tests")
+            val root = Files.createTempDirectory("pi-kotlin-extension-renderers")
+            val agentDir = Files.createDirectories(root.resolve("agent"))
+            val extension =
+                root.resolve("renderers.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        import { Box, Text } from "@earendil-works/pi-tui";
+
+                        export default function(pi) {
+                          pi.registerMessageRenderer("status", (message, { expanded, outputPad }, theme) => {
+                            const box = new Box(outputPad, 1, text => theme.bg("customMessageBg", text));
+                            box.addChild(new Text(
+                              `${'$'}{theme.fg("accent", message.content)}|${'$'}{expanded}|${'$'}{outputPad}|${'$'}{message.details.source}`,
+                              0,
+                              0,
+                            ));
+                            return box;
+                          });
+                          pi.registerMessageRenderer("hidden-renderer", () => undefined);
+                          pi.registerEntryRenderer("card", (entry, { expanded }) => ({
+                            render(width) {
+                              return [`entry|${'$'}{width}|${'$'}{expanded}|${'$'}{entry.id}|${'$'}{entry.data.value}`];
+                            },
+                          }));
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val host =
+                assertNotNull(
+                    ExtensionHost.start(
+                        sources =
+                            listOf(
+                                ExtensionSource(
+                                    extension,
+                                    ResourceSourceInfo(extension, "local", baseDir = root),
+                                ),
+                            ),
+                        agentDir = agentDir,
+                        cwd = root,
+                        mode = ExtensionMode.TUI,
+                        projectTrusted = true,
+                        flagValues = emptyMap(),
+                        context = extensionTestContext(root),
+                    ),
+                )
+
+            host.use {
+                val registration = host.registrations.extensions.single()
+                assertEquals(
+                    "0:message-renderer:status",
+                    registration.messageRenderers.first { it.customType == "status" }.id,
+                )
+                assertEquals(
+                    "0:entry-renderer:card",
+                    registration.entryRenderers.single().id,
+                )
+
+                val message =
+                    host.invokeRenderer(
+                        kind = "message",
+                        rendererId = registration.messageRenderers.first { it.customType == "status" }.id,
+                        value =
+                            buildJsonObject {
+                                put("role", "custom")
+                                put("customType", "status")
+                                put("content", "ready")
+                                put("display", true)
+                                put("details", buildJsonObject { put("source", "host") })
+                                put("timestamp", 123)
+                            },
+                        width = 30,
+                        expanded = true,
+                        outputPad = 2,
+                    )
+                val entry =
+                    host.invokeRenderer(
+                        kind = "entry",
+                        rendererId = registration.entryRenderers.single().id,
+                        value =
+                            buildJsonObject {
+                                put("type", "custom")
+                                put("id", "entry-1")
+                                put("timestamp", "2026-07-29T00:00:00Z")
+                                put("customType", "card")
+                                put("data", buildJsonObject { put("value", "saved") })
+                            },
+                        width = 41,
+                        expanded = false,
+                        outputPad = 9,
+                    )
+                val undefined =
+                    host.invokeRenderer(
+                        kind = "message",
+                        rendererId =
+                            registration.messageRenderers
+                                .first { it.customType == "hidden-renderer" }
+                                .id,
+                        value =
+                            buildJsonObject {
+                                put("role", "custom")
+                                put("customType", "hidden-renderer")
+                                put("content", "ignored")
+                                put("display", true)
+                                put("timestamp", 123)
+                            },
+                        width = 20,
+                        expanded = false,
+                        outputPad = 1,
+                    )
+
+                assertTrue(
+                    parseRendererLines(message)
+                        .orEmpty()
+                        .any { it.contains("ready|true|2|host") },
+                )
+                assertEquals(listOf("entry|41|false|entry-1|saved"), parseRendererLines(entry))
+                assertEquals(null, parseRendererLines(undefined))
+            }
+        }
+
+    @Test
     fun `final extension host responses require the active request id`() {
         val error =
             assertFailsWith<IllegalStateException> {

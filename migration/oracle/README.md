@@ -22,6 +22,7 @@ Run the available comparisons from the Kotlin repository:
 ./migration/oracle/compare-cli-help.sh
 ./migration/oracle/compare-coding-message-projection.sh
 ./migration/oracle/compare-extension-jiti-compat.sh
+./migration/oracle/compare-extension-renderers.sh
 ./migration/oracle/compare-extension-runtime.sh
 ./migration/oracle/compare-extension-shortcuts.sh
 ./migration/oracle/compare-github-copilot.sh
@@ -119,6 +120,12 @@ the upstream runner and Kotlin host. It compares reserved built-in rejection,
 allowed non-reserved overrides, user keybinding rebinding, case-insensitive
 keys, later-extension-wins ownership, diagnostics, descriptions, and the
 actions emitted by the handlers that actually win resolution.
+
+The extension-renderers comparison loads the same ordered renderer fixtures
+into the upstream runner and Kotlin host. It compares first-extension-wins
+selection, message and entry payloads, `expanded`, `outputPad`, terminal width,
+`Box`/`Text` component output, undefined renderers, and thrown renderers after
+ANSI normalization.
 
 The jiti compatibility comparison loads isolated extensions through the
 upstream loader and the Kotlin distribution's vendored jiti 2.7.0 runtime. It

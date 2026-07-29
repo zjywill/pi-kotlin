@@ -107,12 +107,18 @@ internal data class ExtensionShortcutRegistration(
     val extensionPath: Path,
 )
 
+internal data class ExtensionRendererRegistration(
+    val id: String,
+    val customType: String,
+    val extensionPath: Path,
+)
+
 internal data class ExtensionRegistration(
     val path: Path,
     val events: Set<String>,
     val shortcuts: List<ExtensionShortcutRegistration>,
-    val messageRenderers: List<String>,
-    val entryRenderers: List<String>,
+    val messageRenderers: List<ExtensionRendererRegistration>,
+    val entryRenderers: List<ExtensionRendererRegistration>,
 )
 
 internal data class ExtensionRegistrations(
@@ -372,6 +378,28 @@ internal class ExtensionHost private constructor(
                 put("type", "invoke_shortcut")
                 put("shortcutId", id)
                 put("context", context)
+            },
+        )
+
+    fun invokeRenderer(
+        kind: String,
+        rendererId: String,
+        value: JsonObject,
+        width: Int,
+        expanded: Boolean,
+        outputPad: Int,
+    ): ExtensionInvocation =
+        invoke(
+            buildJsonObject {
+                put("type", "invoke_renderer")
+                put("kind", kind)
+                put("rendererId", rendererId)
+                put("value", value)
+                put("width", width)
+                put("expanded", expanded)
+                if (kind == "message") {
+                    put("outputPad", outputPad)
+                }
             },
         )
 
@@ -976,8 +1004,8 @@ internal class ExtensionHost private constructor(
                                         extensionPath = path,
                                     )
                                 },
-                        messageRenderers = item.stringList("messageRenderers"),
-                        entryRenderers = item.stringList("entryRenderers"),
+                        messageRenderers = parseRendererRegistrations(item, "messageRenderers", path),
+                        entryRenderers = parseRendererRegistrations(item, "entryRenderers", path),
                     )
                 }
         val tools =
@@ -1055,6 +1083,23 @@ internal class ExtensionHost private constructor(
                 origin = "extension",
                 baseDir = path.parent,
             )
+
+    private fun parseRendererRegistrations(
+        item: JsonObject,
+        name: String,
+        path: Path,
+    ): List<ExtensionRendererRegistration> =
+        item[name]
+            ?.jsonArray
+            .orEmpty()
+            .mapNotNull { element ->
+                val renderer = element as? JsonObject ?: return@mapNotNull null
+                ExtensionRendererRegistration(
+                    id = renderer.string("id") ?: return@mapNotNull null,
+                    customType = renderer.string("customType") ?: return@mapNotNull null,
+                    extensionPath = path,
+                )
+            }
 
     companion object {
         fun start(

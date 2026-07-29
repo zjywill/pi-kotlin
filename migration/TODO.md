@@ -69,6 +69,8 @@ Last reviewed: July 29, 2026
   - [x] Blocking TUI dialog interruption on timeout and `AbortSignal`
   - [x] Extension shortcut registration, conflict resolution, TUI dispatch,
         `/hotkeys`, and editor-buffer preservation
+  - [x] Message and session-entry renderer registration, invocation, fallback,
+        persistence, live output, and session replay
   - [x] Unsolicited background registration updates after the originating
         extension invocation has returned
   - [x] Provider cancellation and extension-host lifecycle cleanup
@@ -82,17 +84,18 @@ Last reviewed: July 29, 2026
   - [x] Accept nullable array schemas with `items`
   - [x] Classify the AgentHarness v2 design document as documentation-only
 
-The latest implementation stage ports extension shortcuts end to end. The Node
-host exports stable shortcut IDs and descriptions and invokes the selected
-handler with a live TUI context. Kotlin resolves conflicts against the same
-effective built-in and user `keybindings.json` configuration as upstream:
-reserved actions stay protected, non-reserved overrides warn but run, keys are
-case-insensitive, and the later extension wins. JLine binds all editor keymaps,
-returns shortcut events to the main loop, preserves the current editor buffer,
-allows handlers to open blocking dialogs, and exposes descriptions through
-`/hotkeys`. `./gradlew clean test installDist` passes with 359 tests and all 19
-deterministic migration oracles pass. The sync audit reaches `4f0437e2`; the
-full audit remains nonzero on the seven partial areas listed below.
+The latest implementation stage ports extension message and session-entry
+renderers end to end. The Node host exports stable renderer IDs, executes the
+first matching extension renderer, passes upstream-shaped payloads and render
+options, and calls the returned JavaScript component's `render(width)`. Kotlin
+persists custom messages in `custom_message` entries, still accepts legacy
+message entries, renders startup and live extension actions without duplicate
+startup output, replays the current branch after resume, hides `display=false`
+messages, preserves message default fallback, and distinguishes hidden entry
+results from explicit entry renderer failures. `./gradlew clean test
+installDist` passes with 364 tests and all 20 deterministic migration oracles
+pass. The sync audit reaches `4f0437e2`; the full audit remains nonzero on the
+seven partial areas listed below.
 
 ## Remaining
 
@@ -159,7 +162,7 @@ full audit remains nonzero on the seven partial areas listed below.
 - [x] Native provider API-key `login`, `check`, and `resolve` callbacks
 - [x] Function-valued `refreshModels(context.store)`
 - [x] Extension shortcuts
-- [ ] Message and session-entry renderers
+- [x] Message and session-entry renderers
 - [ ] Custom extension UI components
 - [x] Unsolicited background registration updates
 - [x] Function-valued `user_bash` `BashOperations` over the JSON extension
@@ -193,28 +196,31 @@ full audit remains nonzero on the seven partial areas listed below.
 
 ## Next stage
 
-Implement extension message and session-entry renderers across registration,
-host invocation, persisted entries, and interactive rendering. Keep custom UI
-and the other six global partial areas as separately audited slices.
+Implement custom extension UI components while keeping theme parsing, the
+full-screen terminal model, and the other global partial areas as separately
+audited slices.
 
-Evidence for the completed extension shortcuts stage:
+Evidence for the completed extension renderer stage:
 
-- [x] Stable host shortcut IDs, descriptions, and handler invocation
-- [x] Effective default and user `keybindings.json` resolution
-- [x] Reserved built-in shortcut protection
-- [x] Non-reserved built-in override diagnostics
-- [x] Case-insensitive keys and later-extension-wins conflict behavior
-- [x] JLine `main`, `emacs`, `vi`, menu, safe, and dumb keymap dispatch
-- [x] Editor buffer preservation across shortcut handler execution
-- [x] Shortcut handlers can open blocking extension UI dialogs
-- [x] `/hotkeys` lists extension keys and descriptions
-- [x] Independent TypeScript/Kotlin shortcut conflict and handler oracle
-- [x] `pi-coding-agent` with 136 tests and no failures, errors, or skips
-- [x] `./gradlew clean test installDist` with 359 tests and no failures,
+- [x] Stable message and entry renderer IDs with first-extension-wins selection
+- [x] Upstream-compatible message and entry payload shapes
+- [x] `expanded`, `outputPad`, and terminal-width propagation
+- [x] Actual JavaScript `component.render(width)` execution
+- [x] Functional `Container`, `Box`, `Text`, `Spacer`, `TruncatedText`, and
+      text-oriented `Markdown` renderer bridge
+- [x] Message undefined/throw fallback and `display=false` hiding
+- [x] Entry undefined hiding and explicit renderer-error output
+- [x] Immediate rendering for live `sendMessage()` and `appendEntry()` actions
+- [x] Startup action rendering without duplicate transcript output
+- [x] Persisted `custom_message` replay and legacy custom-message compatibility
+- [x] Independent TypeScript/Kotlin renderer oracle with ordered shared fixtures
+- [x] `pi-coding-agent` with 141 tests and no failures, errors, or skips
+- [x] `./gradlew clean test installDist` with 364 tests and no failures,
       errors, or skips
-- [x] All 19 deterministic migration oracles
-- [x] Installed JLine PTY renders `/hotkeys`, dispatches raw `Ctrl-Y`, opens an
-      input dialog, emits `shortcut:Ada`, restores `/ex`, and exits after `it`
+- [x] All 20 deterministic migration oracles
+- [x] Installed JLine PTY passes 72 columns to both renderer kinds, hides the
+      non-display message, and exits normally
+- [x] Dumb-terminal installed PTY falls back to 80 columns
 - [x] `./migration/audit-migration.sh sync` through `4f0437e2`
 - [x] `./migration/audit-migration.sh full` confirms exactly seven remaining
       partial areas

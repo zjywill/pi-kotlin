@@ -438,7 +438,7 @@ class CliRuntime(
                 stdout.println(protocolJson.encodeToString(JsonObject.serializer(), encodeAgentEvent(event)))
             }
             if (event is AgentEvent.MessageEnd) {
-                sessionManager.appendMessage(event.message)
+                appendAgentMessage(sessionManager, event.message)
             }
         }
 

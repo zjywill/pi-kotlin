@@ -25,6 +25,67 @@ import kotlin.test.assertTrue
 
 class InteractiveRuntimeTest {
     @Test
+    fun `JLine console uses terminal width and falls back when unavailable`() {
+        assertEquals(80, normalizeTerminalWidth(0))
+        assertEquals(80, normalizeTerminalWidth(-1))
+        assertEquals(72, normalizeTerminalWidth(72))
+    }
+
+    @Test
+    fun `interactive mode passes terminal width to extension renderers`() =
+        runTest {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                nodeAvailable(),
+                "Node.js 22+ is required for extension runtime tests",
+            )
+            val root = Files.createTempDirectory("pi-kotlin-interactive-renderer")
+            val extension =
+                root.resolve("renderer.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          pi.registerMessageRenderer("width", message => ({
+                            render(width) { return [`render-width:${'$'}{width}:${'$'}{message.content}`]; },
+                          }));
+                          pi.registerCommand("render-width", {
+                            handler() {
+                              pi.sendMessage({ customType: "width", content: "visible", display: true });
+                            },
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val console = ScriptedConsole(listOf("/render-width", "/exit"), terminalWidth = 24)
+            val runtime =
+                InteractiveRuntime(
+                    Models(listOf(FauxProvider())),
+                    cwd = root,
+                    agentDir = Files.createDirectories(root.resolve("agent")),
+                    consoleFactory = { console },
+                )
+
+            val exit =
+                runtime.run(
+                    parseArgs(
+                        listOf(
+                            "--provider",
+                            "faux",
+                            "--model",
+                            "faux-1",
+                            "--no-session",
+                            "--extension",
+                            extension.toString(),
+                        ),
+                    ),
+                )
+
+            assertEquals(0, exit)
+            assertTrue(console.output.contains("render-width:24:visible"))
+        }
+
+    @Test
     fun `interactive mode streams prompts and handles local commands`() =
         runTest {
             val provider = FauxProvider()
@@ -535,6 +596,7 @@ class InteractiveRuntimeTest {
 
     private class ScriptedConsole(
         private val inputs: List<String>,
+        private val terminalWidth: Int = 80,
     ) : InteractiveConsole {
         private var index = 0
         val output = StringBuilder()
@@ -555,6 +617,8 @@ class InteractiveRuntimeTest {
         override fun error(text: String) {
             output.append("Error: ").append(text).append('\n')
         }
+
+        override fun width(): Int = terminalWidth
     }
 
     private class CancellingDialogConsole : InteractiveConsole {

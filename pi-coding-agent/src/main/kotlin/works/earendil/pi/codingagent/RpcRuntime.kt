@@ -46,6 +46,7 @@ import works.earendil.pi.agent.QueueMode
 import works.earendil.pi.ai.AssistantMessage
 import works.earendil.pi.ai.BashExecutionMessage
 import works.earendil.pi.ai.Context
+import works.earendil.pi.ai.CustomMessage
 import works.earendil.pi.ai.ImageContent
 import works.earendil.pi.ai.Message
 import works.earendil.pi.ai.Model
@@ -59,6 +60,7 @@ import works.earendil.pi.ai.Usage
 import works.earendil.pi.ai.UserMessage
 import works.earendil.pi.ai.contentText
 import works.earendil.pi.codingagent.session.NewSessionOptions
+import works.earendil.pi.codingagent.session.SessionEntry
 import works.earendil.pi.codingagent.session.SessionManager
 import works.earendil.pi.codingagent.session.SessionMessageEntry
 import works.earendil.pi.codingagent.session.SessionTreeNode
@@ -101,6 +103,7 @@ data class RpcRuntimeOptions(
     val projectTrustPrompt: ((Path, List<String>) -> Int?)? = null,
     val extensionUiHandler: ((JsonObject) -> JsonObject)? = null,
     val cancellableExtensionUiHandler: CancellableExtensionUiHandler? = null,
+    val extensionRenderOptionsProvider: (() -> ExtensionRenderOptions)? = null,
 )
 
 fun interface CancellableExtensionUiHandler {
@@ -233,6 +236,10 @@ class RpcRuntime(
                 ),
             )
         }.isSuccess
+    }
+
+    internal fun renderExtensionTranscript() {
+        sessionManager.getBranch().forEach(::emitExtensionRendering)
     }
 
     suspend fun handleLine(line: String): JsonObject? {
@@ -1259,7 +1266,10 @@ class RpcRuntime(
                 )
                 emit(encodeAgentEvent(event))
                 if (event is AgentEvent.MessageEnd) {
-                    sessionManager.appendMessage(event.message)
+                    val entryId = appendAgentMessage(sessionManager, event.message)
+                    if (event.message is CustomMessage) {
+                        sessionManager.getEntry(entryId)?.let(::emitExtensionRendering)
+                    }
                 }
                 if (event is AgentEvent.AgentEnd) {
                     flushPendingBashMessages()
@@ -1362,7 +1372,8 @@ class RpcRuntime(
 
                 "append_entry" ->
                     action.data.stringValue("customType")?.let { customType ->
-                        sessionManager.appendCustomEntry(customType, action.data["data"])
+                        val entryId = sessionManager.appendCustomEntry(customType, action.data["data"])
+                        sessionManager.getEntry(entryId)?.let(::emitExtensionRendering)
                     }
 
                 "set_session_name" ->
@@ -1426,8 +1437,10 @@ class RpcRuntime(
                     }
                 }
 
-                "send_message" ->
-                    appendExtensionMessage(sessionManager, action.data["message"])
+                "send_message" -> {
+                    val entryId = appendExtensionMessage(sessionManager, action.data["message"])
+                    entryId?.let(sessionManager::getEntry)?.let(::emitExtensionRendering)
+                }
 
                 "send_user_message" -> {
                     if (!queueExtensionUserMessage(agent, action.data)) {
@@ -1553,11 +1566,17 @@ class RpcRuntime(
 
                 "append_entry" ->
                     action.data.stringValue("customType")?.let { customType ->
-                        sessionManager.appendCustomEntry(customType, action.data["data"])
+                        val entryId = sessionManager.appendCustomEntry(customType, action.data["data"])
+                        sessionManager.getEntry(entryId)?.let(::emitExtensionRendering)
                     }
 
                 "set_session_name" ->
                     action.data.stringValue("name")?.let(sessionManager::appendSessionInfo)
+
+                "send_message" -> {
+                    val entryId = appendExtensionMessage(sessionManager, action.data["message"])
+                    entryId?.let(sessionManager::getEntry)?.let(::emitExtensionRendering)
+                }
 
                 "register_provider" -> {
                     val name = action.data.stringValue("name")
@@ -1592,6 +1611,112 @@ class RpcRuntime(
                 diagnostic.stack?.let { put("stack", it) }
             },
         )
+    }
+
+    private fun emitExtensionRendering(entry: SessionEntry) {
+        if (initializingExtensions && listeners.isEmpty()) {
+            return
+        }
+        val optionsProvider = options.extensionRenderOptionsProvider ?: return
+        val renderOptions =
+            optionsProvider().let {
+                it.copy(
+                    width = it.width.coerceAtLeast(1),
+                    outputPad = it.outputPad.coerceAtLeast(0),
+                )
+            }
+        val block = renderExtensionEntry(entry, renderOptions) ?: return
+        emit(extensionRenderedBlockEvent(block))
+    }
+
+    private fun renderExtensionEntry(
+        entry: SessionEntry,
+        renderOptions: ExtensionRenderOptions,
+    ): ExtensionRenderedBlock? {
+        val value = rendererValue(entry) ?: return null
+        val message = customMessage(entry)
+        val kind = if (message == null) "entry" else "message"
+        val customType =
+            when {
+                message != null -> message.customType
+                else -> value.stringValue("customType") ?: return null
+            }
+        if (message?.display == false) {
+            return null
+        }
+        val host = extensionHost
+        val renderer =
+            host?.registrations?.extensions?.let { registrations ->
+                findExtensionRenderer(registrations, kind, customType)
+            }
+        val lines =
+            if (kind == "message") {
+                renderExtensionMessage(host, renderer, value, message!!, renderOptions)
+            } else {
+                renderExtensionEntryValue(host, renderer, value, customType, renderOptions)
+                    ?: return null
+            }
+        return ExtensionRenderedBlock(
+            entryId = entry.id,
+            kind = kind,
+            customType = customType,
+            lines = lines,
+        )
+    }
+
+    private fun renderExtensionMessage(
+        host: ExtensionHost?,
+        renderer: ExtensionRendererRegistration?,
+        value: JsonObject,
+        message: CustomMessage,
+        renderOptions: ExtensionRenderOptions,
+    ): List<String> {
+        if (host == null || renderer == null) {
+            return defaultCustomMessageLines(message, renderOptions.width)
+        }
+        return runCatching {
+            val invocation =
+                host.invokeRenderer(
+                    kind = "message",
+                    rendererId = renderer.id,
+                    value = value,
+                    width = renderOptions.width,
+                    expanded = renderOptions.expanded,
+                    outputPad = renderOptions.outputPad,
+                )
+            applyExtensionActions(invocation.actions)
+            parseRendererLines(invocation)
+        }.getOrNull() ?: defaultCustomMessageLines(message, renderOptions.width)
+    }
+
+    private fun renderExtensionEntryValue(
+        host: ExtensionHost?,
+        renderer: ExtensionRendererRegistration?,
+        value: JsonObject,
+        customType: String,
+        renderOptions: ExtensionRenderOptions,
+    ): List<String>? {
+        if (host == null || renderer == null) {
+            return null
+        }
+        return runCatching {
+            val invocation =
+                host.invokeRenderer(
+                    kind = "entry",
+                    rendererId = renderer.id,
+                    value = value,
+                    width = renderOptions.width,
+                    expanded = renderOptions.expanded,
+                    outputPad = renderOptions.outputPad,
+                )
+            applyExtensionActions(invocation.actions)
+            parseRendererLines(invocation)
+        }.getOrElse { error ->
+            rendererErrorLines(
+                customType = customType,
+                message = error.message ?: error::class.simpleName.orEmpty(),
+            )
+        }
     }
 
     private fun resolveModel(

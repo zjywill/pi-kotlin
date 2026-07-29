@@ -172,14 +172,177 @@ export const Key = {
 export const matchesKey = (input, key) => input === key;
 export const isKeyRelease = () => false;
 export const parseKey = key => key;
-export const visibleWidth = value => [...String(value)].length;
-export const truncateToWidth = (value, width) => [...String(value)].slice(0, width).join("");
-export class Component {}
-export class Container extends Component {}
-export class Text extends Component {}
-export class Box extends Component {}
-export class Markdown extends Component {}
-export class Spacer extends Component {}
+const ansiPattern = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/g;
+const stripAnsi = value => String(value).replace(ansiPattern, "");
+export const visibleWidth = value => [...stripAnsi(value)].length;
+export const truncateToWidth = (value, width, ellipsis = "...", pad = false) => {
+	const maxWidth = Math.max(0, width);
+	if (maxWidth === 0) return "";
+	const plain = [...stripAnsi(value)];
+	const suffix = [...stripAnsi(ellipsis)];
+	let result;
+	if (plain.length <= maxWidth) {
+		result = plain.join("");
+	} else if (suffix.length >= maxWidth) {
+		result = suffix.slice(0, maxWidth).join("");
+	} else {
+		result = plain.slice(0, maxWidth - suffix.length).join("") + suffix.join("");
+	}
+	return pad ? result + " ".repeat(Math.max(0, maxWidth - visibleWidth(result))) : result;
+};
+const wrapLine = (value, width) => {
+	if (visibleWidth(value) <= width) return [value];
+	const tokens = stripAnsi(value).match(/ +|[^ ]+/g) ?? [""];
+	const lines = [];
+	let current = "";
+	for (const token of tokens) {
+		const whitespace = token.trim() === "";
+		if (!whitespace && visibleWidth(token) > width) {
+			if (current) {
+				lines.push(current.trimEnd());
+				current = "";
+			}
+			const characters = [...token];
+			while (characters.length > width) {
+				lines.push(characters.splice(0, width).join(""));
+			}
+			current = characters.join("");
+			continue;
+		}
+		if (visibleWidth(current) + visibleWidth(token) > width && current) {
+			lines.push(current.trimEnd());
+			current = whitespace ? "" : token;
+		} else {
+			current += token;
+		}
+	}
+	if (current) lines.push(current.trimEnd());
+	return lines;
+};
+const wrapText = (value, width) =>
+	String(value)
+		.split(/\r\n|\r|\n/)
+		.flatMap(line => wrapLine(line, Math.max(1, width)));
+const padLine = (value, width) => value + " ".repeat(Math.max(0, width - visibleWidth(value)));
+export class Component {
+	invalidate() {}
+	render(_width) {
+		return [];
+	}
+}
+export class Container extends Component {
+	constructor() {
+		super();
+		this.children = [];
+	}
+	addChild(component) {
+		this.children.push(component);
+	}
+	removeChild(component) {
+		const index = this.children.indexOf(component);
+		if (index >= 0) this.children.splice(index, 1);
+	}
+	clear() {
+		this.children = [];
+	}
+	invalidate() {
+		for (const child of this.children) child.invalidate?.();
+	}
+	render(width) {
+		return this.children.flatMap(child => child.render(width));
+	}
+}
+export class Text extends Component {
+	constructor(text = "", paddingX = 1, paddingY = 1, customBgFn) {
+		super();
+		this.text = text;
+		this.paddingX = paddingX;
+		this.paddingY = paddingY;
+		this.customBgFn = customBgFn;
+	}
+	setText(text) {
+		this.text = text;
+	}
+	setCustomBgFn(customBgFn) {
+		this.customBgFn = customBgFn;
+	}
+	render(width) {
+		if (!this.text || String(this.text).trim() === "") return [];
+		const contentWidth = Math.max(1, width - this.paddingX * 2);
+		const margin = " ".repeat(this.paddingX);
+		const content = wrapText(String(this.text).replace(/\t/g, "   "), contentWidth).map(line => {
+			const padded = padLine(margin + line + margin, width);
+			return this.customBgFn ? this.customBgFn(padded) : padded;
+		});
+		const empty = " ".repeat(width);
+		const padding = Array.from({ length: this.paddingY }, () => this.customBgFn ? this.customBgFn(empty) : empty);
+		return [...padding, ...content, ...padding];
+	}
+}
+export class Box extends Container {
+	constructor(paddingX = 1, paddingY = 1, bgFn) {
+		super();
+		this.paddingX = paddingX;
+		this.paddingY = paddingY;
+		this.bgFn = bgFn;
+	}
+	setBgFn(bgFn) {
+		this.bgFn = bgFn;
+	}
+	render(width) {
+		if (this.children.length === 0) return [];
+		const contentWidth = Math.max(1, width - this.paddingX * 2);
+		const leftPad = " ".repeat(this.paddingX);
+		const childLines = this.children.flatMap(child => child.render(contentWidth).map(line => leftPad + line));
+		if (childLines.length === 0) return [];
+		const apply = line => {
+			const padded = padLine(line, width);
+			return this.bgFn ? this.bgFn(padded) : padded;
+		};
+		const lines = [];
+		for (let index = 0; index < this.paddingY; index++) lines.push(apply(""));
+		for (const line of childLines) lines.push(apply(line));
+		for (let index = 0; index < this.paddingY; index++) lines.push(apply(""));
+		return lines;
+	}
+}
+export class Markdown extends Text {
+	constructor(text, paddingX = 0, paddingY = 0, _theme, defaultTextStyle) {
+		const styled = defaultTextStyle?.color ? defaultTextStyle.color(text) : text;
+		super(styled, paddingX, paddingY, defaultTextStyle?.bgColor);
+	}
+}
+export class Spacer extends Component {
+	constructor(lines = 1) {
+		super();
+		this.lines = lines;
+	}
+	setLines(lines) {
+		this.lines = lines;
+	}
+	render(_width) {
+		return Array.from({ length: this.lines }, () => "");
+	}
+}
+export class TruncatedText extends Component {
+	constructor(text, paddingX = 0, paddingY = 0) {
+		super();
+		this.text = text;
+		this.paddingX = paddingX;
+		this.paddingY = paddingY;
+	}
+	render(width) {
+		const empty = " ".repeat(width);
+		const availableWidth = Math.max(1, width - this.paddingX * 2);
+		const display = truncateToWidth(String(this.text).split(/\r\n|\r|\n/, 1)[0], availableWidth);
+		const line = padLine(" ".repeat(this.paddingX) + display + " ".repeat(this.paddingX), width);
+		return [
+			...Array.from({ length: this.paddingY }, () => empty),
+			line,
+			...Array.from({ length: this.paddingY }, () => empty),
+		];
+	}
+}
 export class Input extends Component {}
 export class SettingsList extends Component {}
 export class SelectList extends Component {}
@@ -317,6 +480,45 @@ let providerCallbacks = new Map();
 const activeProviderOperations = new Map();
 const pendingProviderAuthRequests = new Map();
 const pendingProviderBridgeRequests = new Map();
+
+const rendererTheme = {
+	fg(_color, text) {
+		return String(text);
+	},
+	bg(_color, text) {
+		return String(text);
+	},
+	bold(text) {
+		return String(text);
+	},
+	italic(text) {
+		return String(text);
+	},
+	underline(text) {
+		return String(text);
+	},
+	strikethrough(text) {
+		return String(text);
+	},
+	inverse(text) {
+		return String(text);
+	},
+	getFgAnsi() {
+		return "";
+	},
+	getBgAnsi() {
+		return "";
+	},
+	getColorMode() {
+		return "truecolor";
+	},
+	getThinkingBorderColor() {
+		return text => String(text);
+	},
+	getBashModeBorderColor() {
+		return text => String(text);
+	},
+};
 
 function jsonValue(value) {
 	if (value === undefined) return null;
@@ -784,11 +986,13 @@ function createAPI(extension) {
 			registrationChanged();
 		},
 		registerMessageRenderer(customType, renderer) {
-			extension.messageRenderers.set(customType, renderer);
+			const id = `${extension.index}:message-renderer:${customType}`;
+			extension.messageRenderers.set(customType, { id, customType, renderer });
 			registrationChanged();
 		},
 		registerEntryRenderer(customType, renderer) {
-			extension.entryRenderers.set(customType, renderer);
+			const id = `${extension.index}:entry-renderer:${customType}`;
+			extension.entryRenderers.set(customType, { id, customType, renderer });
 			registrationChanged();
 		},
 		getFlag(name) {
@@ -913,8 +1117,14 @@ function registrationMetadata() {
 				shortcut: value.shortcut,
 				description: value.description,
 			})),
-			messageRenderers: [...extension.messageRenderers.keys()],
-			entryRenderers: [...extension.entryRenderers.keys()],
+			messageRenderers: [...extension.messageRenderers.values()].map(value => ({
+				id: value.id,
+				customType: value.customType,
+			})),
+			entryRenderers: [...extension.entryRenderers.values()].map(value => ({
+				id: value.id,
+				customType: value.customType,
+			})),
 		})),
 		tools: [...tools.values()].map(({ id, extension, definition }) => ({
 			id,
@@ -1642,6 +1852,38 @@ async function invokeShortcut(request) {
 	return { result: null };
 }
 
+function rendererRegistration(kind, rendererId) {
+	const registrations =
+		kind === "message"
+			? extensions.flatMap(extension => [...extension.messageRenderers.values()])
+			: extensions.flatMap(extension => [...extension.entryRenderers.values()]);
+	return registrations.find(value => value.id === rendererId);
+}
+
+function invokeRenderer(request) {
+	const registration = rendererRegistration(request.kind, request.rendererId);
+	if (!registration) throw new Error(`Unknown extension ${request.kind} renderer: ${request.rendererId}`);
+	const width = Math.max(1, Number.isInteger(request.width) ? request.width : 80);
+	const options = {
+		expanded: request.expanded === true,
+		...(request.kind === "message"
+			? { outputPad: Math.max(0, Number.isInteger(request.outputPad) ? request.outputPad : 1) }
+			: {}),
+	};
+	const component = registration.renderer(request.value, options, rendererTheme);
+	if (component == null) {
+		return { result: { rendered: false, lines: [] } };
+	}
+	if (typeof component.render !== "function") {
+		throw new Error(`Extension ${request.kind} renderer returned an invalid component`);
+	}
+	const lines = component.render(width);
+	if (!Array.isArray(lines) || lines.some(line => typeof line !== "string")) {
+		throw new Error(`Extension ${request.kind} renderer returned invalid lines`);
+	}
+	return { result: { rendered: true, lines } };
+}
+
 async function handle(request) {
 	currentActions = pendingBackgroundActions.splice(0);
 	try {
@@ -1664,6 +1906,9 @@ async function handle(request) {
 				break;
 			case "invoke_shortcut":
 				response = await invokeShortcut(request);
+				break;
+			case "invoke_renderer":
+				response = invokeRenderer(request);
 				break;
 			case "provider_stream":
 				response = await invokeProviderStream(request);

@@ -76,6 +76,8 @@ interface InteractiveConsole : AutoCloseable {
 
     fun error(text: String)
 
+    fun width(): Int = 80
+
     override fun close() = Unit
 }
 
@@ -162,6 +164,13 @@ class InteractiveRuntime(
                         cancellableExtensionUiHandler = CancellableExtensionUiHandler { request, cancellation ->
                             handleExtensionUiDialog(request, console, cancellation)
                         },
+                        extensionRenderOptionsProvider = {
+                            ExtensionRenderOptions(
+                                width = console.width(),
+                                expanded = false,
+                                outputPad = 1,
+                            )
+                        },
                     ),
                 )
             } catch (error: Exception) {
@@ -201,6 +210,17 @@ class InteractiveRuntime(
 
                         "extension_ui_request" -> renderExtensionUiRequest(event, console)
 
+                        "extension_render" -> {
+                            if (streamedText.get()) {
+                                console.println()
+                            }
+                            event["lines"]
+                                ?.jsonArray
+                                .orEmpty()
+                                .mapNotNull { it.jsonPrimitive.contentOrNull }
+                                .forEach(console::println)
+                        }
+
                         "extension_error" ->
                             console.error(
                                 "Extension ${event.string("extensionPath").orEmpty()} " +
@@ -213,6 +233,7 @@ class InteractiveRuntime(
             try {
                 console.println("pi Kotlin ${currentModel(runtime)}")
                 console.println("Type /help for commands. Ctrl-D or /exit quits.")
+                runtime.renderExtensionTranscript()
                 args.name?.let { name ->
                     val response =
                         runtime.handle(
@@ -1038,6 +1059,8 @@ internal class JLineConsole(
         output.flush()
     }
 
+    override fun width(): Int = normalizeTerminalWidth(terminal.width)
+
     override fun close() {
         terminal.close()
     }
@@ -1050,6 +1073,8 @@ internal class JLineConsole(
         }
     }
 }
+
+internal fun normalizeTerminalWidth(width: Int): Int = width.takeIf { it > 0 } ?: 80
 
 private data class InstalledJLineBinding(
     val keyMap: KeyMap<Binding>,

@@ -22,6 +22,8 @@ import works.earendil.pi.agent.AgentThinkingLevel
 import works.earendil.pi.agent.BeforeToolCallContext
 import works.earendil.pi.agent.BeforeToolCallResult
 import works.earendil.pi.ai.ContentBlock
+import works.earendil.pi.ai.CustomMessage
+import works.earendil.pi.ai.Message
 import works.earendil.pi.ai.MessageContent
 import works.earendil.pi.ai.ThinkingLevel
 import works.earendil.pi.ai.Usage
@@ -169,9 +171,9 @@ internal suspend fun emitExtensionBeforeAgentStart(
 internal fun appendExtensionMessage(
     sessionManager: SessionManager,
     value: JsonElement?,
-) {
-    val message = value as? JsonObject ?: return
-    val customType = message.stringValue("customType") ?: return
+): String? {
+    val message = value as? JsonObject ?: return null
+    val customType = message.stringValue("customType") ?: return null
     val content =
         when (val raw = message["content"]) {
             is JsonPrimitive -> MessageContent.Text(raw.content)
@@ -182,13 +184,28 @@ internal fun appendExtensionMessage(
 
             else -> MessageContent.Text("")
         }
-    sessionManager.appendCustomMessageEntry(
+    return sessionManager.appendCustomMessageEntry(
         customType = customType,
         content = content,
         display = message["display"]?.jsonPrimitive?.booleanOrNull ?: true,
         details = message["details"],
     )
 }
+
+internal fun appendAgentMessage(
+    sessionManager: SessionManager,
+    message: Message,
+): String =
+    if (message is CustomMessage) {
+        sessionManager.appendCustomMessageEntry(
+            customType = message.customType,
+            content = message.content,
+            display = message.display,
+            details = message.details,
+        )
+    } else {
+        sessionManager.appendMessage(message)
+    }
 
 internal fun queueExtensionUserMessage(
     agent: Agent?,

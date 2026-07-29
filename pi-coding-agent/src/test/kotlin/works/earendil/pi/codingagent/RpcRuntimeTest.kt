@@ -30,6 +30,8 @@ import works.earendil.pi.ai.FauxModelDefinition
 import works.earendil.pi.ai.FauxProvider
 import works.earendil.pi.ai.FauxResponseStep
 import works.earendil.pi.ai.InMemoryCredentialStore
+import works.earendil.pi.ai.CustomMessage
+import works.earendil.pi.ai.MessageContent
 import works.earendil.pi.ai.Models
 import works.earendil.pi.ai.OAuthCredential
 import works.earendil.pi.ai.StopReason
@@ -39,12 +41,228 @@ import works.earendil.pi.ai.fauxAssistantMessage
 import works.earendil.pi.ai.fauxToolCall
 import works.earendil.pi.ai.providers.builtInModels
 import works.earendil.pi.ai.providers.githubCopilotProvider
+import works.earendil.pi.codingagent.session.SessionManager
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class RpcRuntimeTest {
+    @Test
+    fun `TUI renderer actions use first registration and preserve fallback semantics`() =
+        runTest {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                nodeAvailable(),
+                "Node.js 22+ is required for extension runtime tests",
+            )
+            val root = Files.createTempDirectory("pi-kotlin-rpc-renderers")
+            val first =
+                root.resolve("01-first.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          pi.registerMessageRenderer("winner", (message, { expanded, outputPad }) => ({
+                            render(width) {
+                              return [`first-message|${'$'}{message.content}|${'$'}{expanded}|${'$'}{outputPad}|${'$'}{width}|${'$'}{message.details.source}`];
+                            },
+                          }));
+                          pi.registerMessageRenderer("fallback", () => undefined);
+                          pi.registerMessageRenderer("broken-message", () => {
+                            throw new Error("message exploded");
+                          });
+                          pi.registerEntryRenderer("winner-entry", (entry, { expanded }) => ({
+                            render(width) {
+                              return [`first-entry|${'$'}{entry.data.value}|${'$'}{expanded}|${'$'}{width}`];
+                            },
+                          }));
+                          pi.registerEntryRenderer("missing-entry", () => undefined);
+                          pi.registerEntryRenderer("broken-entry", () => {
+                            throw new Error("entry exploded");
+                          });
+                          pi.registerCommand("render-fixtures", {
+                            handler() {
+                              pi.sendMessage({
+                                customType: "winner",
+                                content: "live",
+                                display: true,
+                                details: { source: "command" },
+                              });
+                              pi.sendMessage({ customType: "fallback", content: "plain", display: true });
+                              pi.sendMessage({ customType: "broken-message", content: "recover", display: true });
+                              pi.sendMessage({ customType: "winner", content: "secret", display: false });
+                              pi.appendEntry("winner-entry", { value: "durable" });
+                              pi.appendEntry("missing-entry", { value: "hidden" });
+                              pi.appendEntry("broken-entry", { value: "error" });
+                            },
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val second =
+                root.resolve("02-second.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          pi.registerMessageRenderer("winner", () => ({
+                            render() { return ["second-message"]; },
+                          }));
+                          pi.registerEntryRenderer("winner-entry", () => ({
+                            render() { return ["second-entry"]; },
+                          }));
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val runtime =
+                RpcRuntime(
+                    Models(listOf(FauxProvider())),
+                    RpcRuntimeOptions(
+                        cwd = root,
+                        agentDir = Files.createDirectories(root.resolve("agent")),
+                        noSession = true,
+                        provider = "faux",
+                        model = "faux-1",
+                        extensionPaths = listOf(first.toString(), second.toString()),
+                        extensionMode = ExtensionMode.TUI,
+                        extensionRenderOptionsProvider = {
+                            ExtensionRenderOptions(width = 37, expanded = true, outputPad = 3)
+                        },
+                    ),
+                )
+            val events = mutableListOf<JsonObject>()
+            runtime.subscribe(events::add)
+
+            assertSuccess(
+                runtime.handle(
+                    buildJsonObject {
+                        put("type", "prompt")
+                        put("message", "/render-fixtures")
+                    },
+                ),
+            )
+
+            val renders = events.filter { it.eventType() == "extension_render" }
+            assertEquals(
+                listOf("winner", "fallback", "broken-message", "winner-entry", "broken-entry"),
+                renders.map { it["customType"]?.jsonPrimitive?.content },
+            )
+            assertEquals(
+                "first-message|live|true|3|37|command",
+                renders[0]["lines"]?.jsonArray?.single()?.jsonPrimitive?.content,
+            )
+            assertTrue(
+                renders[1]["lines"]
+                    ?.jsonArray
+                    .orEmpty()
+                    .any { it.jsonPrimitive.content.contains("[fallback]") },
+            )
+            assertTrue(
+                renders[2]["lines"]
+                    ?.jsonArray
+                    .orEmpty()
+                    .any { it.jsonPrimitive.content.contains("[broken-message]") },
+            )
+            assertEquals(
+                "first-entry|durable|true|37",
+                renders[3]["lines"]?.jsonArray?.single()?.jsonPrimitive?.content,
+            )
+            assertTrue(
+                renders[4]["lines"]
+                    ?.jsonArray
+                    .orEmpty()
+                    .any { it.jsonPrimitive.content.contains("[broken-entry] renderer failed: entry exploded") },
+            )
+            assertTrue(renders.none { event ->
+                event["lines"]?.jsonArray.orEmpty().any { it.jsonPrimitive.content.contains("secret") }
+            })
+            assertTrue(renders.none { it["customType"]?.jsonPrimitive?.content == "missing-entry" })
+            assertTrue(renders.none { event ->
+                event["lines"]?.jsonArray.orEmpty().any { it.jsonPrimitive.content.contains("second-") }
+            })
+            runtime.close()
+        }
+
+    @Test
+    fun `persisted custom messages and entries render after session reload`() =
+        runTest {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                nodeAvailable(),
+                "Node.js 22+ is required for extension runtime tests",
+            )
+            val root = Files.createTempDirectory("pi-kotlin-rpc-renderer-resume")
+            val sessionDir = Files.createDirectories(root.resolve("sessions"))
+            val session = SessionManager.create(root, sessionDir)
+            session.appendMessage(UserMessage("remember"))
+            session.appendMessage(fauxAssistantMessage("remembered"))
+            session.appendCustomMessageEntry(
+                customType = "resume-message",
+                content = MessageContent.Text("current"),
+                display = true,
+            )
+            session.appendMessage(
+                CustomMessage(
+                    customType = "resume-message",
+                    content = MessageContent.Text("legacy"),
+                    display = true,
+                ),
+            )
+            session.appendCustomEntry("resume-entry", buildJsonObject { put("value", "saved") })
+            val sessionFile = requireNotNull(session.getSessionFile())
+            val extension =
+                root.resolve("resume-renderers.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          pi.registerMessageRenderer("resume-message", message => ({
+                            render(width) { return [`message|${'$'}{message.content}|${'$'}{width}`]; },
+                          }));
+                          pi.registerEntryRenderer("resume-entry", entry => ({
+                            render(width) { return [`entry|${'$'}{entry.data.value}|${'$'}{width}`]; },
+                          }));
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val runtime =
+                RpcRuntime(
+                    Models(listOf(FauxProvider())),
+                    RpcRuntimeOptions(
+                        cwd = root,
+                        agentDir = Files.createDirectories(root.resolve("agent")),
+                        sessionDir = sessionDir,
+                        sessionPath = sessionFile,
+                        extensionPaths = listOf(extension.toString()),
+                        extensionMode = ExtensionMode.TUI,
+                        extensionRenderOptionsProvider = { ExtensionRenderOptions(width = 52) },
+                    ),
+                )
+            val events = mutableListOf<JsonObject>()
+            runtime.subscribe(events::add)
+            runtime.renderExtensionTranscript()
+
+            val lines =
+                events
+                    .filter { it.eventType() == "extension_render" }
+                    .flatMap { event ->
+                        event["lines"]?.jsonArray.orEmpty().map { it.jsonPrimitive.content }
+                    }
+            val entries =
+                requireNotNull(runtime.handle(buildJsonObject { put("type", "get_entries") }))
+                    .data()["entries"]
+                    ?.jsonArray
+                    .orEmpty()
+
+            assertTrue(lines.contains("message|current|52"))
+            assertTrue(lines.contains("message|legacy|52"))
+            assertTrue(lines.contains("entry|saved|52"))
+            assertTrue(entries.any { it.jsonObject["type"]?.jsonPrimitive?.content == "custom_message" })
+            runtime.close()
+        }
+
     @Test
     fun `TUI extension context includes resolved scoped models`() =
         runTest {
