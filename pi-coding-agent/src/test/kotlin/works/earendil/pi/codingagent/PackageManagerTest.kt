@@ -324,6 +324,63 @@ class PackageManagerTest {
     }
 
     @Test
+    fun `existing git checkout fetches its upstream and resets only when head changed`() {
+        val root = Files.createTempDirectory("pi-kotlin-package-git-reconcile")
+        val cwd = Files.createDirectories(root.resolve("project"))
+        val agentDir = Files.createDirectories(root.resolve("agent"))
+        val target =
+            agentDir
+                .resolve("git")
+                .resolve("github.com")
+                .resolve("user")
+                .resolve("repo")
+        Files.createDirectories(target.resolve(".git"))
+        Files.writeString(target.resolve("package.json"), """{"name":"repo","version":"1.0.0"}""")
+        val oldHead = "1111111111111111111111111111111111111111"
+        val newHead = "2222222222222222222222222222222222222222"
+        val runner =
+            RecordingPackageRunner(output = { command, _ ->
+                when {
+                    command == listOf("git", "rev-parse", "--abbrev-ref", "@{upstream}") -> "origin/main"
+                    command.take(2) == listOf("git", "fetch") -> ""
+                    command == listOf("git", "rev-parse", "HEAD") -> oldHead
+                    command == listOf("git", "rev-parse", "@{upstream}^{commit}") -> newHead
+                    command == listOf("git", "reset", "--hard", "@{upstream}^{commit}") -> ""
+                    command == listOf("git", "clean", "-fdx") -> ""
+                    command == listOf("npm", "install", "--omit=dev") -> ""
+                    else -> error("Unexpected command: ${command.joinToString(" ")}")
+                }
+            })
+        val manager =
+            PackageManager(
+                cwd = cwd,
+                agentDir = agentDir,
+                settings = SettingsStore(cwd, agentDir, projectTrusted = true),
+                projectTrusted = true,
+                commandRunner = runner,
+            )
+
+        manager.installAndPersist("git:github.com/user/repo")
+
+        assertTrue(
+            runner.commands.any { recorded ->
+                recorded.command ==
+                    listOf(
+                    "git",
+                    "fetch",
+                    "--prune",
+                    "--no-tags",
+                    "origin",
+                    "+refs/heads/main:refs/remotes/origin/main",
+                )
+            },
+        )
+        assertTrue(runner.commands.any { it.command == listOf("git", "reset", "--hard", "@{upstream}^{commit}") })
+        assertTrue(runner.commands.any { it.command == listOf("git", "clean", "-fdx") })
+        assertTrue(runner.commands.any { it.command == listOf("npm", "install", "--omit=dev") })
+    }
+
+    @Test
     fun `package CLI installs lists and removes local sources`() {
         val root = Files.createTempDirectory("pi-kotlin-package-cli")
         val cwd = Files.createDirectories(root.resolve("project"))
@@ -376,9 +433,258 @@ class PackageManagerTest {
             )
 
         assertEquals(1, unknown)
-        assertTrue(unknownError.toString().contains("Unknown option --unknown"))
+        assertEquals(
+            """
+            Unknown option --unknown for "install".
+            Use "pi --help" or "pi install <source> [-l] [--approve|--no-approve]".
+            """.trimIndent(),
+            unknownError.toString().trim(),
+        )
         assertEquals(1, missing)
         assertTrue(missingError.toString().contains("Missing value for --extension"))
+    }
+
+    @Test
+    fun `package list ignores one positional argument like upstream and rejects the second`() {
+        val root = Files.createTempDirectory("pi-kotlin-package-list-positionals")
+        val cwd = Files.createDirectories(root.resolve("project"))
+        val agentDir = Files.createDirectories(root.resolve("agent"))
+        val output = ByteArrayOutputStream()
+        val singleError = ByteArrayOutputStream()
+        val multipleError = ByteArrayOutputStream()
+
+        val single =
+            runPackageCommand(
+                arguments = listOf("list", "ignored"),
+                cwd = cwd,
+                agentDir = agentDir,
+                output = PrintStream(output),
+                errorOutput = PrintStream(singleError),
+            )
+        val multiple =
+            runPackageCommand(
+                arguments = listOf("list", "ignored", "extra"),
+                cwd = cwd,
+                agentDir = agentDir,
+                output = sink(),
+                errorOutput = PrintStream(multipleError),
+            )
+
+        assertEquals(0, single)
+        assertEquals("No packages installed.", output.toString().trim())
+        assertEquals("", singleError.toString())
+        assertEquals(1, multiple)
+        assertEquals(
+            """
+            Unexpected argument extra.
+            Usage: pi list [--approve|--no-approve]
+            """.trimIndent(),
+            multipleError.toString().trim(),
+        )
+    }
+
+    @Test
+    fun `package CLI routes self targets without updating extensions`() {
+        val root = Files.createTempDirectory("pi-kotlin-package-self-update")
+        val cwd = Files.createDirectories(root.resolve("project"))
+        val agentDir = Files.createDirectories(root.resolve("agent"))
+        Files.writeString(
+            agentDir.resolve("settings.json"),
+            """{"packages":["npm:must-not-update"]}""",
+        )
+        var force: Boolean? = null
+        val output = ByteArrayOutputStream()
+        val exit =
+            runPackageCommand(
+                arguments = listOf("update", "pi", "--force"),
+                cwd = cwd,
+                agentDir = agentDir,
+                output = PrintStream(output),
+                errorOutput = sink(),
+                selfUpdater =
+                    SelfUpdater { requestedForce, _, _ ->
+                        force = requestedForce
+                        0
+                    },
+            )
+
+        assertEquals(0, exit)
+        assertEquals(true, force)
+        assertFalse(output.toString().contains("Updated packages"))
+    }
+
+    @Test
+    fun `user npm packages resolve from legacy global install roots`() {
+        val root = Files.createTempDirectory("pi-kotlin-package-legacy-npm")
+        val cwd = Files.createDirectories(root.resolve("project"))
+        val agentDir = Files.createDirectories(root.resolve("agent"))
+        val globalRoot = Files.createDirectories(root.resolve("global").resolve("node_modules"))
+        val installed = Files.createDirectories(globalRoot.resolve("@scope").resolve("pkg"))
+        Files.writeString(installed.resolve("package.json"), """{"name":"@scope/pkg","version":"1.0.0"}""")
+        val runner =
+            RecordingPackageRunner(output = { command, _ ->
+                when (command.dropWhile { it != "npm" }.drop(1)) {
+                    listOf("root", "-g") -> globalRoot.toString()
+                    else -> error("Unexpected command: ${command.joinToString(" ")}")
+                }
+            })
+        val manager =
+            PackageManager(
+                cwd = cwd,
+                agentDir = agentDir,
+                settings = SettingsStore(cwd, agentDir, projectTrusted = true),
+                projectTrusted = true,
+                commandRunner = runner,
+            )
+
+        assertEquals(installed, manager.getInstalledPath("npm:@scope/pkg", PackageScope.USER))
+        assertEquals(listOf("npm", "root", "-g"), runner.commands.single().command)
+    }
+
+    @Test
+    fun `pnpm legacy lookup reads the global package list path`() {
+        val root = Files.createTempDirectory("pi-kotlin-package-legacy-pnpm")
+        val cwd = Files.createDirectories(root.resolve("project"))
+        val agentDir = Files.createDirectories(root.resolve("agent"))
+        Files.writeString(agentDir.resolve("settings.json"), """{"npmCommand":["pnpm"]}""")
+        val installed = Files.createDirectories(root.resolve("pnpm").resolve("global").resolve("pkg"))
+        Files.writeString(installed.resolve("package.json"), """{"name":"pkg","version":"1.0.0"}""")
+        val runner =
+            RecordingPackageRunner(output = { command, _ ->
+                if (command == listOf("pnpm", "list", "-g", "--depth", "0", "--json")) {
+                    """[{"dependencies":{"pkg":{"path":"$installed"}}}]"""
+                } else {
+                    error("Unexpected command: ${command.joinToString(" ")}")
+                }
+            })
+        val manager =
+            PackageManager(
+                cwd = cwd,
+                agentDir = agentDir,
+                settings = SettingsStore(cwd, agentDir, projectTrusted = true),
+                projectTrusted = true,
+                commandRunner = runner,
+            )
+
+        assertEquals(installed, manager.getInstalledPath("npm:pkg", PackageScope.USER))
+    }
+
+    @Test
+    fun `available update checks cover unpinned npm and git packages`() {
+        val root = Files.createTempDirectory("pi-kotlin-package-updates")
+        val cwd = Files.createDirectories(root.resolve("project"))
+        val agentDir = Files.createDirectories(root.resolve("agent"))
+        val settings = SettingsStore(cwd, agentDir, projectTrusted = true)
+        settings.setPackages(
+            SettingsScope.PROJECT,
+            listOf(
+                PackageSourceConfig("npm:example"),
+                PackageSourceConfig("git:github.com/example/repo"),
+                PackageSourceConfig("npm:pinned@1.0.0"),
+            ),
+        )
+        val npmPath = Files.createDirectories(cwd.resolve(".pi").resolve("npm").resolve("node_modules").resolve("example"))
+        Files.writeString(npmPath.resolve("package.json"), """{"name":"example","version":"1.0.0"}""")
+        val gitPath = Files.createDirectories(cwd.resolve(".pi").resolve("git").resolve("github.com").resolve("example").resolve("repo"))
+        val localHead = "1111111111111111111111111111111111111111"
+        val remoteHead = "2222222222222222222222222222222222222222"
+        val runner =
+            RecordingPackageRunner(output = { command, _ ->
+                when {
+                    command == listOf("npm", "view", "example", "version", "--json") -> "\"1.2.3\""
+                    command == listOf("git", "rev-parse", "HEAD") -> localHead
+                    command == listOf("git", "rev-parse", "--abbrev-ref", "@{upstream}") -> "origin/main"
+                    command == listOf("git", "ls-remote", "origin", "main") -> "$remoteHead\trefs/heads/main"
+                    else -> error("Unexpected command: ${command.joinToString(" ")}")
+                }
+            })
+        val manager =
+            PackageManager(
+                cwd = cwd,
+                agentDir = agentDir,
+                settings = settings,
+                projectTrusted = true,
+                commandRunner = runner,
+            )
+
+        assertEquals(
+            listOf(
+                PackageUpdate("example".let { "npm:$it" }, "example", PackageUpdate.Type.NPM, SettingsScope.PROJECT),
+                PackageUpdate(
+                    "git:github.com/example/repo",
+                    "github.com/example/repo",
+                    PackageUpdate.Type.GIT,
+                    SettingsScope.PROJECT,
+                ),
+            ),
+            manager.checkForAvailableUpdates(),
+        )
+        assertTrue(Files.exists(gitPath))
+    }
+
+    @Test
+    fun `npm updates skip current versions and batch by settings scope`() {
+        val root = Files.createTempDirectory("pi-kotlin-package-update-batch")
+        val cwd = Files.createDirectories(root.resolve("project"))
+        val agentDir = Files.createDirectories(root.resolve("agent"))
+        val settings = SettingsStore(cwd, agentDir, projectTrusted = true)
+        settings.setPackages(
+            SettingsScope.USER,
+            listOf(PackageSourceConfig("npm:user-old"), PackageSourceConfig("npm:user-current")),
+        )
+        settings.setPackages(
+            SettingsScope.PROJECT,
+            listOf(PackageSourceConfig("npm:project-old")),
+        )
+        mapOf(
+            agentDir.resolve("npm").resolve("node_modules").resolve("user-old") to "1.0.0",
+            agentDir.resolve("npm").resolve("node_modules").resolve("user-current") to "2.0.0",
+            cwd.resolve(".pi").resolve("npm").resolve("node_modules").resolve("project-old") to "1.0.0",
+        ).forEach { (path, version) ->
+            Files.createDirectories(path)
+            Files.writeString(path.resolve("package.json"), """{"version":"$version"}""")
+        }
+        val runner =
+            RecordingPackageRunner(output = { command, _ ->
+                when {
+                    "view" in command -> {
+                        val name = command[command.indexOf("view") + 1]
+                        if (name == "user-current") "\"2.0.0\"" else "\"2.0.0\""
+                    }
+
+                    "install" in command -> ""
+                    else -> error("Unexpected command: ${command.joinToString(" ")}")
+                }
+            })
+        val manager =
+            PackageManager(
+                cwd = cwd,
+                agentDir = agentDir,
+                settings = settings,
+                projectTrusted = true,
+                commandRunner = runner,
+            )
+
+        manager.update()
+
+        val installs = runner.commands.filter { "install" in it.command }
+        assertEquals(2, installs.size)
+        assertTrue(installs.any { "user-old@latest" in it.command && "user-current@latest" !in it.command })
+        assertTrue(installs.any { "project-old@latest" in it.command })
+    }
+
+    @Test
+    fun `targeted updates suggest missing source prefixes`() {
+        val root = Files.createTempDirectory("pi-kotlin-package-update-suggestion")
+        val cwd = Files.createDirectories(root.resolve("project"))
+        val agentDir = Files.createDirectories(root.resolve("agent"))
+        val settings = SettingsStore(cwd, agentDir, projectTrusted = true)
+        settings.setPackages(SettingsScope.PROJECT, listOf(PackageSourceConfig("npm:example")))
+        val manager = PackageManager(cwd, agentDir, settings, projectTrusted = true)
+
+        val error = assertFailsWith<IllegalStateException> { manager.update("example") }
+
+        assertEquals("No matching package found for example. Did you mean npm:example?", error.message)
     }
 
     private fun createResourcePackage(
@@ -423,6 +729,7 @@ private data class RecordedPackageCommand(
 )
 
 private class RecordingPackageRunner(
+    private val output: (List<String>, Path?) -> String = { _, _ -> "" },
     private val behavior: (List<String>, Path?) -> Unit = { _, _ -> },
 ) : PackageCommandRunner {
     val commands = mutableListOf<RecordedPackageCommand>()
@@ -435,6 +742,6 @@ private class RecordingPackageRunner(
     ): String {
         commands += RecordedPackageCommand(command, cwd)
         behavior(command, cwd)
-        return ""
+        return output(command, cwd)
     }
 }

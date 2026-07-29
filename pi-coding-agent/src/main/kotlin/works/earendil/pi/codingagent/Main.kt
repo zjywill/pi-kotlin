@@ -80,6 +80,7 @@ fun main(rawArguments: Array<String>) {
                                     projectTrusted = arguments.projectTrustOverride,
                                     extensionPaths = arguments.extensions,
                                     noExtensions = arguments.noExtensions,
+                                    offline = arguments.offline || offlineEnvironmentEnabled(),
                                     extensionFlagValues = arguments.unknownFlags,
                                     extensionMode = ExtensionMode.RPC,
                                     noTools = arguments.noTools,
@@ -120,6 +121,13 @@ private fun shouldRunInteractive(arguments: Args): Boolean {
     }
     return System.getenv("TERM")?.takeUnless { it == "dumb" }.isNullOrBlank().not()
 }
+
+internal fun offlineEnvironmentEnabled(): Boolean =
+    System.getenv("PI_OFFLINE")
+        ?.let { value ->
+            value == "1" || value.equals("true", ignoreCase = true) || value.equals("yes", ignoreCase = true)
+        }
+        ?: false
 
 private fun readPipedStdin(arguments: Args): String? {
     if (!arguments.print && arguments.mode == null) {

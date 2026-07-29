@@ -308,6 +308,7 @@ internal fun loadThemes(
     themePaths: List<String> = emptyList(),
     noThemes: Boolean = false,
     homeDir: Path = defaultHomeDirectory(),
+    offline: Boolean = false,
     resolvedPackageResources: ResolvedPackageResources? = null,
 ): LoadedThemes {
     val normalizedCwd = cwd.toAbsolutePath().normalize()
@@ -318,6 +319,7 @@ internal fun loadThemes(
                 agentDir = agentDir,
                 projectTrusted = projectTrusted,
                 homeDir = homeDir,
+                offline = offline,
             )
     val resources =
         buildList {
@@ -384,6 +386,7 @@ internal fun createThemeRegistry(
     terminalTheme: TerminalTheme = detectTerminalTheme(),
     colorMode: ThemeColorMode = detectThemeColorMode(),
     homeDir: Path = defaultHomeDirectory(),
+    offline: Boolean = false,
     resolvedPackageResources: ResolvedPackageResources? = null,
 ): ThemeRegistry {
     val settings = SettingsStore(cwd, agentDir, projectTrusted)
@@ -395,6 +398,7 @@ internal fun createThemeRegistry(
             themePaths = themePaths,
             noThemes = noThemes,
             homeDir = homeDir,
+            offline = offline,
             resolvedPackageResources = resolvedPackageResources,
         )
     val builtins =

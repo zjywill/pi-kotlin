@@ -10,9 +10,13 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
+import works.earendil.pi.ai.ApiKeyAuth
+import works.earendil.pi.ai.ApiKeyCredential
+import works.earendil.pi.ai.AuthContext
 import works.earendil.pi.ai.AuthInteraction
 import works.earendil.pi.ai.AuthOption
 import works.earendil.pi.ai.AuthPrompt
+import works.earendil.pi.ai.AuthResult
 import works.earendil.pi.ai.FauxProvider
 import works.earendil.pi.ai.FauxResponseStep
 import works.earendil.pi.ai.InMemoryCredentialStore
@@ -21,6 +25,8 @@ import works.earendil.pi.ai.ModelAuth
 import works.earendil.pi.ai.Models
 import works.earendil.pi.ai.OAuthAuth
 import works.earendil.pi.ai.OAuthCredential
+import works.earendil.pi.ai.Provider
+import works.earendil.pi.ai.RefreshModelsContext
 import works.earendil.pi.ai.fauxAssistantMessage
 import works.earendil.pi.codingagent.session.SessionManager
 import kotlin.test.Test
@@ -504,6 +510,205 @@ class InteractiveRuntimeTest {
         }
 
     @Test
+    fun `interactive login supports provider API key workflows`() =
+        runTest {
+            val base = FauxProvider()
+            var refreshAllowNetwork: Boolean? = null
+            val provider =
+                object : Provider by base {
+                    override val id: String = "api-login"
+                    override val name: String = "API Login"
+                    override val oauth: OAuthAuth? = null
+                    override val apiKey: ApiKeyAuth =
+                        object : ApiKeyAuth {
+                            override val name: String = "API Login"
+                            override val supportsLogin: Boolean = true
+
+                            override suspend fun login(interaction: AuthInteraction): ApiKeyCredential =
+                                ApiKeyCredential(
+                                    interaction.prompt(
+                                        AuthPrompt.Text(
+                                            message = "Enter API key:",
+                                            secret = true,
+                                        ),
+                                    ),
+                                )
+
+                            override suspend fun resolve(
+                                context: AuthContext,
+                                credential: ApiKeyCredential?,
+                            ): AuthResult? =
+                                credential?.key?.let { key ->
+                                    AuthResult(ModelAuth(apiKey = key), "stored API key")
+                                }
+                        }
+
+                    override fun getModels() = emptyList<works.earendil.pi.ai.Model>()
+
+                    override val supportsModelRefresh: Boolean = true
+
+                    override suspend fun refreshModels(context: RefreshModelsContext) {
+                        refreshAllowNetwork = context.allowNetwork
+                    }
+                }
+            val store = InMemoryCredentialStore()
+            val console =
+                ScriptedConsole(
+                    listOf(
+                        "/login api-login",
+                        "stored-secret",
+                        "/logout api-login",
+                        "/exit",
+                    ),
+                )
+            val runtime =
+                InteractiveRuntime(
+                    Models(listOf(base, provider), InMemoryModelsStore(), store),
+                    cwd = Files.createTempDirectory("pi-kotlin-interactive-api-key-auth"),
+                    consoleFactory = { console },
+                )
+
+            val exit =
+                runtime.run(
+                    parseArgs(
+                        listOf(
+                            "--provider",
+                            "faux",
+                            "--model",
+                            "faux-1",
+                            "--no-session",
+                            "--offline",
+                        ),
+                    ),
+                )
+
+            assertEquals(0, exit)
+            assertEquals(null, store.read("api-login"))
+            assertEquals(false, refreshAllowNetwork)
+            assertTrue(console.output.contains("Enter API key:"))
+            assertEquals(listOf("Enter API key: "), console.secretPrompts)
+            assertTrue(console.output.contains("Logged in to API Login."))
+            assertTrue(console.output.contains("Logged out of API Login."))
+        }
+
+    @Test
+    fun `verbose overrides quiet startup settings`() =
+        runTest {
+            val root = Files.createTempDirectory("pi-kotlin-interactive-verbose")
+            val agentDir = Files.createDirectories(root.resolve("agent"))
+            Files.writeString(agentDir.resolve("settings.json"), """{"quietStartup":true}""")
+            val quietConsole = ScriptedConsole(listOf("/exit"))
+            val verboseConsole = ScriptedConsole(listOf("/exit"))
+
+            val quietExit =
+                InteractiveRuntime(
+                    Models(listOf(FauxProvider())),
+                    cwd = root,
+                    agentDir = agentDir,
+                    consoleFactory = { quietConsole },
+                ).run(
+                    parseArgs(
+                        listOf(
+                            "--provider",
+                            "faux",
+                            "--model",
+                            "faux-1",
+                            "--no-session",
+                        ),
+                    ),
+                )
+            val verboseExit =
+                InteractiveRuntime(
+                    Models(listOf(FauxProvider())),
+                    cwd = root,
+                    agentDir = agentDir,
+                    consoleFactory = { verboseConsole },
+                ).run(
+                    parseArgs(
+                        listOf(
+                            "--provider",
+                            "faux",
+                            "--model",
+                            "faux-1",
+                            "--no-session",
+                            "--verbose",
+                        ),
+                    ),
+                )
+
+            assertEquals(0, quietExit)
+            assertEquals(0, verboseExit)
+            assertFalse(quietConsole.output.contains("pi Kotlin"))
+            assertTrue(verboseConsole.output.contains("pi Kotlin"))
+            assertTrue(verboseConsole.output.contains("Type /help for commands."))
+        }
+
+    @Test
+    fun `interactive startup reports package updates and skips checks offline`() =
+        runTest {
+            val root = Files.createTempDirectory("pi-kotlin-interactive-package-updates")
+            val agentDir = Files.createDirectories(root.resolve("agent"))
+            val updateConsole = PackageUpdateConsole()
+            var onlineChecks = 0
+            val onlineExit =
+                InteractiveRuntime(
+                    Models(listOf(FauxProvider())),
+                    cwd = root,
+                    agentDir = agentDir,
+                    consoleFactory = { updateConsole },
+                    packageUpdateChecker = { _, _, _ ->
+                        onlineChecks++
+                        listOf("example", "github.com/example/repo")
+                    },
+                ).run(
+                    parseArgs(
+                        listOf(
+                            "--provider",
+                            "faux",
+                            "--model",
+                            "faux-1",
+                            "--no-session",
+                        ),
+                    ),
+                )
+            val offlineConsole = ScriptedConsole(listOf("/exit"))
+            var offlineChecks = 0
+            val offlineExit =
+                InteractiveRuntime(
+                    Models(listOf(FauxProvider())),
+                    cwd = root,
+                    agentDir = agentDir,
+                    consoleFactory = { offlineConsole },
+                    packageUpdateChecker = { _, _, _ ->
+                        offlineChecks++
+                        listOf("must-not-render")
+                    },
+                ).run(
+                    parseArgs(
+                        listOf(
+                            "--provider",
+                            "faux",
+                            "--model",
+                            "faux-1",
+                            "--no-session",
+                            "--offline",
+                        ),
+                    ),
+                )
+
+            assertEquals(0, onlineExit)
+            assertEquals(1, onlineChecks)
+            assertTrue(updateConsole.notificationObserved)
+            assertTrue(updateConsole.output.contains("Package Updates Available"))
+            assertTrue(updateConsole.output.contains("Run pi update --extensions"))
+            assertTrue(updateConsole.output.contains("- example"))
+            assertTrue(updateConsole.output.contains("- github.com/example/repo"))
+            assertEquals(0, offlineExit)
+            assertEquals(0, offlineChecks)
+            assertFalse(offlineConsole.output.contains("Package Updates Available"))
+        }
+
+    @Test
     fun `interactive trust prompt persists selection before project extensions load`() =
         runTest {
             org.junit.jupiter.api.Assumptions.assumeTrue(
@@ -841,8 +1046,15 @@ class InteractiveRuntimeTest {
     ) : InteractiveConsole {
         private var index = 0
         val output = StringBuilder()
+        val secretPrompts = mutableListOf<String>()
 
         override fun readLine(prompt: String): String? {
+            output.append(prompt)
+            return inputs.getOrNull(index++)
+        }
+
+        override fun readSecret(prompt: String): String? {
+            secretPrompts += prompt
             output.append(prompt)
             return inputs.getOrNull(index++)
         }
@@ -918,6 +1130,35 @@ class InteractiveRuntimeTest {
             synchronized(output) {
                 output.append("Error: ").append(text).append('\n')
             }
+        }
+    }
+
+    private class PackageUpdateConsole : InteractiveConsole {
+        private val notification = CountDownLatch(1)
+        val output = StringBuilder()
+        var notificationObserved = false
+
+        override fun readLine(prompt: String): String? {
+            output.append(prompt)
+            notificationObserved = notification.await(2, TimeUnit.SECONDS)
+            return "/exit"
+        }
+
+        override fun print(text: String) {
+            output.append(text)
+        }
+
+        override fun println(text: String) {
+            output.append(text).append('\n')
+        }
+
+        override fun printlnAbove(text: String) {
+            output.append(text).append('\n')
+            notification.countDown()
+        }
+
+        override fun error(text: String) {
+            output.append("Error: ").append(text).append('\n')
         }
     }
 

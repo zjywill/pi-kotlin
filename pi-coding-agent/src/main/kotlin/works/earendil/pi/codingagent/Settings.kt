@@ -73,6 +73,7 @@ internal data class SettingsSnapshot(
     val theme: String? = null,
     val enabledModels: List<String>? = null,
     val npmCommand: List<String>? = null,
+    val quietStartup: Boolean? = null,
 ) {
     fun resourceEntries(type: PackageResourceType): List<String> =
         when (type) {
@@ -209,6 +210,24 @@ internal class SettingsStore(
         }
     }
 
+    fun setResourceEntries(
+        scope: SettingsScope,
+        type: PackageResourceType,
+        entries: List<String>,
+    ) {
+        requireProjectTrusted(scope)
+        val path = path(scope)
+        withSettingsLock(path) {
+            val current = readRaw(path, scope)
+            val updated =
+                buildJsonObject {
+                    current.forEach { (key, value) -> put(key, value) }
+                    put(type.settingsKey, JsonArray(entries.map(::JsonPrimitive)))
+                }
+            writeRaw(path, updated)
+        }
+    }
+
     fun path(scope: SettingsScope): Path =
         when (scope) {
             SettingsScope.USER -> globalPath
@@ -247,6 +266,7 @@ internal class SettingsStore(
                         .onFailure { onWarning("Invalid npmCommand setting in $path: ${it.message}") }
                         .getOrNull()
                 },
+            quietStartup = raw["quietStartup"].booleanValue(),
         )
     }
 

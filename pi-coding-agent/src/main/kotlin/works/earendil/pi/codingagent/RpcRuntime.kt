@@ -183,6 +183,7 @@ data class RpcRuntimeOptions(
     val projectTrusted: Boolean? = null,
     val extensionPaths: List<String> = emptyList(),
     val noExtensions: Boolean = false,
+    val offline: Boolean = false,
     val extensionFlagValues: Map<String, Any> = emptyMap(),
     val extensionMode: ExtensionMode = ExtensionMode.RPC,
     val noTools: Boolean = false,
@@ -299,6 +300,12 @@ class RpcRuntime(
     }
 
     internal fun currentCwd(): Path = sessionManager.getCwd()
+
+    internal fun currentProjectTrusted(): Boolean =
+        extensionContextProvider()["projectTrusted"]
+            ?.jsonPrimitive
+            ?.booleanOrNull
+            ?: false
 
     internal fun currentTheme(): Theme = requireNotNull(promptResources).themeRegistry.activeTheme
 
@@ -1579,6 +1586,7 @@ class RpcRuntime(
                         projectTrusted = trusted,
                         themePaths = options.themePaths,
                         noThemes = options.noThemes,
+                        offline = options.offline,
                     )
                 }
 
@@ -1624,6 +1632,7 @@ class RpcRuntime(
                 noExtensions = options.noExtensions,
                 mode = options.extensionMode,
                 flagValues = options.extensionFlagValues,
+                offline = options.offline,
                 context = { trusted ->
                     extensionContextJson(
                         cwd = sessionManager.getCwd(),

@@ -9,6 +9,8 @@ internal fun runPackageCommand(
     agentDir: Path = defaultAgentDirectory(),
     output: PrintStream = System.out,
     errorOutput: PrintStream = System.err,
+    selfUpdater: SelfUpdater = SourceDistributionSelfUpdater(),
+    configSelector: ResourceConfigSelector = JLineResourceConfigSelector,
 ): Int? {
     val rawCommand = arguments.firstOrNull() ?: return null
     val command = if (rawCommand == "uninstall") "remove" else rawCommand
@@ -24,11 +26,24 @@ internal fun runPackageCommand(
         return 0
     }
     if (command == "config") {
-        return runConfigCommand(rest, output, errorOutput)
+        return runConfigCommand(
+            arguments = rest,
+            cwd = cwd,
+            agentDir = agentDir,
+            output = output,
+            errorOutput = errorOutput,
+            selector = configSelector,
+        )
     }
     validatePackageArguments(command, rest)?.let { message ->
         errorOutput.println(message)
-        errorOutput.println("Usage: ${packageCommandUsage(command)}")
+        errorOutput.println(
+            if (message.startsWith("Unknown option ")) {
+                """Use "pi --help" or "${packageCommandUsage(command)}"."""
+            } else {
+                "Usage: ${packageCommandUsage(command)}"
+            },
+        )
         return 1
     }
 
@@ -43,11 +58,6 @@ internal fun runPackageCommand(
         }
     if ((command == "install" || command == "remove") && source == null) {
         errorOutput.println("Missing $command source.")
-        errorOutput.println("Usage: ${packageCommandUsage(command)}")
-        return 1
-    }
-    if (command == "list" && positional.isNotEmpty()) {
-        errorOutput.println("Unexpected argument ${positional.first()}.")
         errorOutput.println("Usage: ${packageCommandUsage(command)}")
         return 1
     }
@@ -118,7 +128,7 @@ internal fun runPackageCommand(
                 0
             }
 
-            "update" -> runPackageUpdate(rest, source, manager, output, errorOutput)
+            "update" -> runPackageUpdate(rest, source, manager, output, errorOutput, selfUpdater)
             else -> error("Unsupported package command: $command")
         }
     } catch (error: Exception) {
@@ -133,41 +143,48 @@ private fun runPackageUpdate(
     manager: PackageManager,
     output: PrintStream,
     errorOutput: PrintStream,
+    selfUpdater: SelfUpdater,
 ): Int {
-    val extensions =
-        source != null ||
-            "--extensions" in arguments ||
-            "--all" in arguments ||
-            "--extension" in arguments
+    val sourceRequestsSelf = source == "self" || source == "pi"
     val extensionSource =
         when {
-            source != null && source != "self" && source != "pi" -> source
+            source != null && !sourceRequestsSelf -> source
             "--extension" in arguments -> arguments.getOrNull(arguments.indexOf("--extension") + 1)
             else -> null
         }
+    val extensions =
+        extensionSource != null ||
+            "--extensions" in arguments ||
+            "--all" in arguments
     if (extensions) {
         manager.update(extensionSource)
         output.println(if (extensionSource == null) "Updated packages" else "Updated $extensionSource")
     }
     val selfRequested =
-        !extensions ||
-            source == "self" ||
-            source == "pi" ||
+        sourceRequestsSelf ||
             "--self" in arguments ||
-            "--all" in arguments
+            "--all" in arguments ||
+            (
+                source == null &&
+                    "--extensions" !in arguments &&
+                    "--extension" !in arguments
+            )
     if (selfRequested) {
-        errorOutput.println(
-            "Error: Self-update is not available in this Kotlin distribution; update the installed application package.",
-        )
-        return 1
+        if (!extensions && source == null && "--self" !in arguments && "--all" !in arguments) {
+            output.println("Extensions are skipped. Run pi update --extensions to update extensions.")
+        }
+        return selfUpdater.update("--force" in arguments, output, errorOutput)
     }
     return 0
 }
 
 private fun runConfigCommand(
     arguments: List<String>,
+    cwd: Path,
+    agentDir: Path,
     output: PrintStream,
     errorOutput: PrintStream,
+    selector: ResourceConfigSelector,
 ): Int {
     val invalid =
         arguments.firstOrNull { argument ->
@@ -181,12 +198,49 @@ private fun runConfigCommand(
                 "Unexpected argument $invalid."
             },
         )
-        errorOutput.println("Usage: ${packageCommandUsage("config")}")
+        errorOutput.println(
+            if (invalid.startsWith("-")) {
+                """Use "pi --help" or "${packageCommandUsage("config")}"."""
+            } else {
+                "Usage: ${packageCommandUsage("config")}"
+            },
+        )
         return 1
     }
-    output.println("Interactive resource configuration is not migrated yet.")
-    output.println("Edit settings.json package/resource filters directly for this stage.")
-    return 1
+    val local = arguments.any { it == "-l" || it == "--local" }
+    val projectTrusted =
+        try {
+            resolveProjectTrusted(
+                cwd = cwd,
+                agentDir = agentDir,
+                override = parseApproval(arguments),
+            )
+        } catch (error: Exception) {
+            errorOutput.println("Error: ${error.message}")
+            return 1
+        }
+    if (local && !projectTrusted) {
+        errorOutput.println("Project is not trusted. Use --approve to modify local resource config.")
+        return 1
+    }
+    val warnings = mutableListOf<String>()
+    val settings =
+        SettingsStore(
+            cwd = cwd,
+            agentDir = agentDir,
+            projectTrusted = projectTrusted,
+            onWarning = warnings::add,
+        )
+    warnings.forEach { warning -> errorOutput.println("Warning: $warning") }
+    return selector.run(
+        cwd = cwd,
+        agentDir = agentDir,
+        settings = settings,
+        local = local,
+        projectTrusted = projectTrusted,
+        output = output,
+        errorOutput = errorOutput,
+    )
 }
 
 private fun parseApproval(arguments: List<String>): Boolean? {
@@ -266,7 +320,7 @@ private fun validatePackageArguments(
     val all = "--all" in arguments
     val extension = "--extension" in arguments
     if (all && (self || extensions || extension)) {
-        return "--all cannot be combined with --self, --extensions, or --extension"
+        return "--all cannot be combined with --self, --extensions, --models, or --extension"
     }
     if (all && source != null) {
         return "--all cannot be combined with a positional source"
@@ -314,22 +368,106 @@ private fun printPackageCommandHelp(
     command: String,
     output: PrintStream,
 ) {
-    val description =
+    val text =
         when (command) {
-            "install" -> "Install a package and add it to settings."
-            "remove" -> "Remove a package and its source from settings."
-            "update" -> "Update pi, installed packages, or model catalogs."
-            "list" -> "List installed packages from user and project settings."
-            "config" -> "Open the resource configuration TUI to enable or disable package resources."
-            else -> ""
+            "install" ->
+                """
+                Usage:
+                  ${packageCommandUsage("install")}
+
+                Install a package and add it to settings.
+
+                Options:
+                  -l, --local       Install project-locally (.pi/settings.json)
+                  -a, --approve     Trust project-local files for this command
+                  -na, --no-approve Ignore project-local files for this command
+
+                Examples:
+                  pi install npm:@foo/bar
+                  pi install git:github.com/user/repo
+                  pi install git:git@github.com:user/repo
+                  pi install https://github.com/user/repo
+                  pi install ssh://git@github.com/user/repo
+                  pi install ./local/path
+                """
+
+            "remove" ->
+                """
+                Usage:
+                  ${packageCommandUsage("remove")}
+
+                Remove a package and its source from settings.
+                Alias: pi uninstall <source> [-l]
+
+                Options:
+                  -l, --local       Remove from project settings (.pi/settings.json)
+                  -a, --approve     Trust project-local files for this command
+                  -na, --no-approve Ignore project-local files for this command
+
+                Examples:
+                  pi remove npm:@foo/bar
+                  pi uninstall npm:@foo/bar
+                """
+
+            "update" ->
+                """
+                Usage:
+                  ${packageCommandUsage("update")}
+
+                Update pi, installed packages, or model catalogs.
+
+                Options:
+                  --self                  Update pi only (default when no target is given)
+                  --extensions            Update installed packages only
+                  --models                Refresh model catalogs only
+                  --all                   Update pi and installed packages
+                  --extension <source>    Update one package only
+                  -a, --approve           Trust project-local files for this command
+                  -na, --no-approve       Ignore project-local files for this command
+                  --force                 Reinstall pi even if the current version is latest
+
+                Short forms:
+                  pi update                Update pi only
+                  pi update --all          Update pi and all extensions
+                  pi update --models       Refresh model catalogs only
+                  pi update <source>       Update one package
+                  pi update pi             Update pi only (self works as alias to pi)
+                """
+
+            "list" ->
+                """
+                Usage:
+                  ${packageCommandUsage("list")}
+
+                List installed packages from user and project settings.
+
+                Options:
+                  -a, --approve      Trust project-local files for this command
+                  -na, --no-approve  Ignore project-local files for this command
+                """
+
+            "config" ->
+                """
+                Usage:
+                  ${packageCommandUsage("config")}
+
+                Open the resource configuration TUI to enable or disable package resources.
+                Without -l, starts in global settings (~/.pi/agent/settings.json).
+                Press Tab in the TUI to switch between global and project-local modes.
+
+                Options:
+                  -l, --local       Edit project overrides (.pi/settings.json)
+                  -a, --approve     Trust project-local files for this command with -l
+                  -na, --no-approve Ignore project-local files for this command with -l
+                """
+
+            else -> return
         }
-    output.println("Usage:")
-    output.println("  ${packageCommandUsage(command)}")
+    output.println(text.trimIndent())
     output.println()
-    output.println(description)
 }
 
-private fun packageCommandUsage(command: String): String =
+internal fun packageCommandUsage(command: String): String =
     when (command) {
         "install" -> "pi install <source> [-l] [--approve|--no-approve]"
         "remove" -> "pi remove <source> [-l] [--approve|--no-approve]"

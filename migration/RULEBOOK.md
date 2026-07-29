@@ -32,6 +32,7 @@ through the commit recorded in `sync-state.tsv`.
 - `./gradlew clean test installDist`
 - `./migration/oracle/compare-anthropic-oauth.sh`
 - `./migration/oracle/compare-cli-help.sh`
+- `./migration/oracle/compare-cli-package-runtime.sh`
 - `./migration/oracle/compare-coding-message-projection.sh`
 - `./migration/oracle/compare-extension-custom-ui.sh`
 - `./migration/oracle/compare-extension-jiti-compat.sh`

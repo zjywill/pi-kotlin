@@ -418,6 +418,49 @@ class CliRuntimeTest {
             assertEquals("", stderr.toString())
         }
 
+    @Test
+    fun `offline flag skips missing configured package installation`() =
+        runTest {
+            val root = Files.createTempDirectory("pi-kotlin-cli-offline")
+            val agentDir = Files.createDirectories(root.resolve("agent"))
+            Files.writeString(
+                agentDir.resolve("settings.json"),
+                """{"packages":["npm:package-that-must-not-be-installed"]}""",
+            )
+            val provider = FauxProvider()
+            provider.setResponses(listOf(FauxResponseStep.Message(fauxAssistantMessage("offline ok"))))
+            val stdout = StringWriter()
+            val stderr = StringWriter()
+            val runtime =
+                CliRuntime(
+                    Models(listOf(provider)),
+                    cwd = root,
+                    agentDir = agentDir,
+                    stdout = PrintWriter(stdout, true),
+                    stderr = PrintWriter(stderr, true),
+                )
+
+            val exit =
+                runtime.run(
+                    parseArgs(
+                        listOf(
+                            "--provider",
+                            "faux",
+                            "--model",
+                            "faux-1",
+                            "--no-session",
+                            "--offline",
+                            "-p",
+                            "hello",
+                        ),
+                    ),
+                )
+
+            assertEquals(0, exit, stderr.toString())
+            assertEquals("offline ok\n", stdout.toString())
+            assertEquals("", stderr.toString())
+        }
+
     private fun nodeAvailable(): Boolean =
         runCatching {
             val process = ProcessBuilder("node", "--version").start()

@@ -76,9 +76,9 @@ features outside that slice remain migration work.
 | Model catalog | Functional slice | Hydrated schema-v3 manifest and 37 chat-provider files verify by SHA-256; all 1,110 static chat model records plus the credential-backed dynamic Radius catalog are exposed through 38 executable chat providers, including 29 credential-filtered GitHub Copilot models and Qwen Token Plan reasoning-control metadata; a separate immutable catalog exposes all 40 OpenRouter image models with an independent checksum |
 | Provider HTTP implementations | Functional slice | All 10 upstream chat API families plus `openrouter-images` have executable Kotlin paths. Coverage includes Google Generative AI, Google Vertex AI, Anthropic Messages plus Claude Pro/Max OAuth, OpenRouter Chat Completions and Images plus shared browser OAuth, xAI Chat Completions/Responses plus device OAuth, Kimi Coding Anthropic Messages plus device OAuth, Radius `pi-messages` plus discovered browser/device OAuth and dynamic models, OpenAI Chat Completions, OpenAI Responses, Azure OpenAI Responses, Mistral Conversations, Amazon Bedrock ConverseStream, OpenAI Codex Responses SSE/WebSocket plus browser/device OAuth, GitHub Copilot device OAuth and Anthropic/OpenAI Chat/OpenAI Responses delegates, Cloudflare Workers AI, and Cloudflare AI Gateway with independent payload/event/auth/image parity |
 | Agent loop | Functional slice | Streaming, tool calls, parallel execution, steering, follow-up, abort, and session tests using the faux provider; coding-message projection has independent parity for bash/custom/branch/compaction messages |
-| CLI argument contract | Partial | Parser tests and byte-for-byte `--help` oracle against the pinned TypeScript CLI; provider-prefixed and slash-containing model IDs, thinking suffixes, package install/remove/update/list, and interactive `/login`/`/logout` for OAuth providers are covered |
+| CLI argument contract | Complete | Parser tests, byte-for-byte top-level/auth/package help, installed package/model-update error contracts, provider-prefixed and slash-containing model IDs, thinking suffixes, text/JSON/RPC/print modes, session selection/forking, resource/tool flags, offline behavior, quiet/verbose startup, credential print, and interactive OAuth/API-key login/logout are covered by independent CLI/package and RPC runtime oracles plus installed PTYs |
 | Context, skill, and prompt resources | Functional slice | Global and ancestor `AGENTS.md`/`CLAUDE.md`, nested linked-worktree context deduplication, `SYSTEM.md`/`APPEND_SYSTEM.md` content and source paths, recursive `.pi`/`.agents` skills, prompt templates, YAML frontmatter, collisions, manual skill commands, template arguments, trusted project precedence, persisted trust inheritance, CLI/RPC commands, startup Context display, and interactive reload have an independent resource-loading oracle |
-| Package settings and resources | Functional slice | User/project `settings.json`, local/npm/git package identities and managed paths, install/remove/package-update/list commands, package manifests, autoload filters, top-level resource overrides, project precedence, package-sourced skills/prompts, source metadata, and failed new-checkout cleanup have an independent package-resources oracle and package tests; config TUI, self-update, legacy lookup, available-update checks, and remaining recovery paths remain |
+| Package settings and resources | Complete | User/project `settings.json`, local/npm/git identities and managed paths, install/remove/update/list/config commands, package manifests and filters, top-level overrides, project precedence, package-sourced resources, source metadata, npm/pnpm legacy global lookup, available-update checks, scoped npm batching, targeted suggestions, upstream-specific git reconciliation, failed-checkout cleanup, and source-distribution self-update have independent package-resource and installed CLI/package runtime oracles plus focused tests |
 | Themes and resource composition | Functional slice | Upstream-compatible JSON validation, recursive variables, cycle/missing-reference failures, built-in dark/light themes, automatic terminal appearance, truecolor/256-color ANSI output, project/user/package/extension precedence, collision diagnostics, persisted settings, extension named/in-memory switching, and persistent-surface rerendering have independent theme-runtime and extension-theme oracles |
 | JavaScript/TypeScript extensions | Partial | A bundled Node 22 JSONL host ships the official jiti 2.7.0 static runtime and MIT license. It loads `.js`/`.cjs`/`.mjs`/`.ts`/`.cts`/`.mts`/`.tsx`, extensionless imports, directory indexes, local TypeScript and extension-owned bare-package dependencies, ESM/CommonJS interop, and common pi/TypeBox virtual modules with `moduleCache: false`; JSX stays disabled like upstream by default. Tools, commands, flags, shortcuts, message/session-entry renderers, package discovery, lifecycle/tool hooks, command actions, project trust, resource composition, serializable and direct native provider registration, request-bound and unsolicited background registration refresh, live `ctx.scopedModels`, awaited `select`/`confirm`/`input`/`editor` dialogs with request-scoped blocking TUI timeout/AbortSignal interruption, persistent widget/header/footer component factories with stable IDs, width, `requestRender()`, replace/clear/dispose, status/git footer data, focused `ctx.ui.custom()` input loops, basic virtual `Key`/`Editor`/`CustomEditor`, RPC and server UI responses, `user_bash` direct results, function-valued `BashOperations`, native `stream`/`streamSimple`, legacy extension OAuth, native API-key `login`/`check`/`resolve`, function-valued `refreshModels(context.store)`, cancellation/lifecycle cleanup, and fire-and-forget UI events run through CLI/RPC/interactive paths with independent extension-runtime, custom-UI, renderer, shortcut, and jiti compatibility oracles. Custom editor replacement, raw terminal input, autocomplete composition, and overlay/full-screen parity remain |
 | Session JSONL compatibility | Functional slice | Independent TypeScript/Kotlin JSONL parity covers current/v1/v2 parsing, rewrite, migration, branching, compaction, model/thinking state, custom/tool/bash messages, and explicit empty-leaf context |
@@ -95,10 +95,14 @@ features outside that slice remain migration work.
 Verified on July 29, 2026 against source commit
 `d7b02636a0c7e8e615d0cff70679d18d2ff59573`:
 
-- `./gradlew clean test installDist`: passed, 384 tests, 0 failures, 0 errors,
+- `./gradlew clean test installDist`: passed, 405 tests, 0 failures, 0 errors,
   and 0 skipped.
 - `./migration/oracle/compare-cli-help.sh`: passed with byte-for-byte CLI help
   parity.
+- `./migration/oracle/compare-cli-package-runtime.sh`: passed for installed
+  package help and error contracts, local package lifecycle and settings,
+  offline native-provider print, masked API-key credential persistence, and
+  config-selector settings mutation.
 - `./migration/oracle/compare-model-catalog-runtime.sh`: passed for bundled,
   persisted-newer, remote-newer, unavailable-catalog, and ETag/304
   revalidation behavior.
@@ -162,7 +166,7 @@ Verified on July 29, 2026 against source commit
   fork/clone/switch/new-session, and HTML export.
 - Provider payload/stream parity passed with Qwen Token Plan reasoning controls
   and provider-native `rawStopReason` terminal fields.
-- All 28 deterministic migration oracles passed against the same source
+- All 29 deterministic migration oracles passed against the same source
   baseline.
 - Installed `pi --export` output was byte-identical to upstream with SHA-256
   `3613ceef433cc31040a5413427db35c4fd5b1d480aab0988b1613f634809bcb6`.
@@ -466,9 +470,8 @@ Verified on July 29, 2026 against source commit
   the source worktree remained clean, and an isolated rerun of the whole file
   passed all 8 tests.
 - `./migration/audit-migration.sh sync` passes through `d7b02636`.
-  `./migration/audit-migration.sh full` intentionally remains nonzero on four
-  partial areas: CLI workflows, package management, extension runtime, and
-  interactive terminal.
+  `./migration/audit-migration.sh full` intentionally remains nonzero on two
+  partial areas: extension runtime and interactive terminal.
 - The next July 29 synchronization pass reviewed every source commit through
   `cced6a21da273b26ee4a23a803680614bbe8dd1e`. Kotlin now avoids duplicate
   context files in nested linked worktrees and accepts nullable array schemas
@@ -578,21 +581,36 @@ Verified on July 29, 2026 against source commit
 - The installed 67-column JLine PTY rendered header/footer/widgets, selected
   `beta`, submitted `Ada` through the virtual editor, restored the main prompt,
   and exited normally.
+- Every parsed CLI field now reaches the text/JSON/RPC/interactive, session,
+  model/tool/resource, trust, offline, or extension runtime that owns it.
+  `quietStartup` is loaded from settings and `--verbose` overrides it.
+- Interactive API-key login uses masked JLine input, honors offline refresh,
+  persists owner-only credentials, and exits cleanly after Ctrl-D.
+- Package commands preserve upstream help, validation priority, exit codes, and
+  local install/list/remove settings behavior. The full-screen config selector
+  supports global/project modes, search, navigation, top-level and package
+  resource toggles, and three-state project overrides.
+- Source distributions self-update only through a clean tracked checkout,
+  fetch and fast-forward their configured upstream, rebuild `installDist`, and
+  support already-current and forced reinstall paths.
+- Legacy npm/pnpm lookup, unpinned npm/git update discovery, user/project npm
+  batching, targeted source-prefix suggestions, upstream-specific git fetch/
+  reset/clean, and dependency reinstall only after HEAD changes are covered by
+  focused tests.
+- Interactive startup checks package updates asynchronously when online and
+  reports available updates above the active JLine prompt.
 
 ## Remaining major gaps
 
 - Finish extension parity beyond the migrated Node host by adding custom editor
   replacement, raw terminal input listeners, autocomplete composition, and
-  overlay/full-screen placement. The package config selector, self-update, and
-  remaining package recovery paths also remain. Core package
-  manifests/filters/settings, skills, prompt templates, persisted trust
+  overlay/full-screen placement. Core package manifests/filters/settings,
+  config selection, self-update, skills, prompt templates, persisted trust
   lookup, extension resource composition, awaited RPC/TUI dialogs,
   function-valued `user_bash`, direct native and named provider callbacks,
   legacy extension OAuth, and interactive resource reload are migrated.
 - Port the full-screen terminal component and rendering model, then compare
   terminal transcripts at multiple widths.
-- Close CLI behavior gaps for options that are parsed or documented but do not
-  yet have complete runtime behavior.
 
 ## Completeness audit
 

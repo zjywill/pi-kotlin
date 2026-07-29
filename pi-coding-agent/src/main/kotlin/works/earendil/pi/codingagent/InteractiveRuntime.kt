@@ -7,8 +7,13 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -59,6 +64,8 @@ sealed interface InteractiveReadResult {
 interface InteractiveConsole : AutoCloseable {
     fun readLine(prompt: String): String?
 
+    fun readSecret(prompt: String): String? = readLine(prompt)
+
     fun readLine(
         prompt: String,
         cancellation: ExtensionUiCancellation,
@@ -74,6 +81,8 @@ interface InteractiveConsole : AutoCloseable {
 
     fun println(text: String = "")
 
+    fun printlnAbove(text: String) = println(text)
+
     fun error(text: String)
 
     fun width(): Int = 80
@@ -88,6 +97,7 @@ class InteractiveRuntime(
     private val cwd: Path = Path.of("").toAbsolutePath().normalize(),
     private val agentDir: Path = defaultAgentDirectory(),
     private val consoleFactory: () -> InteractiveConsole = { JLineConsole() },
+    private val packageUpdateChecker: (Path, Path, Boolean) -> List<String> = ::checkPackageUpdates,
 ) {
     private val extensionSurfaceLock = Any()
     private val extensionWidgetsAbove = linkedMapOf<String, List<String>>()
@@ -105,6 +115,7 @@ class InteractiveRuntime(
             }
             return 2
         }
+        val offline = args.offline || offlineEnvironmentEnabled()
 
         val sessionDirectory = args.sessionDir?.let(::resolvePath)
         val resumedPath =
@@ -164,6 +175,7 @@ class InteractiveRuntime(
                         projectTrusted = args.projectTrustOverride,
                         extensionPaths = args.extensions,
                         noExtensions = args.noExtensions,
+                        offline = offline,
                         extensionFlagValues = args.unknownFlags,
                         extensionMode = ExtensionMode.TUI,
                         noTools = args.noTools,
@@ -256,20 +268,50 @@ class InteractiveRuntime(
                         "agent_settled" -> settled.getAndSet(null)?.complete(Unit)
                     }
             }
+            val packageUpdateScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
             try {
-                renderInteractiveHeader(console, runtime)
-                renderStartupContext(console, runtime)
-                console.println(
-                    themeForeground(
-                        runtime,
-                        console,
-                        "dim",
-                        "Type /help for commands. Ctrl-D or /exit quits.",
-                    ),
-                )
+                val quietStartup =
+                    SettingsStore(
+                        cwd = runtime.currentCwd(),
+                        agentDir = agentDir,
+                        projectTrusted = runtime.currentProjectTrusted(),
+                    ).let { settings ->
+                        settings.project().quietStartup ?: settings.global().quietStartup ?: false
+                    }
+                if (args.verbose || !quietStartup) {
+                    renderInteractiveHeader(console, runtime)
+                    renderStartupContext(console, runtime)
+                    console.println(
+                        themeForeground(
+                            runtime,
+                            console,
+                            "dim",
+                            "Type /help for commands. Ctrl-D or /exit quits.",
+                        ),
+                    )
+                }
                 runtime.renderExtensionTranscript()
                 renderInitialExtensionSurfaces(console)
                 renderLiveExtensionSurfaces = true
+                if (!offline) {
+                    packageUpdateScope.launch {
+                        val updates =
+                            try {
+                                packageUpdateChecker(
+                                    runtime.currentCwd(),
+                                    agentDir,
+                                    runtime.currentProjectTrusted(),
+                                )
+                            } catch (error: CancellationException) {
+                                throw error
+                            } catch (_: Throwable) {
+                                emptyList()
+                            }
+                        if (updates.isNotEmpty()) {
+                            renderPackageUpdateNotification(console, runtime, updates)
+                        }
+                    }
+                }
                 args.name?.let { name ->
                     val response =
                         runtime.handle(
@@ -373,6 +415,7 @@ class InteractiveRuntime(
                             login(
                                 input.removePrefix("/login").trim().takeIf(String::isNotEmpty),
                                 console,
+                                allowNetwork = !offline,
                             )
 
                         input == "/logout" || input.startsWith("/logout ") ->
@@ -411,10 +454,33 @@ class InteractiveRuntime(
                 }
                 return 0
             } finally {
+                packageUpdateScope.cancel()
                 unsubscribe()
                 runtime.close()
             }
         }
+    }
+
+    private fun renderPackageUpdateNotification(
+        console: InteractiveConsole,
+        runtime: RpcRuntime,
+        updates: List<String>,
+    ) {
+        val lines =
+            buildList {
+                add(themeForeground(runtime, console, "warning", "Package Updates Available"))
+                add(
+                    themeForeground(
+                        runtime,
+                        console,
+                        "dim",
+                        "Package updates are available. Run pi update --extensions",
+                    ),
+                )
+                add(themeForeground(runtime, console, "dim", "Packages:"))
+                updates.forEach { update -> add("- $update") }
+            }
+        console.printlnAbove(lines.joinToString("\n"))
     }
 
     private fun selectProjectTrust(
@@ -801,25 +867,84 @@ class InteractiveRuntime(
     private suspend fun login(
         providerId: String?,
         console: InteractiveConsole,
+        allowNetwork: Boolean,
     ) {
-        val providers = models.getProviders().filter { it.oauth != null }.sortedBy(Provider::id)
-        val provider =
-            selectProvider(
-                requestedId = providerId,
-                providers = providers,
-                prompt = "Login provider:",
-                console = console,
-            ) ?: return
+        val options =
+            models
+                .getProviders()
+                .flatMap { provider ->
+                    buildList {
+                        provider.oauth?.let {
+                            add(LoginOption(provider, AuthType.OAUTH))
+                        }
+                        provider.apiKey
+                            ?.takeIf { it.supportsLogin }
+                            ?.let {
+                                add(LoginOption(provider, AuthType.API_KEY))
+                            }
+                    }
+                }.sortedWith(compareBy({ it.provider.name }, { it.authType.name }))
+        val matching =
+            providerId
+                ?.trim()
+                ?.takeIf(String::isNotEmpty)
+                ?.let { requested ->
+                    options.filter { option ->
+                        option.provider.id.equals(requested, ignoreCase = true) ||
+                            option.provider.name.equals(requested, ignoreCase = true)
+                    }
+                }
+        val option =
+            when {
+                matching == null -> selectLoginOption(options, "Login provider:", console)
+                matching.isEmpty() -> {
+                    console.error("Provider does not support login: $providerId")
+                    null
+                }
+
+                matching.size == 1 -> matching.single()
+                else -> selectLoginOption(matching, "Authentication method:", console)
+            } ?: return
         try {
             models.login(
-                provider.id,
-                AuthType.OAUTH,
+                option.provider.id,
+                option.authType,
                 ConsoleAuthInteraction(console),
             )
-            models.refresh(ModelsRefreshOptions(allowNetwork = true))
-            console.println("Logged in to ${provider.name}.")
+            models.refresh(ModelsRefreshOptions(allowNetwork = allowNetwork))
+            console.println("Logged in to ${option.provider.name}.")
         } catch (error: Exception) {
             console.error(error.message ?: "Login failed")
+        }
+    }
+
+    private fun selectLoginOption(
+        options: List<LoginOption>,
+        prompt: String,
+        console: InteractiveConsole,
+    ): LoginOption? {
+        if (options.isEmpty()) {
+            console.error("No providers support interactive login.")
+            return null
+        }
+        options.forEachIndexed { index, option ->
+            val type = if (option.authType == AuthType.OAUTH) "subscription" else "API key"
+            console.println("${index + 1}. ${option.provider.name} [$type; ${option.provider.id}]")
+        }
+        while (true) {
+            val value = console.readLine("$prompt ")?.trim() ?: return null
+            if (value.isEmpty()) {
+                return null
+            }
+            val index = value.toIntOrNull()
+            if (index != null && index in 1..options.size) {
+                return options[index - 1]
+            }
+            options.firstOrNull { option ->
+                option.provider.id.equals(value, ignoreCase = true) ||
+                    option.provider.name.equals(value, ignoreCase = true)
+            }?.let { return it }
+            console.error("Select a provider by number or id.")
         }
     }
 
@@ -1078,6 +1203,11 @@ class InteractiveRuntime(
     }
 }
 
+private data class LoginOption(
+    val provider: Provider,
+    val authType: AuthType,
+)
+
 private class ConsoleAuthInteraction(
     private val console: InteractiveConsole,
 ) : AuthInteraction {
@@ -1090,7 +1220,11 @@ private class ConsoleAuthInteraction(
                         ?: error("Login cancelled")
 
                 is AuthPrompt.Text ->
-                    console.readLine("${prompt.message} ")
+                    if (prompt.secret) {
+                        console.readSecret("${prompt.message} ")
+                    } else {
+                        console.readLine("${prompt.message} ")
+                    }
                         ?: error("Login cancelled")
             }
         }
@@ -1186,6 +1320,13 @@ internal class JLineConsole(
         prompt: String,
     ): String? = readLineInternal(prompt, cancellation = null)
 
+    override fun readSecret(prompt: String): String? =
+        try {
+            reader.readLine(prompt, '*')
+        } catch (_: EndOfFileException) {
+            null
+        }
+
     override fun readLine(
         prompt: String,
         cancellation: ExtensionUiCancellation,
@@ -1279,6 +1420,10 @@ internal class JLineConsole(
         output.flush()
     }
 
+    override fun printlnAbove(text: String) {
+        reader.printAbove(text)
+    }
+
     override fun error(text: String) {
         output.println("Error: $text")
         output.flush()
@@ -1299,6 +1444,20 @@ internal class JLineConsole(
             return path
         }
     }
+}
+
+private fun checkPackageUpdates(
+    cwd: Path,
+    agentDir: Path,
+    projectTrusted: Boolean,
+): List<String> {
+    val settings = SettingsStore(cwd, agentDir, projectTrusted)
+    return PackageManager(
+        cwd = cwd,
+        agentDir = agentDir,
+        settings = settings,
+        projectTrusted = projectTrusted,
+    ).checkForAvailableUpdates().map(PackageUpdate::displayName)
 }
 
 internal fun normalizeTerminalWidth(width: Int): Int = width.takeIf { it > 0 } ?: 80

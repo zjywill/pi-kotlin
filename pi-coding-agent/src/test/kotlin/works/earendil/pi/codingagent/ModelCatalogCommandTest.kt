@@ -30,7 +30,55 @@ class ModelCatalogCommandTest {
                 )
 
             assertEquals(1, exitCode)
-            assertTrue(stderr.toString().contains("--models cannot be combined with --extensions"))
+            assertEquals(
+                """
+                --models cannot be combined with --self, --extensions, --all, or --extension
+                Usage: pi update [source|self|pi] [--self|--extensions|--models|--all] [--extension <source>] [--approve|--no-approve] [--force]
+                """.trimIndent(),
+                stderr.toString().trim(),
+            )
+        }
+
+    @Test
+    fun `update models preserves upstream validation priority and usage text`() =
+        runBlocking {
+            val cases =
+                mapOf(
+                    listOf("update", "--models", "--bogus") to
+                        """
+                        Unknown option --bogus for "update".
+                        Use "pi --help" or "pi update [source|self|pi] [--self|--extensions|--models|--all] [--extension <source>] [--approve|--no-approve] [--force]".
+                        """.trimIndent(),
+                    listOf("update", "--models", "--extension") to
+                        """
+                        Missing value for --extension.
+                        Usage: pi update [source|self|pi] [--self|--extensions|--models|--all] [--extension <source>] [--approve|--no-approve] [--force]
+                        """.trimIndent(),
+                    listOf("update", "--models", "one", "two") to
+                        """
+                        Unexpected argument two.
+                        Usage: pi update [source|self|pi] [--self|--extensions|--models|--all] [--extension <source>] [--approve|--no-approve] [--force]
+                        """.trimIndent(),
+                    listOf("update", "--models", "--all") to
+                        """
+                        --all cannot be combined with --self, --extensions, --models, or --extension
+                        Usage: pi update [source|self|pi] [--self|--extensions|--models|--all] [--extension <source>] [--approve|--no-approve] [--force]
+                        """.trimIndent(),
+                )
+
+            cases.forEach { (arguments, expected) ->
+                val stderr = ByteArrayOutputStream()
+                val exitCode =
+                    runModelCatalogCommand(
+                        arguments = arguments,
+                        catalogBaseUrl = "http://127.0.0.1:1",
+                        output = PrintStream(ByteArrayOutputStream()),
+                        errorOutput = PrintStream(stderr),
+                    )
+
+                assertEquals(1, exitCode, arguments.toString())
+                assertEquals(expected, stderr.toString().trim(), arguments.toString())
+            }
         }
 
     @Test

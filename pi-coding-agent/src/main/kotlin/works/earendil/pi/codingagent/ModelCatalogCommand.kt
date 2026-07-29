@@ -20,22 +20,16 @@ internal suspend fun runModelCatalogCommand(
     if (arguments.firstOrNull() != "update" || "--models" !in arguments) {
         return null
     }
-    val invalid =
-        arguments
-            .drop(1)
-            .firstOrNull { argument ->
-                argument !in
-                    setOf(
-                        "--models",
-                        "--force",
-                        "-a",
-                        "--approve",
-                        "-na",
-                        "--no-approve",
-                    )
-            }
-    if (invalid != null) {
-        errorOutput.println("--models cannot be combined with $invalid")
+    val validation = validateModelCatalogArguments(arguments.drop(1))
+    if (validation != null) {
+        errorOutput.println(validation.message)
+        errorOutput.println(
+            if (validation.unknownOption) {
+                """Use "pi --help" or "${packageCommandUsage("update")}"."""
+            } else {
+                "Usage: ${packageCommandUsage("update")}"
+            },
+        )
         return 1
     }
 
@@ -69,6 +63,89 @@ internal suspend fun runModelCatalogCommand(
     output.println("Model catalogs refreshed")
     return 0
 }
+
+private fun validateModelCatalogArguments(arguments: List<String>): ModelCatalogValidationError? {
+    var self = false
+    var extensions = false
+    var all = false
+    var extensionSource: String? = null
+    var source: String? = null
+    var invalidOption: String? = null
+    var missingOptionValue: String? = null
+    var invalidArgument: String? = null
+    var extensionCount = 0
+    var index = 0
+    while (index < arguments.size) {
+        val argument = arguments[index]
+        when (argument) {
+            "--self" -> self = true
+            "--extensions" -> extensions = true
+            "--models",
+            "--force",
+            "-a",
+            "--approve",
+            "-na",
+            "--no-approve",
+            -> Unit
+
+            "--all" -> all = true
+            "--extension" -> {
+                val value = arguments.getOrNull(index + 1)
+                if (value == null || value.startsWith("-")) {
+                    missingOptionValue = missingOptionValue ?: argument
+                } else {
+                    extensionCount++
+                    if (extensionCount == 1) {
+                        extensionSource = value
+                    }
+                    index++
+                }
+            }
+
+            else ->
+                when {
+                    argument.startsWith("-") -> invalidOption = invalidOption ?: argument
+                    source == null -> source = argument
+                    else -> invalidArgument = invalidArgument ?: argument
+                }
+        }
+        index++
+    }
+    invalidOption?.let {
+        return ModelCatalogValidationError(
+            message = "Unknown option $it for \"update\".",
+            unknownOption = true,
+        )
+    }
+    missingOptionValue?.let {
+        return ModelCatalogValidationError("Missing value for $it.")
+    }
+    invalidArgument?.let {
+        return ModelCatalogValidationError("Unexpected argument $it.")
+    }
+    if (extensionCount > 1) {
+        return ModelCatalogValidationError("--extension can only be provided once")
+    }
+    if (all) {
+        return ModelCatalogValidationError(
+            "--all cannot be combined with --self, --extensions, --models, or --extension",
+        )
+    }
+    if (self || extensions || extensionSource != null) {
+        return ModelCatalogValidationError(
+            "--models cannot be combined with --self, --extensions, --all, or --extension",
+        )
+    }
+    if (source != null) {
+        return ModelCatalogValidationError("--models cannot be combined with a positional source")
+    }
+    return null
+}
+
+private data class ModelCatalogValidationError(
+    val message: String,
+    val unknownOption: Boolean = false,
+)
 
 suspend fun loadBuiltInModels(
     agentDir: Path = defaultAgentDirectory(),

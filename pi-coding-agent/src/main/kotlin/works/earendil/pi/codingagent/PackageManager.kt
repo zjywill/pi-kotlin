@@ -8,6 +8,9 @@ import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.PosixFilePermission
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
@@ -56,6 +59,18 @@ internal data class ConfiguredPackage(
     val filtered: Boolean,
     val installedPath: Path?,
 )
+
+internal data class PackageUpdate(
+    val source: String,
+    val displayName: String,
+    val type: Type,
+    val scope: SettingsScope,
+) {
+    enum class Type {
+        NPM,
+        GIT,
+    }
+}
 
 internal data class PackageProgressEvent(
     val type: Type,
@@ -221,33 +236,99 @@ internal class PackageManager(
                     packageIdentity(entry.config.source, entry.scope) == requestedIdentity
             }
         if (source != null && configured.isEmpty()) {
-            error("No matching package found for $source")
+            error(noMatchingPackageMessage(source, settings.global().packages + settings.project().packages))
         }
+        val npmUpdates = linkedMapOf<PackageScope, MutableList<ParsedPackageSource.Npm>>()
+        val gitUpdates = mutableListOf<Pair<ScopedPackage, ParsedPackageSource.Git>>()
         dedupePackages(configured).forEach { entry ->
             val parsed = parsePackageSource(entry.config.source)
             when (parsed) {
                 is ParsedPackageSource.Npm -> {
-                    if (!parsed.pinned) {
-                        withProgress(
-                            PackageProgressEvent.Action.UPDATE,
-                            entry.config.source,
-                            "Updating ${entry.config.source}...",
-                        ) {
-                            installNpm(parsed, entry.scope)
-                        }
+                    if (!parsed.pinned && shouldUpdateNpm(parsed, entry.scope)) {
+                        npmUpdates.getOrPut(entry.scope) { mutableListOf() } += parsed
                     }
                 }
 
-                is ParsedPackageSource.Git ->
-                    withProgress(
-                        PackageProgressEvent.Action.UPDATE,
-                        entry.config.source,
-                        "Updating ${entry.config.source}...",
-                    ) {
-                        installGit(parsed, entry.scope)
-                    }
+                is ParsedPackageSource.Git -> gitUpdates += entry to parsed
 
                 is ParsedPackageSource.Local -> Unit
+            }
+        }
+        npmUpdates.forEach { (scope, packages) ->
+            val label =
+                if (packages.size == 1) {
+                    "npm:${packages.single().spec}"
+                } else {
+                    "${scope.wireName} npm packages"
+                }
+            withProgress(
+                PackageProgressEvent.Action.UPDATE,
+                label,
+                "Updating $label...",
+            ) {
+                installNpmBatch(
+                    packages.map { parsed ->
+                        if (parsed.version == null) "${parsed.name}@latest" else parsed.spec
+                    },
+                    scope,
+                )
+            }
+        }
+        gitUpdates.forEach { (entry, parsed) ->
+            withProgress(
+                PackageProgressEvent.Action.UPDATE,
+                entry.config.source,
+                "Updating ${entry.config.source}...",
+            ) {
+                installGit(parsed, entry.scope)
+            }
+        }
+    }
+
+    fun checkForAvailableUpdates(): List<PackageUpdate> {
+        if (offlineMode()) {
+            return emptyList()
+        }
+        val configured =
+            buildList {
+                settings.project().packages.forEach { add(ScopedPackage(it, PackageScope.PROJECT)) }
+                settings.global().packages.forEach { add(ScopedPackage(it, PackageScope.USER)) }
+            }
+        return dedupePackages(configured).mapNotNull { entry ->
+            val source = entry.config.source
+            when (val parsed = parsePackageSource(source)) {
+                is ParsedPackageSource.Local -> null
+                is ParsedPackageSource.Npm -> {
+                    if (parsed.pinned) {
+                        return@mapNotNull null
+                    }
+                    val installedPath = npmInstallPath(parsed, entry.scope)
+                    if (!Files.exists(installedPath) || !npmHasAvailableUpdate(parsed, installedPath)) {
+                        return@mapNotNull null
+                    }
+                    PackageUpdate(
+                        source = source,
+                        displayName = parsed.name,
+                        type = PackageUpdate.Type.NPM,
+                        scope = entry.scope.toSettingsScope(),
+                    )
+                }
+
+                is ParsedPackageSource.Git -> {
+                    if (parsed.pinned) {
+                        return@mapNotNull null
+                    }
+                    val installedPath = gitInstallPath(parsed, entry.scope)
+                    if (!Files.exists(installedPath) || !gitHasAvailableUpdate(installedPath)) {
+                        return@mapNotNull null
+                    }
+                    PackageUpdate(
+                        source = source,
+                        displayName = "${parsed.host}/${parsed.path}",
+                        type = PackageUpdate.Type.GIT,
+                        scope = entry.scope.toSettingsScope(),
+                    )
+                }
             }
         }
     }
@@ -447,7 +528,15 @@ internal class PackageManager(
     private fun installNpm(
         source: ParsedPackageSource.Npm,
         scope: PackageScope,
+    ) = installNpmBatch(listOf(source.spec), scope)
+
+    private fun installNpmBatch(
+        specs: List<String>,
+        scope: PackageScope,
     ) {
+        if (specs.isEmpty()) {
+            return
+        }
         val root = npmInstallRoot(scope)
         Files.createDirectories(root)
         ensureNpmPackageJson(root)
@@ -455,13 +544,20 @@ internal class PackageManager(
         val manager = npm.last().substringAfterLast('/').substringBeforeLast('.').lowercase()
         val args =
             when (manager) {
-                "bun" -> npm.dropLast(1) + listOf(npm.last(), "install", source.spec, "--cwd", root.toString(), "--omit=peer")
+                "bun" ->
+                    npm.dropLast(1) +
+                        listOf(npm.last(), "install") +
+                        specs +
+                        listOf("--cwd", root.toString(), "--omit=peer")
+
                 "pnpm" ->
                     npm.dropLast(1) +
                         listOf(
                             npm.last(),
                             "install",
-                            source.spec,
+                        ) +
+                        specs +
+                        listOf(
                             "--prefix",
                             root.toString(),
                             "--config.auto-install-peers=false",
@@ -470,8 +566,8 @@ internal class PackageManager(
                         )
 
                 else ->
-                    npm.dropLast(1) +
-                        listOf(npm.last(), "install", source.spec, "--prefix", root.toString(), "--legacy-peer-deps")
+                    npm.dropLast(1) + listOf(npm.last(), "install") + specs +
+                        listOf("--prefix", root.toString(), "--legacy-peer-deps")
             }
         commandRunner.run(args, cwd = null, environment = environment, timeoutSeconds = PACKAGE_COMMAND_TIMEOUT_SECONDS)
     }
@@ -519,33 +615,21 @@ internal class PackageManager(
                 )
             }
             if (source.ref != null) {
-                commandRunner.run(
-                    listOf("git", "fetch", "origin", source.ref),
-                    cwd = target,
-                    environment = environment + ("GIT_TERMINAL_PROMPT" to "0"),
-                    timeoutSeconds = PACKAGE_COMMAND_TIMEOUT_SECONDS,
-                )
-                commandRunner.run(
-                    listOf("git", "reset", "--hard", "FETCH_HEAD^{commit}"),
-                    cwd = target,
-                    environment = environment,
-                    timeoutSeconds = PACKAGE_COMMAND_TIMEOUT_SECONDS,
-                )
-                commandRunner.run(
-                    listOf("git", "clean", "-fdx"),
-                    cwd = target,
-                    environment = environment,
-                    timeoutSeconds = PACKAGE_COMMAND_TIMEOUT_SECONDS,
+                reconcileGitRef(
+                    target = target,
+                    fetchArguments = listOf("fetch", "origin", source.ref),
+                    ref = "FETCH_HEAD",
                 )
             } else if (checkoutExisted) {
-                commandRunner.run(
-                    listOf("git", "pull", "--ff-only"),
-                    cwd = target,
-                    environment = environment + ("GIT_TERMINAL_PROMPT" to "0"),
-                    timeoutSeconds = PACKAGE_COMMAND_TIMEOUT_SECONDS,
+                val updateTarget = localGitUpdateTarget(target)
+                reconcileGitRef(
+                    target = target,
+                    fetchArguments = updateTarget.fetchArguments,
+                    ref = updateTarget.ref,
                 )
+            } else {
+                installGitDependencies(target)
             }
-            installGitDependencies(target)
         } catch (error: Exception) {
             if (!checkoutExisted) {
                 target.toFile().deleteRecursively()
@@ -553,6 +637,113 @@ internal class PackageManager(
             }
             throw error
         }
+    }
+
+    private fun localGitUpdateTarget(target: Path): GitUpdateTarget =
+        runCatching {
+            val upstream =
+                commandRunner
+                    .run(
+                        listOf("git", "rev-parse", "--abbrev-ref", "@{upstream}"),
+                        cwd = target,
+                        environment = environment,
+                        timeoutSeconds = NETWORK_COMMAND_TIMEOUT_SECONDS,
+                    ).trim()
+            require(upstream.startsWith("origin/")) { "Unsupported upstream remote: $upstream" }
+            val branch = upstream.removePrefix("origin/")
+            require(branch.isNotBlank()) { "Missing upstream branch name" }
+            GitUpdateTarget(
+                ref = "@{upstream}",
+                fetchArguments =
+                    listOf(
+                        "fetch",
+                        "--prune",
+                        "--no-tags",
+                        "origin",
+                        "+refs/heads/$branch:refs/remotes/origin/$branch",
+                    ),
+            )
+        }.getOrElse {
+            runCatching {
+                commandRunner.run(
+                    listOf("git", "remote", "set-head", "origin", "-a"),
+                    cwd = target,
+                    environment = environment + ("GIT_TERMINAL_PROMPT" to "0"),
+                    timeoutSeconds = NETWORK_COMMAND_TIMEOUT_SECONDS,
+                )
+            }
+            val symbolic =
+                runCatching {
+                    commandRunner
+                        .run(
+                            listOf("git", "symbolic-ref", "refs/remotes/origin/HEAD"),
+                            cwd = target,
+                            environment = environment,
+                            timeoutSeconds = NETWORK_COMMAND_TIMEOUT_SECONDS,
+                        ).trim()
+                }.getOrDefault("")
+            val branch = symbolic.removePrefix("refs/remotes/origin/").takeIf(String::isNotBlank)
+            GitUpdateTarget(
+                ref = "origin/HEAD",
+                fetchArguments =
+                    if (branch == null) {
+                        listOf("fetch", "--prune", "--no-tags", "origin", "+HEAD:refs/remotes/origin/HEAD")
+                    } else {
+                        listOf(
+                            "fetch",
+                            "--prune",
+                            "--no-tags",
+                            "origin",
+                            "+refs/heads/$branch:refs/remotes/origin/$branch",
+                        )
+                    },
+            )
+        }
+
+    private fun reconcileGitRef(
+        target: Path,
+        fetchArguments: List<String>,
+        ref: String,
+    ) {
+        commandRunner.run(
+            listOf("git") + fetchArguments,
+            cwd = target,
+            environment = environment + ("GIT_TERMINAL_PROMPT" to "0"),
+            timeoutSeconds = PACKAGE_COMMAND_TIMEOUT_SECONDS,
+        )
+        val localHead =
+            commandRunner
+                .run(
+                    listOf("git", "rev-parse", "HEAD"),
+                    cwd = target,
+                    environment = environment,
+                    timeoutSeconds = NETWORK_COMMAND_TIMEOUT_SECONDS,
+                ).trim()
+        val commitRef = "$ref^{commit}"
+        val targetHead =
+            commandRunner
+                .run(
+                    listOf("git", "rev-parse", commitRef),
+                    cwd = target,
+                    environment = environment,
+                    timeoutSeconds = NETWORK_COMMAND_TIMEOUT_SECONDS,
+                ).trim()
+        if (localHead == targetHead) {
+            return
+        }
+        commandRunner.run(
+            listOf("git", "reset", "--hard", commitRef),
+            cwd = target,
+            environment = environment,
+            timeoutSeconds = PACKAGE_COMMAND_TIMEOUT_SECONDS,
+        )
+        commandRunner.run(
+            listOf("git", "clean", "-fdx"),
+            cwd = target,
+            environment = environment,
+            timeoutSeconds = PACKAGE_COMMAND_TIMEOUT_SECONDS,
+        )
+        installGitDependencies(target)
     }
 
     private fun installGitDependencies(target: Path) {
@@ -965,7 +1156,56 @@ internal class PackageManager(
     private fun npmInstallPath(
         source: ParsedPackageSource.Npm,
         scope: PackageScope,
+    ): Path {
+        val managed = managedNpmInstallPath(source, scope)
+        if (scope != PackageScope.USER || Files.exists(managed)) {
+            return managed
+        }
+        val legacy = legacyGlobalNpmInstallPath(source)
+        return legacy?.takeIf(Files::exists) ?: managed
+    }
+
+    private fun managedNpmInstallPath(
+        source: ParsedPackageSource.Npm,
+        scope: PackageScope,
     ): Path = managedPath(npmInstallRoot(scope), "node_modules", source.name)
+
+    private fun legacyGlobalNpmInstallPath(source: ParsedPackageSource.Npm): Path? =
+        runCatching {
+            val npm = npmCommand()
+            val manager = npm.last().substringAfterLast('/').substringBeforeLast('.').lowercase()
+            if (manager == "pnpm") {
+                val output =
+                    commandRunner.run(
+                        npm + listOf("list", "-g", "--depth", "0", "--json"),
+                        cwd = null,
+                        environment = environment,
+                        timeoutSeconds = NETWORK_COMMAND_TIMEOUT_SECONDS,
+                    )
+                parsePnpmGlobalPackagePath(output, source.name)?.let(Path::of)
+            } else {
+                val command =
+                    if (manager == "bun") {
+                        npm + listOf("pm", "bin", "-g")
+                    } else {
+                        npm + listOf("root", "-g")
+                    }
+                val output =
+                    commandRunner.run(
+                        command,
+                        cwd = null,
+                        environment = environment,
+                        timeoutSeconds = NETWORK_COMMAND_TIMEOUT_SECONDS,
+                    )
+                val root =
+                    if (manager == "bun") {
+                        Path.of(output.trim()).parent.resolve("install").resolve("global").resolve("node_modules")
+                    } else {
+                        Path.of(output.trim())
+                    }
+                root.resolve(source.name)
+            }
+        }.getOrNull()
 
     private fun gitInstallPath(
         source: ParsedPackageSource.Git,
@@ -1109,6 +1349,109 @@ internal class PackageManager(
                 ?.content
         }.getOrNull()
 
+    private fun shouldUpdateNpm(
+        source: ParsedPackageSource.Npm,
+        scope: PackageScope,
+    ): Boolean {
+        val installedPath = managedNpmInstallPath(source, scope)
+        val installedVersion = installedNpmVersion(installedPath) ?: return true
+        return runCatching { latestNpmVersion(source) != installedVersion }.getOrDefault(true)
+    }
+
+    private fun npmHasAvailableUpdate(
+        source: ParsedPackageSource.Npm,
+        installedPath: Path,
+    ): Boolean {
+        val installedVersion = installedNpmVersion(installedPath) ?: return false
+        return runCatching { latestNpmVersion(source) != installedVersion }.getOrDefault(false)
+    }
+
+    private fun latestNpmVersion(source: ParsedPackageSource.Npm): String {
+        val npm = npmCommand()
+        val packageSpec = if (source.version == null) source.name else source.spec
+        val output =
+            commandRunner.run(
+                npm + listOf("view", packageSpec, "version", "--json"),
+                cwd = cwd,
+                environment = environment,
+                timeoutSeconds = NETWORK_COMMAND_TIMEOUT_SECONDS,
+            )
+        val parsed = packageJson.parseToJsonElement(output)
+        return when (parsed) {
+            is JsonPrimitive ->
+                parsed.contentOrNull
+                    ?.takeIf(String::isNotBlank)
+                    ?: error("Unexpected response from npm view")
+
+            is JsonArray ->
+                parsed
+                    .mapNotNull { value -> value.jsonPrimitive.contentOrNull?.takeIf(String::isNotBlank) }
+                    .maxWithOrNull(Comparator(::comparePackageVersions))
+                    ?: error("Unexpected response from npm view")
+
+            else -> error("Unexpected response from npm view")
+        }
+    }
+
+    private fun gitHasAvailableUpdate(installedPath: Path): Boolean =
+        runCatching {
+            val local =
+                commandRunner.run(
+                    listOf("git", "rev-parse", "HEAD"),
+                    cwd = installedPath,
+                    environment = environment,
+                    timeoutSeconds = NETWORK_COMMAND_TIMEOUT_SECONDS,
+                )
+            val upstream =
+                commandRunner
+                    .run(
+                        listOf("git", "rev-parse", "--abbrev-ref", "@{upstream}"),
+                        cwd = installedPath,
+                        environment = environment,
+                        timeoutSeconds = NETWORK_COMMAND_TIMEOUT_SECONDS,
+                    ).trim()
+            val remoteRef = upstream.removePrefix("origin/").takeIf(String::isNotBlank) ?: "HEAD"
+            val remote =
+                commandRunner.run(
+                    listOf("git", "ls-remote", "origin", remoteRef),
+                    cwd = installedPath,
+                    environment = environment + ("GIT_TERMINAL_PROMPT" to "0"),
+                    timeoutSeconds = NETWORK_COMMAND_TIMEOUT_SECONDS,
+                )
+            val remoteHead = remote.lineSequence().firstNotNullOfOrNull { line -> GIT_HEAD_PATTERN.find(line)?.groupValues?.get(1) }
+                ?: error("Failed to determine remote HEAD")
+            local.trim() != remoteHead
+        }.getOrDefault(false)
+
+    private fun noMatchingPackageMessage(
+        source: String,
+        configured: List<PackageSourceConfig>,
+    ): String {
+        val trimmed = source.trim()
+        val suggestion =
+            configured
+                .asSequence()
+                .map(PackageSourceConfig::source)
+                .firstOrNull { candidate ->
+                    when (val parsed = parsePackageSource(candidate)) {
+                        is ParsedPackageSource.Npm -> trimmed == parsed.name || trimmed == parsed.spec
+                        is ParsedPackageSource.Git ->
+                            trimmed == "${parsed.host}/${parsed.path}" ||
+                                (
+                                    parsed.ref != null &&
+                                        trimmed == "${parsed.host}/${parsed.path}@${parsed.ref}"
+                                )
+
+                        is ParsedPackageSource.Local -> false
+                    }
+                }
+        return if (suggestion == null) {
+            "No matching package found for $source"
+        } else {
+            "No matching package found for $source. Did you mean $suggestion?"
+        }
+    }
+
     private fun offlineMode(): Boolean =
         environment["PI_OFFLINE"]
             ?.trim()
@@ -1163,6 +1506,11 @@ internal sealed interface ParsedPackageSource {
     ) : ParsedPackageSource
 }
 
+private data class GitUpdateTarget(
+    val ref: String,
+    val fetchArguments: List<String>,
+)
+
 internal interface PackageCommandRunner {
     fun run(
         command: List<String>,
@@ -1179,36 +1527,45 @@ private class ProcessPackageCommandRunner : PackageCommandRunner {
         environment: Map<String, String>,
         timeoutSeconds: Long,
     ): String {
-        require(command.isNotEmpty()) { "Package command cannot be empty" }
-        val process =
-            ProcessBuilder(command)
-                .apply {
-                    if (cwd != null) {
-                        directory(cwd.toFile())
-                    }
-                    environment().putAll(environment)
-                    redirectErrorStream(true)
-                }.start()
-        val outputBytes = ByteArrayOutputStream()
-        val outputThread =
-            Thread {
-                process.inputStream.use { input -> input.copyTo(outputBytes) }
-            }.apply {
-                isDaemon = true
-                start()
-            }
-        if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
-            process.destroyForcibly()
-            outputThread.join(1_000)
-            error("${command.joinToString(" ")} timed out after ${timeoutSeconds}s")
-        }
-        outputThread.join()
-        val output = outputBytes.toString(Charsets.UTF_8)
-        check(process.exitValue() == 0) {
-            "${command.joinToString(" ")} failed with ${process.exitValue()}: ${output.trim()}"
-        }
-        return output.trim()
+        return runPackageProcess(command, cwd, environment, timeoutSeconds)
     }
+}
+
+internal fun runPackageProcess(
+    command: List<String>,
+    cwd: Path?,
+    environment: Map<String, String>,
+    timeoutSeconds: Long,
+): String {
+    require(command.isNotEmpty()) { "Package command cannot be empty" }
+    val process =
+        ProcessBuilder(command)
+            .apply {
+                if (cwd != null) {
+                    directory(cwd.toFile())
+                }
+                environment().putAll(environment)
+                redirectErrorStream(true)
+            }.start()
+    val outputBytes = ByteArrayOutputStream()
+    val outputThread =
+        Thread {
+            process.inputStream.use { input -> input.copyTo(outputBytes) }
+        }.apply {
+            isDaemon = true
+            start()
+        }
+    if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
+        process.destroyForcibly()
+        outputThread.join(1_000)
+        error("${command.joinToString(" ")} timed out after ${timeoutSeconds}s")
+    }
+    outputThread.join()
+    val output = outputBytes.toString(Charsets.UTF_8)
+    check(process.exitValue() == 0) {
+        "${command.joinToString(" ")} failed with ${process.exitValue()}: ${output.trim()}"
+    }
+    return output.trim()
 }
 
 private data class ScopedPackage(
@@ -1869,6 +2226,65 @@ private fun isPattern(value: String): Boolean =
 private fun isOverridePattern(value: String): Boolean =
     value.startsWith("!") || value.startsWith("+") || value.startsWith("-")
 
+private fun parsePnpmGlobalPackagePath(
+    output: String,
+    packageName: String,
+): String? =
+    runCatching {
+        packageJson
+            .parseToJsonElement(output)
+            .jsonArray
+            .firstNotNullOfOrNull { root ->
+                root.jsonObject["dependencies"]
+                    ?.jsonObject
+                    ?.get(packageName)
+                    ?.jsonObject
+                    ?.get("path")
+                    ?.jsonPrimitive
+                    ?.contentOrNull
+            }
+    }.getOrNull()
+
+private fun comparePackageVersions(
+    left: String,
+    right: String,
+): Int {
+    val leftParts = parsePackageVersion(left)
+    val rightParts = parsePackageVersion(right)
+    if (leftParts == null || rightParts == null) {
+        return left.compareTo(right)
+    }
+    for (index in 0..2) {
+        val comparison = leftParts.numbers[index].compareTo(rightParts.numbers[index])
+        if (comparison != 0) {
+            return comparison
+        }
+    }
+    return when {
+        leftParts.preRelease == null && rightParts.preRelease != null -> 1
+        leftParts.preRelease != null && rightParts.preRelease == null -> -1
+        else -> leftParts.preRelease.orEmpty().compareTo(rightParts.preRelease.orEmpty())
+    }
+}
+
+private fun parsePackageVersion(value: String): ParsedPackageVersion? {
+    val match = PACKAGE_VERSION_PATTERN.matchEntire(value.trim()) ?: return null
+    return ParsedPackageVersion(
+        numbers =
+            listOf(
+                match.groupValues[1].toInt(),
+                match.groupValues[2].toInt(),
+                match.groupValues[3].toInt(),
+            ),
+        preRelease = match.groupValues[4].takeIf(String::isNotEmpty),
+    )
+}
+
+private data class ParsedPackageVersion(
+    val numbers: List<Int>,
+    val preRelease: String?,
+)
+
 private val packageJson =
     kotlinx.serialization.json.Json {
         ignoreUnknownKeys = true
@@ -1876,5 +2292,8 @@ private val packageJson =
 
 private val NPM_SPEC_PATTERN = Regex("""^(@?[^@]+(?:/[^@]+)?)(?:@(.+))?$""")
 private val EXACT_NPM_VERSION_PATTERN = Regex("""^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$""")
+private val PACKAGE_VERSION_PATTERN = Regex("""^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$""")
+private val GIT_HEAD_PATTERN = Regex("""^([0-9a-fA-F]{40})\s+""")
 private val PACKAGE_IGNORE_FILES = listOf(".gitignore", ".ignore", ".fdignore")
+private const val NETWORK_COMMAND_TIMEOUT_SECONDS = 10L
 private const val PACKAGE_COMMAND_TIMEOUT_SECONDS = 300L

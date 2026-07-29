@@ -20,6 +20,7 @@ Run the available comparisons from the Kotlin repository:
 ```bash
 ./migration/oracle/compare-anthropic-oauth.sh
 ./migration/oracle/compare-cli-help.sh
+./migration/oracle/compare-cli-package-runtime.sh
 ./migration/oracle/compare-coding-message-projection.sh
 ./migration/oracle/compare-extension-custom-ui.sh
 ./migration/oracle/compare-extension-jiti-compat.sh
@@ -100,6 +101,14 @@ manifests, package filters, enabled/disabled resource state, source metadata,
 project precedence, top-level overrides, configured-package listing, and
 scope-relative settings mutation. It also compares documented npm/git/local
 source parsing and user/project/temporary managed install paths.
+
+The CLI/package runtime comparison launches the installed TypeScript and Kotlin
+CLIs with isolated homes and configuration directories. It compares all package
+subcommand help, exit codes, stdout/stderr for package and model-update parsing
+errors, local package install/list/remove output and settings side effects, and
+an offline native-provider print. Fixed-size PTYs additionally verify masked
+API-key login with owner-only `auth.json` persistence and global config-selector
+resource toggling with identical settings mutations.
 
 The extension-runtime comparison loads the same TypeScript fixture through the
 upstream jiti loader and the Kotlin distribution's Node 22+ JSONL host. It compares

@@ -108,16 +108,16 @@ Last reviewed: July 29, 2026
   - [x] Port Qwen Token Plan reasoning controls
   - [x] Show system prompt file sources in startup Context output
 
-The latest implementation stage closes direct RPC command and event parity
-through `d7b02636`. The installed TypeScript and Kotlin CLIs now produce the
-same normalized transcript for command errors, state/settings, prompts and
-queues, abort/retry lifecycle, bash, extension UI, compaction, session queries
-and branching, and HTML export when driven by the same native provider and
-JSONL command sequence. Server process isolation and restart recovery remain
-covered by their independent oracle. `./gradlew clean test installDist` passes
-with 384 tests, all 28 deterministic migration oracles pass, and installed
-server direct/stream state smoke passes. The full audit remains nonzero on the
-four partial areas listed below.
+The latest implementation stage closes CLI argument/print behavior and package
+management through `d7b02636`. Installed TypeScript and Kotlin CLIs now match
+for package help, parsing errors, local package lifecycle, offline native
+provider print, masked API-key persistence, and config-selector settings
+mutation. Source self-update, legacy global package lookup, available-update
+checks, and git/npm recovery paths are covered by focused tests. Direct RPC
+command/event parity and server process recovery remain covered by their
+independent oracles. `./gradlew clean test installDist` passes with 405 tests
+and all 29 deterministic migration oracles pass. The full audit remains
+nonzero on the two partial areas listed below.
 
 ## Remaining
 
@@ -153,18 +153,18 @@ four partial areas listed below.
 
 ### 2. CLI argument and print modes
 
-- [ ] API-key login workflow
-- [ ] Self-update workflow
-- [ ] Remaining configuration workflows
-- [ ] Implement and verify the parsed flags that still have no runtime effect
+- [x] API-key login workflow
+- [x] Self-update workflow
+- [x] Remaining configuration workflows
+- [x] Implement and verify every parsed flag has a runtime effect
 
 ### 3. Package management
 
-- [ ] Config selector
-- [ ] Self-update integration
-- [ ] Legacy global npm package lookup
-- [ ] Available-update checks
-- [ ] Remaining git/npm recovery and error paths
+- [x] Config selector
+- [x] Self-update integration
+- [x] Legacy global npm package lookup
+- [x] Available-update checks
+- [x] Remaining git/npm recovery and error paths
 
 ### 4. Extension runtime
 
@@ -237,8 +237,35 @@ four partial areas listed below.
 
 ## Next stage
 
-Continue the remaining CLI/configuration, package-management, interactive
-extension, and full-screen terminal gaps as separately audited slices.
+Continue the remaining interactive extension and full-screen terminal gaps as
+separately audited slices.
+
+Evidence for the completed CLI and package-management stage:
+
+- [x] Byte-identical installed help for `install`, `remove`, `update`, `list`,
+      and `config`
+- [x] Matching exit codes and stdout/stderr for package and `update --models`
+      parsing errors
+- [x] Matching local package install/list/remove output and `settings.json`
+      mutations
+- [x] Matching `--offline` native-provider print output
+- [x] Installed TypeScript/Kotlin API-key PTYs persist the same owner-only
+      `auth.json` without leaking the secret into transcripts
+- [x] Installed TypeScript/Kotlin config-selector PTYs toggle the same global
+      resource and persist identical settings
+- [x] Source-checkout self-update with dirty-worktree refusal, upstream
+      fast-forward, already-current handling, and forced reinstall
+- [x] npm/pnpm legacy global lookup, available-update checks, scoped npm
+      batching, targeted suggestions, and upstream-specific git recovery
+- [x] Asynchronous online startup update checks report available packages above
+      the active JLine prompt
+- [x] `./migration/oracle/compare-cli-package-runtime.sh` with zero diff
+- [x] `./gradlew clean test installDist` with 405 tests and no failures,
+      errors, or skips
+- [x] All 29 deterministic migration oracles
+- [x] `./migration/audit-migration.sh sync` through `d7b02636`
+- [x] `./migration/audit-migration.sh full` identifies exactly two remaining
+      partial areas
 
 Evidence for the completed RPC command/event parity stage:
 

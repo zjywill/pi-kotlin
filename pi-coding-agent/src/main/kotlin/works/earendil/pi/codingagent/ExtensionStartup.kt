@@ -21,6 +21,7 @@ internal fun bootstrapExtensions(
     flagValues: Map<String, Any>,
     context: (Boolean) -> JsonObject,
     homeDir: Path = defaultHomeDirectory(),
+    offline: Boolean = false,
     onWarning: (String) -> Unit = {},
     onDiagnostic: (ExtensionDiagnostic) -> Unit = {},
     onLog: (String) -> Unit = {},
@@ -49,6 +50,7 @@ internal fun bootstrapExtensions(
                 agentDir = agentDir,
                 projectTrusted = trusted,
                 homeDir = homeDir,
+                offline = offline,
                 onWarning = onWarning,
             )
         return ExtensionBootstrapResult(
@@ -83,6 +85,7 @@ internal fun bootstrapExtensions(
             agentDir = agentDir,
             projectTrusted = false,
             homeDir = homeDir,
+            offline = offline,
             onWarning = onWarning,
         )
     val preTrustSources =
@@ -125,6 +128,7 @@ internal fun bootstrapExtensions(
                 agentDir = agentDir,
                 projectTrusted = true,
                 homeDir = homeDir,
+                offline = offline,
                 onWarning = onWarning,
             )
         } else {

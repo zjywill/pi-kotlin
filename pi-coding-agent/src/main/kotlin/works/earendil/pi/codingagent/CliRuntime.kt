@@ -113,6 +113,7 @@ class CliRuntime(
                         projectTrusted = trusted,
                         themePaths = args.themes,
                         noThemes = args.noThemes,
+                        offline = args.offline,
                     )
                 }
 
@@ -269,6 +270,7 @@ class CliRuntime(
                     noExtensions = args.noExtensions,
                     mode = ExtensionMode.PRINT,
                     flagValues = args.unknownFlags,
+                    offline = args.offline,
                     context = { trusted ->
                         extensionContextJson(
                             cwd = runtimeCwd,

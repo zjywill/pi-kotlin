@@ -160,6 +160,7 @@ internal fun resolvePackageResources(
     agentDir: Path = defaultAgentDirectory(),
     projectTrusted: Boolean,
     homeDir: Path = defaultHomeDirectory(),
+    offline: Boolean = false,
     onWarning: (String) -> Unit = {},
 ): ResolvedPackageResources {
     val normalizedCwd = cwd.toAbsolutePath().normalize()
@@ -177,6 +178,12 @@ internal fun resolvePackageResources(
         settings = settingsStore,
         projectTrusted = projectTrusted,
         homeDir = homeDir,
+        environment =
+            if (offline) {
+                System.getenv() + ("PI_OFFLINE" to "1")
+            } else {
+                System.getenv()
+            },
     ).resolve()
 }
 
