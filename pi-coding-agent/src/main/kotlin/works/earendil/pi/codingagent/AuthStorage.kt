@@ -13,12 +13,21 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.builtins.MapSerializer
-import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import works.earendil.pi.ai.Credential
 import works.earendil.pi.ai.CredentialInfo
 import works.earendil.pi.ai.CredentialStore
+import works.earendil.pi.ai.OAuthCredential
 import works.earendil.pi.ai.typeName
 
 class JsonFileCredentialStore(
@@ -91,7 +100,10 @@ class JsonFileCredentialStore(
             return emptyMap()
         }
         val content = Files.readString(path, StandardCharsets.UTF_8)
-        return credentialJson.decodeFromString(CREDENTIALS_SERIALIZER, content)
+        return credentialJson
+            .parseToJsonElement(content)
+            .jsonObject
+            .mapValues { (_, value) -> decodeCredential(value) }
     }
 
     private fun writeCredentials(credentials: Map<String, Credential>) {
@@ -100,7 +112,14 @@ class JsonFileCredentialStore(
         try {
             Files.writeString(
                 temporary,
-                credentialJson.encodeToString(CREDENTIALS_SERIALIZER, credentials),
+                credentialJson.encodeToString(
+                    JsonObject.serializer(),
+                    buildJsonObject {
+                        credentials.forEach { (providerId, credential) ->
+                            put(providerId, encodeCredential(credential))
+                        }
+                    },
+                ),
                 StandardCharsets.UTF_8,
                 StandardOpenOption.TRUNCATE_EXISTING,
             )
@@ -121,9 +140,56 @@ class JsonFileCredentialStore(
         }
     }
 
+    private fun decodeCredential(value: JsonElement): Credential {
+        val raw = value.jsonObject
+        if (raw["type"]?.jsonPrimitive?.contentOrNull != "oauth") {
+            return credentialJson.decodeFromJsonElement(Credential.serializer(), raw)
+        }
+        val extensionFields = JsonObject(raw.filterKeys { it !in OAUTH_CREDENTIAL_FIELDS })
+        val normalized =
+            buildJsonObject {
+                raw.forEach { (name, field) ->
+                    if (name in OAUTH_CREDENTIAL_FIELDS) {
+                        put(name, field)
+                    }
+                }
+                put("extra", extensionFields)
+            }
+        return credentialJson.decodeFromJsonElement(Credential.serializer(), normalized)
+    }
+
+    private fun encodeCredential(credential: Credential): JsonObject {
+        val encoded =
+            credentialJson
+                .encodeToJsonElement(Credential.serializer(), credential)
+                .jsonObject
+        if (credential !is OAuthCredential) {
+            return encoded
+        }
+        return buildJsonObject {
+            credential.extra.forEach { (name, value) -> put(name, value) }
+            encoded.forEach { (name, value) ->
+                if (name != "extra") {
+                    put(name, value)
+                }
+            }
+        }
+    }
+
     private companion object {
         val mutexes = ConcurrentHashMap<Path, Mutex>()
-        val CREDENTIALS_SERIALIZER = MapSerializer(String.serializer(), Credential.serializer())
+        val OAUTH_CREDENTIAL_FIELDS =
+            setOf(
+                "type",
+                "access",
+                "refresh",
+                "expires",
+                "scope",
+                "accountId",
+                "enterpriseUrl",
+                "availableModelIds",
+                "gatewayConfig",
+            )
         val credentialJson =
             Json {
                 ignoreUnknownKeys = true

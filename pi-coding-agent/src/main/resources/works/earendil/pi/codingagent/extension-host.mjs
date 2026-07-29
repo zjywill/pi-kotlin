@@ -76,6 +76,56 @@ const PI_AI_SOURCE = String.raw`
 export { Type } from "virtual:pi-typebox";
 export const StringEnum = (values, options = {}) => ({ type: "string", enum: [...values], ...options });
 export const uuidv7 = () => globalThis.crypto.randomUUID();
+export class EventStream {
+	constructor(isComplete, extractResult) {
+		this.queue = [];
+		this.waiting = [];
+		this.done = false;
+		this.isComplete = isComplete;
+		this.extractResult = extractResult;
+		this.finalResultPromise = new Promise(resolve => {
+			this.resolveFinalResult = resolve;
+		});
+	}
+	push(event) {
+		if (this.done) return;
+		if (this.isComplete(event)) {
+			this.done = true;
+			this.resolveFinalResult(this.extractResult(event));
+		}
+		const waiter = this.waiting.shift();
+		if (waiter) waiter({ value: event, done: false });
+		else this.queue.push(event);
+	}
+	end(result) {
+		this.done = true;
+		if (result !== undefined) this.resolveFinalResult(result);
+		for (const waiter of this.waiting.splice(0)) waiter({ value: undefined, done: true });
+	}
+	async *[Symbol.asyncIterator]() {
+		while (true) {
+			if (this.queue.length > 0) yield this.queue.shift();
+			else if (this.done) return;
+			else {
+				const result = await new Promise(resolve => this.waiting.push(resolve));
+				if (result.done) return;
+				yield result.value;
+			}
+		}
+	}
+	result() {
+		return this.finalResultPromise;
+	}
+}
+export class AssistantMessageEventStream extends EventStream {
+	constructor() {
+		super(
+			event => event?.type === "done" || event?.type === "error",
+			event => event.type === "done" ? event.message : event.error,
+		);
+	}
+}
+export const createAssistantMessageEventStream = () => new AssistantMessageEventStream();
 const unsupported = name => (..._args) => { throw new Error(name + " is not available in the pi-kotlin extension host"); };
 export const complete = unsupported("complete");
 export const getModel = unsupported("getModel");
@@ -270,6 +320,9 @@ let currentActions = null;
 let currentProtocolRequestId = null;
 const pendingUiRequests = new Map();
 const activeBashOperations = new Map();
+let providerCallbacks = new Map();
+const activeProviderOperations = new Map();
+const pendingProviderAuthRequests = new Map();
 
 function jsonValue(value) {
 	if (value === undefined) return null;
@@ -280,6 +333,76 @@ function jsonValue(value) {
 			return item;
 		}),
 	);
+}
+
+function providerCallbackCapabilities(config) {
+	const oauth = config?.oauth;
+	return {
+		streamSimple: typeof config?.streamSimple === "function",
+		oauth: oauth && typeof oauth === "object"
+			? {
+					login: typeof oauth.login === "function",
+					refreshToken: typeof oauth.refreshToken === "function",
+					getApiKey: typeof oauth.getApiKey === "function",
+					modifyModels: typeof oauth.modifyModels === "function",
+				}
+			: undefined,
+	};
+}
+
+function hasProviderCallbacks(capabilities) {
+	return capabilities.streamSimple ||
+		Object.values(capabilities.oauth ?? {}).some(Boolean);
+}
+
+function providerRegistrationMetadata(registration) {
+	const config = jsonValue(registration.config) ?? {};
+	if (!registration.native) {
+		const capabilities = providerCallbackCapabilities(registration.config);
+		if (hasProviderCallbacks(capabilities)) {
+			config.__piCallbackToken = registration.callbackToken;
+			config.__piCallbacks = capabilities;
+		}
+	}
+	return {
+		name: registration.name,
+		config,
+		extensionPath: registration.extensionPath,
+	};
+}
+
+function registerProviderConfig(name, config, extensionPath) {
+	const previous = providers.get(name);
+	if (previous?.callbackToken) providerCallbacks.delete(previous.callbackToken);
+	const effective =
+		previous && !previous.native
+			? { ...previous.config, ...config }
+			: config;
+	const callbackToken = randomUUID();
+	const registration = {
+		name,
+		config: effective,
+		extensionPath,
+		callbackToken,
+		native: false,
+	};
+	providers.set(name, registration);
+	providerCallbacks.set(callbackToken, registration);
+	return registration;
+}
+
+function registerNativeProvider(provider, extensionPath) {
+	const previous = providers.get(provider.id);
+	if (previous?.callbackToken) providerCallbacks.delete(previous.callbackToken);
+	const registration = {
+		name: provider.id,
+		config: provider,
+		extensionPath,
+		callbackToken: undefined,
+		native: true,
+	};
+	providers.set(provider.id, registration);
+	return registration;
 }
 
 function action(type, payload = {}) {
@@ -642,13 +765,16 @@ function createAPI(extension) {
 			action("set_thinking_level", { level });
 		},
 		registerProvider(providerOrName, config) {
-			const name = typeof providerOrName === "string" ? providerOrName : providerOrName.id;
-			const value = typeof providerOrName === "string" ? config : providerOrName;
-			providers.set(name, { name, config: jsonValue(value), extensionPath: extension.path });
-			action("register_provider", { name, config: jsonValue(value) });
+			const registration =
+				typeof providerOrName === "string"
+					? registerProviderConfig(providerOrName, config, extension.path)
+					: registerNativeProvider(providerOrName, extension.path);
+			action("register_provider", providerRegistrationMetadata(registration));
 			registrationVersion++;
 		},
 		unregisterProvider(name) {
+			const registration = providers.get(name);
+			if (registration?.callbackToken) providerCallbacks.delete(registration.callbackToken);
 			providers.delete(name);
 			action("unregister_provider", { name });
 			registrationVersion++;
@@ -726,7 +852,7 @@ function registrationMetadata() {
 		})),
 		commands: commandList,
 		flags: [...flags.values()].map(flag => jsonValue(flag)),
-		providers: [...providers.values()].map(provider => jsonValue(provider)),
+		providers: [...providers.values()].map(providerRegistrationMetadata),
 	};
 }
 
@@ -736,6 +862,7 @@ async function loadExtensions(request) {
 	commands = new Map();
 	flags = new Map();
 	providers = new Map();
+	providerCallbacks = new Map();
 	attemptedPaths = new Set();
 	registrationVersion = 0;
 	state.flags = new Map(Object.entries(request.flags ?? {}));
@@ -930,6 +1057,262 @@ async function executeBashOperations(operations, command, cwd, requestId) {
 	}
 }
 
+function providerRegistration(callbackToken) {
+	const registration = providerCallbacks.get(callbackToken);
+	if (!registration) throw new Error(`Unknown extension provider callback: ${callbackToken}`);
+	return registration;
+}
+
+function providerAbortError(message = "Extension provider operation aborted") {
+	const error = new Error(message);
+	error.name = "AbortError";
+	return error;
+}
+
+function awaitProviderOperation(operation, signal) {
+	if (signal.aborted) return Promise.reject(providerAbortError());
+	return new Promise((resolve, reject) => {
+		const onAbort = () => {
+			signal.removeEventListener("abort", onAbort);
+			reject(providerAbortError());
+		};
+		signal.addEventListener("abort", onAbort, { once: true });
+		Promise.resolve(operation).then(
+			value => {
+				signal.removeEventListener("abort", onAbort);
+				resolve(value);
+			},
+			error => {
+				signal.removeEventListener("abort", onAbort);
+				reject(error);
+			},
+		);
+	});
+}
+
+function providerAuthEvent(parentId, event) {
+	protocolWrite(
+		`${JSON.stringify({
+			type: "provider_auth_event",
+			id: parentId,
+			event: jsonValue(event),
+		})}\n`,
+	);
+}
+
+function requestProviderAuthInput(parentId, method, payload, signal, optional = false) {
+	if (signal?.aborted) return Promise.reject(providerAbortError());
+	const requestId = randomUUID();
+	return new Promise((resolve, reject) => {
+		const cleanup = () => {
+			signal?.removeEventListener("abort", onAbort);
+			pendingProviderAuthRequests.delete(requestId);
+		};
+		const onAbort = () => {
+			cleanup();
+			reject(providerAbortError());
+		};
+		signal?.addEventListener("abort", onAbort, { once: true });
+		pendingProviderAuthRequests.set(requestId, {
+			resolve: response => {
+				cleanup();
+				if (response.cancelled) {
+					if (optional) resolve(undefined);
+					else reject(new Error(response.error || "Login cancelled"));
+					return;
+				}
+				resolve(response.value);
+			},
+			cancel: onAbort,
+		});
+		protocolWrite(
+			`${JSON.stringify({
+				type: "provider_auth_request",
+				id: parentId,
+				requestId,
+				method,
+				...jsonValue(payload),
+			})}\n`,
+		);
+	});
+}
+
+function extensionOAuthCallbacks(parentId, signal) {
+	return {
+		onAuth(info) {
+			providerAuthEvent(parentId, { type: "auth_url", ...info });
+		},
+		onDeviceCode(info) {
+			providerAuthEvent(parentId, { type: "device_code", ...info });
+		},
+		onPrompt(prompt) {
+			return requestProviderAuthInput(parentId, "text", prompt, signal);
+		},
+		onProgress(message) {
+			providerAuthEvent(parentId, { type: "progress", message });
+		},
+		onManualCodeInput() {
+			return requestProviderAuthInput(
+				parentId,
+				"manual_code",
+				{ message: "Paste the authorization code" },
+				signal,
+			);
+		},
+		onSelect(prompt) {
+			return requestProviderAuthInput(parentId, "select", prompt, signal, true);
+		},
+		signal,
+	};
+}
+
+async function invokeProviderCallback(request) {
+	const registration = providerRegistration(request.callbackToken);
+	const config = registration.config;
+	const controller = new AbortController();
+	activeProviderOperations.set(request.id, controller);
+	try {
+		switch (request.method) {
+			case "oauth_login":
+				if (typeof config.oauth?.login !== "function") {
+					throw new Error(`Provider ${registration.name} does not define oauth.login`);
+				}
+				return {
+					result: jsonValue(
+						await awaitProviderOperation(
+							config.oauth.login(extensionOAuthCallbacks(request.id, controller.signal)),
+							controller.signal,
+						),
+					),
+				};
+			case "oauth_refresh":
+				if (typeof config.oauth?.refreshToken !== "function") {
+					throw new Error(`Provider ${registration.name} does not define oauth.refreshToken`);
+				}
+				return {
+					result: jsonValue(
+						await awaitProviderOperation(
+							config.oauth.refreshToken(request.arguments?.credential),
+							controller.signal,
+						),
+					),
+				};
+			case "oauth_get_api_key":
+				if (typeof config.oauth?.getApiKey !== "function") {
+					throw new Error(`Provider ${registration.name} does not define oauth.getApiKey`);
+				}
+				return {
+					result: jsonValue(
+						await awaitProviderOperation(
+							config.oauth.getApiKey(request.arguments?.credential),
+							controller.signal,
+						),
+					),
+				};
+			case "oauth_modify_models":
+				if (typeof config.oauth?.modifyModels !== "function") {
+					throw new Error(`Provider ${registration.name} does not define oauth.modifyModels`);
+				}
+				return {
+					result: jsonValue(
+						await awaitProviderOperation(
+							config.oauth.modifyModels(
+								request.arguments?.models ?? [],
+								request.arguments?.credential,
+							),
+							controller.signal,
+						),
+					),
+				};
+			default:
+				throw new Error(`Unknown extension provider callback method: ${request.method}`);
+		}
+	} finally {
+		activeProviderOperations.delete(request.id);
+	}
+}
+
+const PROVIDER_STREAM_ABORTED = Symbol("provider-stream-aborted");
+
+function nextProviderStreamEvent(iterator, signal) {
+	if (signal.aborted) return Promise.resolve(PROVIDER_STREAM_ABORTED);
+	return new Promise((resolve, reject) => {
+		const onAbort = () => {
+			signal.removeEventListener("abort", onAbort);
+			resolve(PROVIDER_STREAM_ABORTED);
+		};
+		signal.addEventListener("abort", onAbort, { once: true });
+		Promise.resolve(iterator.next()).then(
+			value => {
+				signal.removeEventListener("abort", onAbort);
+				resolve(value);
+			},
+			error => {
+				signal.removeEventListener("abort", onAbort);
+				reject(error);
+			},
+		);
+	});
+}
+
+function cancelAllProviderOperations() {
+	for (const operation of activeProviderOperations.values()) operation.abort();
+	for (const pending of [...pendingProviderAuthRequests.values()]) pending.cancel();
+}
+
+async function invokeProviderStream(request) {
+	const registration = providerRegistration(request.callbackToken);
+	const streamSimple = registration.config?.streamSimple;
+	if (typeof streamSimple !== "function") {
+		throw new Error(`Provider ${registration.name} does not define streamSimple`);
+	}
+	const controller = new AbortController();
+	activeProviderOperations.set(request.id, controller);
+	let iterator;
+	let terminal = false;
+	try {
+		const providerStream = await streamSimple(
+			request.model,
+			request.context,
+			{ ...(request.options ?? {}), signal: controller.signal },
+		);
+		if (!providerStream || typeof providerStream[Symbol.asyncIterator] !== "function") {
+			throw new Error(`Provider ${registration.name} streamSimple did not return an async event stream`);
+		}
+		iterator = providerStream[Symbol.asyncIterator]();
+		while (true) {
+			const next = await nextProviderStreamEvent(iterator, controller.signal);
+			if (next === PROVIDER_STREAM_ABORTED || next.done) break;
+			const event = jsonValue(next.value);
+			if (!event || typeof event.type !== "string") {
+				throw new Error(`Provider ${registration.name} emitted an invalid stream event`);
+			}
+			protocolWrite(
+				`${JSON.stringify({
+					type: "provider_stream_event",
+					id: request.id,
+					event,
+				})}\n`,
+			);
+			if (event.type === "done" || event.type === "error") {
+				terminal = true;
+				break;
+			}
+		}
+		return {
+			result: {
+				cancelled: controller.signal.aborted,
+				terminal,
+			},
+		};
+	} finally {
+		if (controller.signal.aborted) {
+			Promise.resolve(iterator?.return?.()).catch(() => {});
+		}
+		activeProviderOperations.delete(request.id);
+	}
+}
+
 async function invokeTool(request) {
 	const registration = [...tools.values()].find(value => value.id === request.toolId);
 	if (!registration) throw new Error(`Unknown extension tool: ${request.toolId}`);
@@ -980,6 +1363,12 @@ async function handle(request) {
 			case "invoke_command":
 				response = await invokeCommand(request);
 				break;
+			case "provider_stream":
+				response = await invokeProviderStream(request);
+				break;
+			case "provider_callback":
+				response = await invokeProviderCallback(request);
+				break;
 			case "registrations":
 				response = { result: registrationMetadata() };
 				break;
@@ -1016,6 +1405,7 @@ let requestQueue = Promise.resolve();
 const inputClosed = new Promise(resolve => {
 	input.once("close", () => {
 		cancelAllUiRequests();
+		cancelAllProviderOperations();
 		resolve();
 	});
 });
@@ -1034,6 +1424,14 @@ input.on("line", line => {
 	}
 	if (request.type === "bash_abort") {
 		activeBashOperations.get(request.id)?.abort();
+		return;
+	}
+	if (request.type === "provider_auth_response") {
+		pendingProviderAuthRequests.get(request.requestId)?.resolve(request);
+		return;
+	}
+	if (request.type === "provider_abort") {
+		activeProviderOperations.get(request.id)?.abort();
 		return;
 	}
 	requestQueue = requestQueue.then(async () => {

@@ -118,7 +118,7 @@ class RpcRuntime(
     private val closing = AtomicBoolean(false)
     private var promptResources: PromptResources? = null
     private var extensionHost: ExtensionHost? = null
-    private val extensionProviders = ExtensionProviderRegistry(models)
+    private val extensionProviders = ExtensionProviderRegistry(models, extensionHost = { extensionHost })
     private var extensionContextProvider: () -> JsonObject = { JsonObject(emptyMap()) }
     private var baseSystemPrompt: String = ""
     private var availableTools: List<AgentTool> = emptyList()
@@ -400,9 +400,9 @@ class RpcRuntime(
                 onActions = { applyExtensionActions(it) },
             )
         }
+        extensionProviders.reset()
         extensionHost?.close()
         extensionHost = null
-        extensionProviders.reset()
         scope.cancel()
     }
 
@@ -934,9 +934,9 @@ class RpcRuntime(
 
     private fun createAgent(): Agent {
         detachAgent()
+        extensionProviders.reset()
         extensionHost?.close()
         extensionHost = null
-        extensionProviders.reset()
         val context = sessionManager.buildSessionContext()
         var thinking =
             (options.thinking ?: parseModelReference(options.provider, options.model).thinking)?.toCoreThinking()
@@ -1254,9 +1254,9 @@ class RpcRuntime(
                 ),
             )
         }
+        extensionProviders.reset()
         host.close()
         extensionHost = null
-        extensionProviders.reset()
     }
 
     private fun applyExtensionActions(actions: List<ExtensionAction>) {

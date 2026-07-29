@@ -79,7 +79,7 @@ features outside that slice remain migration work.
 | CLI argument contract | Partial | Parser tests and byte-for-byte `--help` oracle against the pinned TypeScript CLI; provider-prefixed and slash-containing model IDs, thinking suffixes, package install/remove/update/list, and interactive `/login`/`/logout` for OAuth providers are covered |
 | Context, skill, and prompt resources | Functional slice | Global and ancestor `AGENTS.md`/`CLAUDE.md`, nested linked-worktree context deduplication, `SYSTEM.md`/`APPEND_SYSTEM.md`, recursive `.pi`/`.agents` skills, prompt templates, YAML frontmatter, collisions, manual skill commands, template arguments, trusted project precedence, persisted trust inheritance, CLI/RPC commands, and interactive reload have an independent resource-loading oracle |
 | Package settings and resources | Functional slice | User/project `settings.json`, local/npm/git package identities and managed paths, install/remove/package-update/list commands, package manifests, autoload filters, top-level resource overrides, project precedence, package-sourced skills/prompts, source metadata, and failed new-checkout cleanup have an independent package-resources oracle and package tests; config TUI, self-update, legacy lookup, available-update checks, and remaining recovery paths remain |
-| JavaScript/TypeScript extensions | Partial | A bundled Node 22 JSONL host loads `.js`/`.ts` extensions and common pi/TypeBox virtual imports; tools, commands, flags, package discovery, lifecycle/tool hooks, command actions, project trust, resource composition, serializable provider registration, dynamic registration refresh, live `ctx.scopedModels`, awaited `select`/`confirm`/`input`/`editor` dialogs, RPC and server UI responses, `user_bash` direct results, function-valued `BashOperations`, and fire-and-forget UI events run through CLI/RPC/interactive paths with an independent extension-runtime oracle. Full jiti syntax/import compatibility, function-based custom provider/OAuth callbacks, blocking TUI timeout interruption, shortcuts/renderers, custom UI components, and unsolicited background registration remain |
+| JavaScript/TypeScript extensions | Partial | A bundled Node 22 JSONL host loads `.js`/`.ts` extensions and common pi/TypeBox virtual imports; tools, commands, flags, package discovery, lifecycle/tool hooks, command actions, project trust, resource composition, serializable provider registration, dynamic registration refresh, live `ctx.scopedModels`, awaited `select`/`confirm`/`input`/`editor` dialogs, RPC and server UI responses, `user_bash` direct results, function-valued `BashOperations`, callback-provider `streamSimple`, legacy extension OAuth `login`/`refreshToken`/`getApiKey`/`modifyModels`, cancellation/lifecycle cleanup, and fire-and-forget UI events run through CLI/RPC/interactive paths with an independent extension-runtime oracle. Full jiti syntax/import compatibility, direct native `Provider` registration, native API-key `login`/`check`/`resolve`, function-valued `refreshModels(context.store)`, blocking TUI timeout interruption, shortcuts/renderers, custom UI components, and unsolicited background registration remain |
 | Session JSONL compatibility | Functional slice | Independent TypeScript/Kotlin JSONL parity covers current/v1/v2 parsing, rewrite, migration, branching, compaction, model/thinking state, custom/tool/bash messages, and explicit empty-leaf context |
 | Built-in coding tools | Functional slice | Read, write, edit, bash, grep, find, and ls behavior tests with path and truncation handling |
 | Interactive terminal UI | Partial | Installed JLine process enters a PTY; initial `@text-file`/`@image` prompts, `/help`, session/model/thinking commands, shell commands, and `/exit` are covered; full-screen upstream UI is not ported |
@@ -94,7 +94,7 @@ features outside that slice remain migration work.
 Verified on July 29, 2026 against source commit
 `cced6a21da273b26ee4a23a803680614bbe8dd1e`:
 
-- `./gradlew clean test installDist`: passed, 344 tests, 0 failures, 0 errors,
+- `./gradlew clean test installDist`: passed, 348 tests, 0 failures, 0 errors,
   and 0 skipped.
 - `./migration/oracle/compare-cli-help.sh`: passed with byte-for-byte CLI help
   parity.
@@ -114,8 +114,9 @@ Verified on July 29, 2026 against source commit
   module loading, common virtual imports, tool/command/flag/provider
   registration metadata, tool execution and partial updates, command/UI
   actions, lifecycle hooks, tool-call blocking, tool-result chaining, and
-  resource-discovery event results, awaited dialog answers, and
-  function-valued `user_bash` execution.
+  resource-discovery event results, awaited dialog answers, function-valued
+  `user_bash` execution, callback-provider stream events, and legacy extension
+  OAuth callback behavior.
 - The installed `bin/pi` loaded a TypeScript extension from an installed local
   package, exposed `package-extension-smoke` before package prompt/skill
   commands in RPC `get_commands`, executed the slash command, emitted its
@@ -414,26 +415,43 @@ Verified on July 29, 2026 against source commit
   function-valued `BashOperations` with streaming output, cancellation, and
   streaming UTF-8 decoding across raw chunk boundaries. The extension-runtime
   oracle compares the same dialog and bash fixture against TypeScript.
+- The provider callback bridge returns a Kotlin stream immediately while Node
+  iterates JavaScript events, projects model/context/options into
+  `streamSimple`, and bridges legacy OAuth login, refresh, API-key derivation,
+  and credential-dependent model projection. Caller cancellation, host close,
+  and runtime shutdown abort active provider operations even when extension
+  code ignores `AbortSignal`.
+- Extension OAuth credentials retain arbitrary fields across Node/Kotlin calls
+  and persist them at the top level of `auth.json`, matching the TypeScript
+  credential shape.
+- Focused upstream coding-agent tests passed 94 model-registry,
+  `modifyModels`, and auth-option cases.
+- The installed `pi` distribution loaded the migration fixture and returned
+  `callback:installed-smoke:callback-key:high` through its function-valued
+  provider.
 - The installed `pi` JSONL process loaded the migration fixture, completed
   awaited `select`, `confirm`, `input`, and `editor` requests, streamed both
   `BashOperations` output chunks, returned exit code 7, and exited cleanly
   after stdin EOF.
 - The installed `pi-server` completed `serve`, `spawn`, `status`,
   `get_available_models`, `get_state`, piped `rpc-stream`, and `stop`. The
-  isolated instance exposed 1,110 models, and the stream emitted `rpc_ready`
-  then `response` before a clean half-close.
+  isolated instance loaded the callback extension, exposed 1,112 models
+  including `callback-provider/callback-model`, and emitted `rpc_ready` then
+  `response` before a clean half-close and lifecycle shutdown.
 
 ## Remaining major gaps
 
 - Finish extension parity beyond the migrated Node host: jiti-complete
-  transpilation/imports, function-valued custom provider/OAuth callbacks,
-  interrupting blocking TUI dialogs on timeout/AbortSignal, shortcuts, custom
-  renderers/components, and unsolicited registration updates. Theme
-  parsing/rendering, the package config selector, self-update, and remaining
-  package recovery paths also remain. Core package manifests/filters/settings,
-  skills, prompt templates, persisted trust lookup, extension resource
-  composition, awaited RPC/TUI dialogs, function-valued `user_bash`, and
-  interactive resource reload are migrated.
+  transpilation/imports, direct native `Provider` registration, native
+  API-key `login`/`check`/`resolve`, function-valued
+  `refreshModels(context.store)`, interrupting blocking TUI dialogs on
+  timeout/AbortSignal, shortcuts, custom renderers/components, and unsolicited
+  registration updates. Theme parsing/rendering, the package config selector,
+  self-update, and remaining package recovery paths also remain. Core package
+  manifests/filters/settings, skills, prompt templates, persisted trust
+  lookup, extension resource composition, awaited RPC/TUI dialogs,
+  function-valued `user_bash`, callback-provider streaming, legacy extension
+  OAuth, and interactive resource reload are migrated.
 - Port the full-screen terminal component and rendering model, then compare
   terminal transcripts at multiple widths.
 - Close CLI behavior gaps for options that are parsed or documented but do not

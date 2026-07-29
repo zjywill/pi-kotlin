@@ -256,6 +256,67 @@ try {
 	invalidProviderRejected = true;
 }
 
+const callbackRegistration = runtime.pendingProviderRegistrations.find(value => value.name === "callback-provider");
+if (!callbackRegistration) throw new Error("callback provider was not registered");
+const callbackModelConfig = callbackRegistration.config.models?.[0];
+if (!callbackModelConfig) throw new Error("callback provider model was not registered");
+const callbackModel = {
+	...callbackModelConfig,
+	api: callbackModelConfig.api ?? callbackRegistration.config.api,
+	provider: callbackRegistration.name,
+	baseUrl: callbackModelConfig.baseUrl ?? callbackRegistration.config.baseUrl,
+};
+const callbackStream = callbackRegistration.config.streamSimple?.(
+	callbackModel as never,
+	{
+		messages: [{ role: "user", content: "hello", timestamp: 1 }],
+		tools: [],
+	},
+	{
+		apiKey: "callback-key",
+		reasoning: "high",
+		sessionId: "oracle-session",
+	},
+);
+if (!callbackStream) throw new Error("callback provider streamSimple was not registered");
+const callbackEvents: unknown[] = [];
+for await (const event of callbackStream) callbackEvents.push(event);
+const callbackResult = await callbackStream.result();
+
+const oauth = callbackRegistration.config.oauth;
+if (!oauth) throw new Error("callback provider OAuth was not registered");
+const oauthActions: unknown[] = [];
+const loggedIn = await oauth.login({
+	onAuth(info) {
+		oauthActions.push({ type: "auth_url", ...info });
+	},
+	onDeviceCode(info) {
+		oauthActions.push({ type: "device_code", ...info });
+	},
+	async onPrompt(prompt) {
+		oauthActions.push({ type: "prompt", method: "text", ...prompt });
+		return "alice";
+	},
+	onProgress(message) {
+		oauthActions.push({ type: "progress", message });
+	},
+	async onManualCodeInput() {
+		oauthActions.push({
+			type: "prompt",
+			method: "manual_code",
+			message: "Paste the authorization code",
+		});
+		return "manual";
+	},
+	async onSelect(prompt) {
+		oauthActions.push({ type: "prompt", method: "select", ...prompt });
+		return "team";
+	},
+});
+const refreshed = await oauth.refreshToken(loggedIn);
+const callbackApiKey = oauth.getApiKey(refreshed);
+const modifiedModels = oauth.modifyModels?.([callbackModel as never], refreshed) ?? [callbackModel];
+
 const output = {
 	errors: loaded.errors,
 	registrations: {
@@ -321,6 +382,36 @@ const output = {
 		},
 		invalidProviderRejected,
 		preservedModelId: registeredModel.id,
+	},
+	providerCallbacks: {
+		stream: {
+			eventTypes: callbackEvents.map(event => (event as { type: string }).type),
+			deltas: callbackEvents
+				.filter(event => (event as { type: string }).type === "text_delta")
+				.map(event => (event as { delta: string }).delta),
+			text: callbackResult.content
+				.filter(content => content.type === "text")
+				.map(content => content.text)
+				.join(""),
+			stopReason: callbackResult.stopReason,
+		},
+		oauth: {
+			actions: oauthActions,
+			loggedIn: {
+				access: loggedIn.access,
+				refresh: loggedIn.refresh,
+				expires: loggedIn.expires,
+				tenant: loggedIn.tenant,
+			},
+			refreshed: {
+				access: refreshed.access,
+				refresh: refreshed.refresh,
+				expires: refreshed.expires,
+				tenant: refreshed.tenant,
+			},
+			apiKey: callbackApiKey,
+			modelIds: modifiedModels.map(model => model.id),
+		},
 	},
 };
 

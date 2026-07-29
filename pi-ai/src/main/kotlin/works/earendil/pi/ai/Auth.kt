@@ -32,6 +32,7 @@ data class OAuthCredential(
     val enterpriseUrl: String? = null,
     val availableModelIds: List<String>? = null,
     val gatewayConfig: JsonObject? = null,
+    val extra: JsonObject = JsonObject(emptyMap()),
 ) : Credential
 
 @Serializable

@@ -210,6 +210,107 @@ class CliRuntimeTest {
         }
 
     @Test
+    fun `print mode streams through a function valued extension provider`() =
+        runTest {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                nodeAvailable(),
+                "Node.js 22+ is required for extension runtime tests",
+            )
+            val root = Files.createTempDirectory("pi-kotlin-cli-extension-provider-callback")
+            val extension =
+                root.resolve("callback-provider.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+
+                        export default function(pi) {
+                          pi.registerProvider("callback-provider", {
+                            name: "Callback Provider",
+                            api: "callback-api",
+                            baseUrl: "https://callback.invalid/v1",
+                            apiKey: "callback-key",
+                            models: [{
+                              id: "callback-model",
+                              name: "Callback Model",
+                              reasoning: false,
+                              input: ["text"],
+                              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                              contextWindow: 8192,
+                              maxTokens: 1024,
+                            }],
+                            streamSimple(model, context, options) {
+                              const stream = createAssistantMessageEventStream();
+                              const prompt = context.messages.at(-1)?.content ?? "";
+                              const text = `callback:${'$'}{prompt}:${'$'}{options.apiKey}`;
+                              const usage = {
+                                input: 1,
+                                output: 1,
+                                cacheRead: 0,
+                                cacheWrite: 0,
+                                totalTokens: 2,
+                                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                              };
+                              const partial = {
+                                role: "assistant",
+                                content: [{ type: "text", text }],
+                                api: model.api,
+                                provider: model.provider,
+                                model: model.id,
+                                usage,
+                                stopReason: "pending",
+                                timestamp: 123,
+                              };
+                              stream.push({ type: "start", partial });
+                              stream.push({ type: "text_start", contentIndex: 0, partial });
+                              stream.push({ type: "text_delta", contentIndex: 0, delta: text, partial });
+                              stream.push({ type: "text_end", contentIndex: 0, content: text, partial });
+                              stream.push({
+                                type: "done",
+                                reason: "stop",
+                                message: { ...partial, stopReason: "stop" },
+                              });
+                              return stream;
+                            },
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val stdout = StringWriter()
+            val stderr = StringWriter()
+            val runtime =
+                CliRuntime(
+                    models = Models(),
+                    cwd = root,
+                    agentDir = Files.createDirectories(root.resolve("agent")),
+                    stdout = PrintWriter(stdout, true),
+                    stderr = PrintWriter(stderr, true),
+                )
+
+            val exit =
+                runtime.run(
+                    parseArgs(
+                        listOf(
+                            "--provider",
+                            "callback-provider",
+                            "--model",
+                            "callback-model",
+                            "--no-session",
+                            "--extension",
+                            extension.toString(),
+                            "-p",
+                            "hello",
+                        ),
+                    ),
+                )
+
+            assertEquals(0, exit, stderr.toString())
+            assertEquals("callback:hello:callback-key\n", stdout.toString())
+            assertEquals("", stderr.toString())
+        }
+
+    @Test
     fun `session start registrations refresh print mode tools before the first prompt`() =
         runTest {
             org.junit.jupiter.api.Assumptions.assumeTrue(

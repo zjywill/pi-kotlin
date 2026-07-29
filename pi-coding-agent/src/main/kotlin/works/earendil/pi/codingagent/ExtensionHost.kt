@@ -7,10 +7,12 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonArray
@@ -31,6 +33,10 @@ import works.earendil.pi.agent.AgentTool
 import works.earendil.pi.agent.AgentToolResult
 import works.earendil.pi.agent.AgentToolUpdateCallback
 import works.earendil.pi.agent.ToolExecutionMode
+import works.earendil.pi.ai.AuthEvent
+import works.earendil.pi.ai.AuthInteraction
+import works.earendil.pi.ai.AuthOption
+import works.earendil.pi.ai.AuthPrompt
 import works.earendil.pi.ai.ContentBlock
 import works.earendil.pi.ai.Model
 import works.earendil.pi.ai.Usage
@@ -138,8 +144,11 @@ internal class ExtensionHost private constructor(
     private val requestIds = AtomicLong()
     private val outputLock = Any()
     private val startupActions = mutableListOf<ExtensionAction>()
+    private val activeProviderRequests = ConcurrentHashMap.newKeySet<String>()
     @Volatile
     private var closed = false
+    @Volatile
+    private var closing = false
 
     lateinit var registrations: ExtensionRegistrations
         private set
@@ -187,6 +196,92 @@ internal class ExtensionHost private constructor(
         writePayload(
             buildJsonObject {
                 put("type", "bash_abort")
+                put("id", id)
+            },
+        )
+    }
+
+    fun streamProvider(
+        callbackToken: String,
+        model: JsonObject,
+        context: JsonObject,
+        options: JsonObject,
+        onOperationStart: (String) -> Unit,
+        onEvent: (JsonObject) -> Unit,
+    ): JsonObject {
+        var operationId: String? = null
+        return try {
+            request(
+                buildJsonObject {
+                    put("type", "provider_stream")
+                    put("callbackToken", callbackToken)
+                    put("model", model)
+                    put("context", context)
+                    put("options", options)
+                },
+                onIntermediate = { message ->
+                    if (message.string("type") == "provider_stream_event") {
+                        message["event"]?.jsonObject?.let(onEvent)
+                    }
+                },
+                onRequestId = { id ->
+                    operationId = id
+                    activeProviderRequests += id
+                    onOperationStart(id)
+                    if (closing) {
+                        abortProviderOperation(id)
+                    }
+                },
+            )
+        } finally {
+            operationId?.let(activeProviderRequests::remove)
+        }
+    }
+
+    fun invokeProviderCallback(
+        callbackToken: String,
+        method: String,
+        arguments: JsonObject = JsonObject(emptyMap()),
+        interaction: AuthInteraction? = null,
+        onOperationStart: (String) -> Unit = {},
+    ): JsonElement? {
+        var operationId: String? = null
+        return try {
+            val response =
+                request(
+                    buildJsonObject {
+                        put("type", "provider_callback")
+                        put("callbackToken", callbackToken)
+                        put("method", method)
+                        put("arguments", arguments)
+                    },
+                    onIntermediate = { message ->
+                        if (!handleProviderAuthIntermediate(message, interaction)) {
+                            error("Unexpected extension provider callback message: $message")
+                        }
+                    },
+                    onRequestId = { id ->
+                        operationId = id
+                        activeProviderRequests += id
+                        onOperationStart(id)
+                        if (closing) {
+                            abortProviderOperation(id)
+                        }
+                    },
+                )
+            response["result"]?.takeUnless { it is JsonNull }
+        } finally {
+            operationId?.let(activeProviderRequests::remove)
+        }
+    }
+
+    fun abortProviderOperation(id: String) {
+        if (closed) {
+            return
+        }
+        writePayload(
+            buildJsonObject {
+                put("type", "provider_abort")
                 put("id", id)
             },
         )
@@ -275,6 +370,11 @@ internal class ExtensionHost private constructor(
     }
 
     override fun close() {
+        if (closed) {
+            return
+        }
+        closing = true
+        activeProviderRequests.toList().forEach(::abortProviderOperation)
         synchronized(this) {
             if (closed) {
                 return
@@ -372,6 +472,7 @@ internal class ExtensionHost private constructor(
     private fun request(
         request: JsonObject,
         onIntermediate: (JsonObject) -> Unit = {},
+        onRequestId: (String) -> Unit = {},
     ): JsonObject {
         check(!closed) { "Extension host is closed" }
         val id = requestIds.incrementAndGet().toString()
@@ -381,6 +482,7 @@ internal class ExtensionHost private constructor(
                 put("id", id)
             }
         writePayload(payload)
+        onRequestId(id)
         while (true) {
             val response = readResponse()
             when (response.string("type")) {
@@ -417,6 +519,115 @@ internal class ExtensionHost private constructor(
             }
         }
     }
+
+    private fun handleProviderAuthIntermediate(
+        message: JsonObject,
+        interaction: AuthInteraction?,
+    ): Boolean =
+        when (message.string("type")) {
+            "provider_auth_event" -> {
+                val event = message["event"]?.jsonObject
+                    ?: error("Extension provider auth event is missing event")
+                requireNotNull(interaction) {
+                    "Extension provider emitted an auth event outside login"
+                }.notify(
+                    when (event.string("type")) {
+                        "auth_url" ->
+                            AuthEvent.AuthUrl(
+                                url = requireNotNull(event.string("url")),
+                                instructions = event.string("instructions"),
+                            )
+
+                        "device_code" ->
+                            AuthEvent.DeviceCode(
+                                userCode = requireNotNull(event.string("userCode")),
+                                verificationUri = requireNotNull(event.string("verificationUri")),
+                                intervalSeconds =
+                                    event["intervalSeconds"]
+                                        ?.jsonPrimitive
+                                        ?.contentOrNull
+                                        ?.toDoubleOrNull(),
+                                expiresInSeconds =
+                                    event["expiresInSeconds"]
+                                        ?.jsonPrimitive
+                                        ?.contentOrNull
+                                        ?.toIntOrNull(),
+                            )
+
+                        "progress" ->
+                            AuthEvent.Progress(
+                                message = requireNotNull(event.string("message")),
+                            )
+
+                        "info" ->
+                            AuthEvent.Info(
+                                message = requireNotNull(event.string("message")),
+                            )
+
+                        else -> error("Unknown extension provider auth event: $event")
+                    },
+                )
+                true
+            }
+
+            "provider_auth_request" -> {
+                val requestId = message.string("requestId")
+                    ?: error("Extension provider auth request is missing requestId")
+                val authInteraction =
+                    requireNotNull(interaction) {
+                        "Extension provider requested auth input outside login"
+                    }
+                val prompt =
+                    when (message.string("method")) {
+                        "text" ->
+                            AuthPrompt.Text(
+                                message = requireNotNull(message.string("message")),
+                                placeholder = message.string("placeholder"),
+                            )
+
+                        "manual_code" ->
+                            AuthPrompt.ManualCode(
+                                message = message.string("message") ?: "Paste the authorization code",
+                                placeholder = message.string("placeholder"),
+                            )
+
+                        "select" ->
+                            AuthPrompt.Select(
+                                message = requireNotNull(message.string("message")),
+                                options =
+                                    message["options"]
+                                        ?.jsonArray
+                                        .orEmpty()
+                                        .map { option ->
+                                            val value = option.jsonObject
+                                            AuthOption(
+                                                id = requireNotNull(value.string("id")),
+                                                label = requireNotNull(value.string("label")),
+                                                description = value.string("description"),
+                                            )
+                                        },
+                            )
+
+                        else -> error("Unknown extension provider auth request: $message")
+                    }
+                val answer = runCatching { runBlocking { authInteraction.prompt(prompt) } }
+                writePayload(
+                    buildJsonObject {
+                        put("type", "provider_auth_response")
+                        put("requestId", requestId)
+                        answer
+                            .onSuccess { put("value", it) }
+                            .onFailure {
+                                put("cancelled", true)
+                                put("error", it.message ?: "Login cancelled")
+                            }
+                    },
+                )
+                true
+            }
+
+            else -> false
+        }
 
     private fun writePayload(payload: JsonObject) {
         synchronized(outputLock) {

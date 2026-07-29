@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function extensionRuntimeFixture(pi: ExtensionAPI) {
@@ -24,6 +25,108 @@ export default function extensionRuntimeFixture(pi: ExtensionAPI) {
 				maxTokens: 1024,
 			},
 		],
+	});
+
+	const callbackModel = {
+		id: "callback-model",
+		name: "Callback Model",
+		reasoning: true,
+		input: ["text"] as const,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 8192,
+		maxTokens: 1024,
+	};
+	pi.registerProvider("callback-provider", {
+		name: "Callback Provider",
+		baseUrl: "https://callback.invalid/v1",
+		apiKey: "callback-key",
+		api: "callback-api",
+		models: [callbackModel],
+		streamSimple(model, context, options) {
+			const stream = createAssistantMessageEventStream();
+			const prompt = context.messages.at(-1)?.content ?? "";
+			const text = `callback:${prompt}:${options?.apiKey}:${options?.reasoning}`;
+			const usage = {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			};
+			const partial = {
+				role: "assistant" as const,
+				content: [{ type: "text" as const, text }],
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				usage,
+				stopReason: "pending" as const,
+				timestamp: 123,
+			};
+			stream.push({ type: "start", partial });
+			stream.push({ type: "text_start", contentIndex: 0, partial });
+			stream.push({ type: "text_delta", contentIndex: 0, delta: text, partial });
+			stream.push({ type: "text_end", contentIndex: 0, content: text, partial });
+			stream.push({
+				type: "done",
+				reason: "stop",
+				message: { ...partial, stopReason: "stop" },
+			});
+			return stream;
+		},
+		oauth: {
+			name: "Callback Subscription",
+			async login(callbacks) {
+				callbacks.onAuth({
+					url: "https://auth.invalid/start",
+					instructions: "Open the browser",
+				});
+				callbacks.onDeviceCode({
+					userCode: "ABCD",
+					verificationUri: "https://auth.invalid/device",
+					intervalSeconds: 2,
+					expiresInSeconds: 60,
+				});
+				callbacks.onProgress?.("Waiting");
+				const account = await callbacks.onPrompt({ message: "Account", placeholder: "name" });
+				const code = await callbacks.onManualCodeInput?.();
+				const tenant = await callbacks.onSelect({
+					message: "Workspace",
+					options: [
+						{ id: "team", label: "Team" },
+						{ id: "personal", label: "Personal" },
+					],
+				});
+				return {
+					access: `${account}-${code}`,
+					refresh: "refresh-1",
+					expires: 0,
+					tenant,
+				};
+			},
+			async refreshToken(credentials) {
+				return {
+					...credentials,
+					access: `${credentials.access}-refreshed`,
+					refresh: "refresh-2",
+					expires: 1000000,
+				};
+			},
+			getApiKey(credentials) {
+				return `${credentials.access}:${credentials.tenant}`;
+			},
+			modifyModels(models, credentials) {
+				return [
+					...models,
+					{
+						...callbackModel,
+						id: `tenant-${credentials.tenant}`,
+						name: `Tenant ${credentials.tenant}`,
+					},
+				];
+			},
+		},
 	});
 
 	pi.registerTool(

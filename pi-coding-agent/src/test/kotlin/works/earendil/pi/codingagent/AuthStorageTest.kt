@@ -6,7 +6,10 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import works.earendil.pi.ai.ApiKeyCredential
 import works.earendil.pi.ai.OAuthCredential
@@ -38,6 +41,16 @@ class AuthStorageTest {
                             buildJsonObject {
                                 put("baseUrl", "https://radius.example/v1")
                             },
+                        extra =
+                            buildJsonObject {
+                                put("tenant", "team")
+                                put(
+                                    "env",
+                                    buildJsonObject {
+                                        put("TENANT_HEADER", "credential-header")
+                                    },
+                                )
+                            },
                     )
 
                 store.modify("openai-codex") { credential }
@@ -49,6 +62,25 @@ class AuthStorageTest {
                 assertTrue(path.readText().contains("\"availableModelIds\""))
                 assertTrue(path.readText().contains("\"scope\": \"openid profile\""))
                 assertTrue(path.readText().contains("\"gatewayConfig\""))
+                assertTrue(path.readText().contains("\"tenant\": \"team\""))
+                assertTrue(path.readText().contains("\"TENANT_HEADER\": \"credential-header\""))
+                val stored =
+                    Json
+                        .parseToJsonElement(path.readText())
+                        .jsonObject
+                        .getValue("openai-codex")
+                        .jsonObject
+                assertFalse("extra" in stored)
+                assertEquals("team", stored.getValue("tenant").jsonPrimitive.content)
+                assertEquals(
+                    "credential-header",
+                    stored
+                        .getValue("env")
+                        .jsonObject
+                        .getValue("TENANT_HEADER")
+                        .jsonPrimitive
+                        .content,
+                )
                 runCatching {
                     assertEquals(
                         setOf(
@@ -58,6 +90,67 @@ class AuthStorageTest {
                         Files.getPosixFilePermissions(path),
                     )
                 }
+            } finally {
+                directory.toFile().deleteRecursively()
+            }
+        }
+
+    @Test
+    fun `reads and rewrites TypeScript OAuth extension fields at the top level`() =
+        runTest {
+            val directory = Files.createTempDirectory("pi-kotlin-auth-extension-fields")
+            try {
+                val path = directory.resolve("auth.json")
+                Files.writeString(
+                    path,
+                    """
+                    {
+                      "extension-oauth": {
+                        "type": "oauth",
+                        "access": "access-token",
+                        "refresh": "refresh-token",
+                        "expires": 123456,
+                        "tenant": "team",
+                        "env": { "TENANT_HEADER": "credential-header" },
+                        "extra": "extension-owned-value"
+                      }
+                    }
+                    """.trimIndent(),
+                )
+                val store = JsonFileCredentialStore(path)
+
+                val credential = store.read("extension-oauth") as OAuthCredential
+                assertEquals("team", credential.extra.getValue("tenant").jsonPrimitive.content)
+                assertEquals(
+                    "credential-header",
+                    credential.extra
+                        .getValue("env")
+                        .jsonObject
+                        .getValue("TENANT_HEADER")
+                        .jsonPrimitive
+                        .content,
+                )
+                assertEquals(
+                    "extension-owned-value",
+                    credential.extra.getValue("extra").jsonPrimitive.content,
+                )
+
+                store.modify("extension-oauth") {
+                    credential.copy(access = "updated-access")
+                }
+
+                val rewritten =
+                    Json
+                        .parseToJsonElement(path.readText())
+                        .jsonObject
+                        .getValue("extension-oauth")
+                        .jsonObject
+                assertEquals("updated-access", rewritten.getValue("access").jsonPrimitive.content)
+                assertEquals("team", rewritten.getValue("tenant").jsonPrimitive.content)
+                assertEquals(
+                    "extension-owned-value",
+                    rewritten.getValue("extra").jsonPrimitive.content,
+                )
             } finally {
                 directory.toFile().deleteRecursively()
             }

@@ -89,10 +89,10 @@ class CliRuntime(
                 allowedTools = args.tools,
                 excludedTools = args.excludeTools,
             )
-        val providerRegistry = ExtensionProviderRegistry(models)
         var agentRef: Agent? = null
         var selectedTools: List<AgentTool> = initialBuiltInTools
         var extensionHost: ExtensionHost? = null
+        val providerRegistry = ExtensionProviderRegistry(models, extensionHost = { extensionHost })
         var promptResourcesRef: PromptResources? = null
         var baseSystemPrompt = ""
         var refreshExtensionRegistrations: () -> Unit = {}
@@ -294,8 +294,8 @@ class CliRuntime(
             resolveModel(args, initialContext.model, scopedModels)
                 ?: run {
                     stderr.println("Error: No model matched the requested provider/model.")
-                    extensionHost?.close()
                     providerRegistry.reset()
+                    extensionHost?.close()
                     return 1
                 }
         modelRef = model
@@ -544,8 +544,8 @@ class CliRuntime(
                     onActions = ::applyExtensionActions,
                 )
             }
-            extensionHost?.close()
             providerRegistry.reset()
+            extensionHost?.close()
         }
     }
 

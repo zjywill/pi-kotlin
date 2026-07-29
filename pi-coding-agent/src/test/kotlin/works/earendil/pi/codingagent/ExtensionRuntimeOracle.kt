@@ -2,6 +2,8 @@ package works.earendil.pi.codingagent
 
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -14,9 +16,24 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import works.earendil.pi.ai.Model
+import works.earendil.pi.ai.AuthEvent
+import works.earendil.pi.ai.AuthInteraction
+import works.earendil.pi.ai.AuthPrompt
+import works.earendil.pi.ai.AuthType
+import works.earendil.pi.ai.Context
+import works.earendil.pi.ai.InMemoryCredentialStore
 import works.earendil.pi.ai.Models
+import works.earendil.pi.ai.ModelsRefreshOptions
+import works.earendil.pi.ai.OAuthCredential
+import works.earendil.pi.ai.SimpleStreamOptions
+import works.earendil.pi.ai.StreamOptions
+import works.earendil.pi.ai.TextDelta
+import works.earendil.pi.ai.ThinkingLevel
+import works.earendil.pi.ai.UserMessage
+import works.earendil.pi.ai.contentText
 
-fun main(args: Array<String>) {
+fun main(args: Array<String>) =
+    runBlocking {
     val fixture =
         Path
             .of(args.firstOrNull() ?: "migration/fixtures/extension-runtime/basic.ts")
@@ -71,6 +88,14 @@ fun main(args: Array<String>) {
                 },
             ),
         )
+    val credentials = InMemoryCredentialStore()
+    val models =
+        Models(
+            providers = emptyList(),
+            credentials = credentials,
+            currentTimeMillis = { 1_000 },
+        )
+    val providerRegistry = ExtensionProviderRegistry(models, extensionHost = { host })
     try {
         val registration = host.registrations
         val toolRegistration = registration.tools.single { it.name == "extension_echo" }
@@ -201,11 +226,13 @@ fun main(args: Array<String>) {
                 projectTrusted = true,
                 resolvedPackageResources = discoveredResources,
             )
-        val models = Models()
-        val providerRegistry = ExtensionProviderRegistry(models)
         providerRegistry.apply(registration.providers) { error(it) }
         val registeredModel = checkNotNull(models.getModel("fixture-provider", "fixture-model"))
-        val providerConfig = registration.providers.single().getValue("config").jsonObject
+        val providerConfig =
+            registration.providers
+                .single { it.getValue("name").jsonPrimitive.content == "fixture-provider" }
+                .getValue("config")
+                .jsonObject
         val originalModel = providerConfig.getValue("models").jsonArray.single().jsonObject
         val invalidConfig =
             buildJsonObject {
@@ -220,6 +247,115 @@ fun main(args: Array<String>) {
             }
         val invalidProviderRejected =
             runCatching { providerRegistry.register("fixture-provider", invalidConfig) }.isFailure
+        val callbackModel = checkNotNull(models.getModel("callback-provider", "callback-model"))
+        val callbackStream =
+            models.streamSimple(
+                callbackModel,
+                Context(messages = mutableListOf(UserMessage("hello", timestamp = 1))),
+                SimpleStreamOptions(
+                    stream =
+                        StreamOptions(
+                            apiKey = "callback-key",
+                            sessionId = "oracle-session",
+                        ),
+                    reasoning = ThinkingLevel.HIGH,
+                ),
+            )
+        val callbackEvents = callbackStream.events.toList()
+        val callbackResult = callbackStream.result()
+        val oauthActions = mutableListOf<JsonObject>()
+        val loggedIn =
+            models.login(
+                "callback-provider",
+                AuthType.OAUTH,
+                object : AuthInteraction {
+                    override suspend fun prompt(prompt: AuthPrompt): String {
+                        oauthActions +=
+                            buildJsonObject {
+                                put("type", "prompt")
+                                when (prompt) {
+                                    is AuthPrompt.Text -> {
+                                        put("method", "text")
+                                        put("message", prompt.message)
+                                        prompt.placeholder?.let { put("placeholder", it) }
+                                    }
+
+                                    is AuthPrompt.ManualCode -> {
+                                        put("method", "manual_code")
+                                        put("message", prompt.message)
+                                        prompt.placeholder?.let { put("placeholder", it) }
+                                    }
+
+                                    is AuthPrompt.Select -> {
+                                        put("method", "select")
+                                        put("message", prompt.message)
+                                        put(
+                                            "options",
+                                            JsonArray(
+                                                prompt.options.map { option ->
+                                                    buildJsonObject {
+                                                        put("id", option.id)
+                                                        put("label", option.label)
+                                                    }
+                                                },
+                                            ),
+                                        )
+                                    }
+                                }
+                            }
+                        return when (prompt) {
+                            is AuthPrompt.Text -> "alice"
+                            is AuthPrompt.ManualCode -> "manual"
+                            is AuthPrompt.Select -> "team"
+                        }
+                    }
+
+                    override fun notify(event: AuthEvent) {
+                        oauthActions +=
+                            buildJsonObject {
+                                when (event) {
+                                    is AuthEvent.AuthUrl -> {
+                                        put("type", "auth_url")
+                                        put("url", event.url)
+                                        event.instructions?.let { put("instructions", it) }
+                                    }
+
+                                    is AuthEvent.DeviceCode -> {
+                                        put("type", "device_code")
+                                        put("userCode", event.userCode)
+                                        put("verificationUri", event.verificationUri)
+                                        event.intervalSeconds?.let { interval ->
+                                            if (interval % 1.0 == 0.0) {
+                                                put("intervalSeconds", interval.toInt())
+                                            } else {
+                                                put("intervalSeconds", interval)
+                                            }
+                                        }
+                                        event.expiresInSeconds?.let { put("expiresInSeconds", it) }
+                                    }
+
+                                    is AuthEvent.Progress -> {
+                                        put("type", "progress")
+                                        put("message", event.message)
+                                    }
+
+                                    is AuthEvent.Info -> {
+                                        put("type", "info")
+                                        put("message", event.message)
+                                    }
+                                }
+                            }
+                    }
+                },
+            ) as OAuthCredential
+        val callbackAuth = checkNotNull(models.getAuth("callback-provider"))
+        val refreshed = checkNotNull(credentials.read("callback-provider")) as OAuthCredential
+        val callbackRefresh = models.refresh(ModelsRefreshOptions(allowNetwork = false))
+        check(callbackRefresh.errors.isEmpty())
+        val callbackModelIds =
+            models
+                .getModels("callback-provider")
+                .map(Model::id)
 
         val output =
             buildJsonObject {
@@ -294,7 +430,15 @@ fun main(args: Array<String>) {
                                 registration.providers.map { provider ->
                                     buildJsonObject {
                                         put("name", provider.getValue("name"))
-                                        put("config", provider.getValue("config"))
+                                        put(
+                                            "config",
+                                            JsonObject(
+                                                provider
+                                                    .getValue("config")
+                                                    .jsonObject
+                                                    .filterKeys { !it.startsWith("__pi") },
+                                            ),
+                                        )
                                     }
                                 },
                             ),
@@ -387,13 +531,74 @@ fun main(args: Array<String>) {
                         put("preservedModelId", registeredModel.id)
                     },
                 )
+                put(
+                    "providerCallbacks",
+                    buildJsonObject {
+                        put(
+                            "stream",
+                            buildJsonObject {
+                                put(
+                                    "eventTypes",
+                                    JsonArray(
+                                        callbackEvents.map { event ->
+                                            protocolJson
+                                                .encodeToJsonElement(
+                                                    works.earendil.pi.ai.AssistantMessageEvent.serializer(),
+                                                    event,
+                                                ).jsonObject
+                                                .getValue("type")
+                                        },
+                                    ),
+                                )
+                                put(
+                                    "deltas",
+                                    JsonArray(
+                                        callbackEvents
+                                            .filterIsInstance<TextDelta>()
+                                            .map { JsonPrimitive(it.delta) },
+                                    ),
+                                )
+                                put("text", contentText(callbackResult.content))
+                                put(
+                                    "stopReason",
+                                    protocolJson.encodeToJsonElement(
+                                        works.earendil.pi.ai.StopReason.serializer(),
+                                        callbackResult.stopReason,
+                                    ),
+                                )
+                            },
+                        )
+                        put(
+                            "oauth",
+                            buildJsonObject {
+                                put("actions", JsonArray(oauthActions))
+                                put("loggedIn", oracleCredential(loggedIn))
+                                put("refreshed", oracleCredential(refreshed))
+                                put("apiKey", requireNotNull(callbackAuth.auth.apiKey))
+                                put(
+                                    "modelIds",
+                                    JsonArray(callbackModelIds.map(::JsonPrimitive)),
+                                )
+                            },
+                        )
+                    },
+                )
             }
         println(protocolJson.encodeToString(JsonObject.serializer(), output))
     } finally {
+        providerRegistry.reset()
         host.close()
         root.toFile().deleteRecursively()
     }
 }
+
+private fun oracleCredential(credential: OAuthCredential): JsonObject =
+    buildJsonObject {
+        put("access", credential.access)
+        put("refresh", credential.refresh)
+        put("expires", credential.expires)
+        credential.extra["tenant"]?.let { put("tenant", it) }
+    }
 
 private fun providerModelJson(model: Model): JsonObject =
     buildJsonObject {

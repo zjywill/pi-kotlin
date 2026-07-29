@@ -56,6 +56,10 @@ Last reviewed: July 29, 2026
   - [x] Live `ctx.scopedModels` in print, RPC, and TUI contexts
   - [x] Awaited `select`, `confirm`, `input`, and `editor` dialogs in TUI and RPC
   - [x] Function-valued `user_bash` `BashOperations` with streaming and cancellation
+  - [x] Function-valued provider `streamSimple` with live event forwarding
+  - [x] Legacy extension OAuth `login`, `refreshToken`, `getApiKey`, and `modifyModels`
+  - [x] Arbitrary top-level extension OAuth credential fields
+  - [x] Provider cancellation and extension-host lifecycle cleanup
 - [x] Upstream coding-agent synchronization through `cced6a21`
   - [x] Preserve package and extension metadata across resource reloads
   - [x] Route RPC `user_bash` through extension direct-result interception
@@ -65,17 +69,18 @@ Last reviewed: July 29, 2026
   - [x] Avoid duplicate context files in nested linked worktrees
   - [x] Accept nullable array schemas with `items`
 
-The latest implementation stage added a bidirectional Node/Kotlin extension
-protocol for awaited dialogs and function-valued `BashOperations`. RPC JSONL
-and server streams can receive `extension_ui_response` while the originating
-command is blocked; EOF and shutdown cancel pending requests. The extension
-oracle now compares dialog answers and custom bash execution against
-TypeScript. The source synchronization also covers nested-worktree context
-deduplication and TypeBox nullable arrays through `cced6a21`. `./gradlew clean
-test installDist` passes with 344 tests, and all 17 deterministic migration
-oracles pass. Installed CLI dialog/BashOperations and server lifecycle smokes
-also pass. The sync audit reaches `cced6a21`; the full audit remains nonzero on
-the seven partial areas listed below.
+The latest implementation stage added a Node/Kotlin callback protocol for
+function-valued custom-provider streams and legacy extension OAuth. Kotlin
+returns streams immediately while Node forwards live events; model, context,
+stream options, auth interaction, refreshed credentials, derived API keys, and
+credential-based model projection cross the bridge. Cancellation and
+host/runtime shutdown release callbacks even when extension code ignores
+`AbortSignal`, and arbitrary OAuth fields retain the TypeScript top-level
+`auth.json` shape. `./gradlew clean test installDist` passes with 348 tests,
+all 17 deterministic migration oracles pass, and 94 focused upstream provider
+tests pass. Installed CLI and server smokes exercise the callback provider from
+the distributions. The sync audit reaches `cced6a21`; the full audit remains
+nonzero on the seven partial areas listed below.
 
 ## Remaining
 
@@ -138,7 +143,9 @@ the seven partial areas listed below.
 - [ ] Interrupt a blocking TUI dialog when its extension timeout or
       `AbortSignal` fires
 - [ ] jiti-complete TypeScript transpilation and module-loading compatibility
-- [ ] Function-based custom provider streaming and OAuth callbacks
+- [ ] Direct registration of a complete native `Provider`
+- [ ] Native provider API-key `login`, `check`, and `resolve` callbacks
+- [ ] Function-valued `refreshModels(context.store)`
 - [ ] Extension shortcuts
 - [ ] Message and session-entry renderers
 - [ ] Unsolicited background registration updates
@@ -173,27 +180,24 @@ the seven partial areas listed below.
 
 ## Next stage
 
-Use the bidirectional extension protocol for function-based custom provider
-streaming and OAuth callbacks. The next coherent slice should carry provider
-request/stream callbacks, auth methods, cancellation, timeout, and lifecycle
-cleanup without serializing JavaScript functions.
+Complete the remaining provider function surface: direct native `Provider`
+registration, native API-key auth callbacks, and
+`refreshModels(context.store)`. Keep full jiti compatibility and extension UI
+features as separately audited gaps unless that slice requires them.
 
-Required evidence for the completed dialog and BashOperations stage:
+Required evidence for the completed provider callback stage:
 
-- [x] Host-level correlated dialog response and timeout tests
-- [x] RPC, JSONL, TUI, and server-stream dialog tests
-- [x] Function-valued BashOperations streaming and cancellation tests
-- [x] UTF-8 BashOperations streaming across raw chunk boundaries
-- [x] JSONL EOF and runtime shutdown cancellation tests
-- [x] Nested linked-worktree context regression test
-- [x] Nullable array validation tests in Kotlin and the virtual TypeBox host
+- [x] Live callback stream ordering, terminal events, context, and options
+- [x] Caller cancellation, ignored `AbortSignal`, host close, and runtime cleanup
+- [x] OAuth interaction, refresh, API-key derivation, and model projection
+- [x] Flat arbitrary OAuth field persistence and TypeScript auth-file reads
 - [x] Updated extension-runtime TypeScript/Kotlin oracle
-- [x] `./gradlew clean test installDist` with 344 tests and no failures,
+- [x] 94 focused upstream provider registry, auth, and `modifyModels` tests
+- [x] `./gradlew clean test installDist` with 348 tests and no failures,
       errors, or skips
 - [x] All 17 deterministic migration oracles
-- [x] Focused source tests for resource loading, validation, and terminal images
-- [x] Installed `pi` JSONL dialog and BashOperations smoke
-- [x] Installed `pi-server` lifecycle and piped stream smoke
+- [x] Installed `pi` callback-provider stream smoke
+- [x] Installed `pi-server` callback registration, RPC stream, and lifecycle smoke
 - [x] `./migration/audit-migration.sh sync` through `cced6a21`
 - [x] `./migration/audit-migration.sh full` confirms exactly seven remaining
       partial areas
