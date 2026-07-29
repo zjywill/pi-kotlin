@@ -3,36 +3,46 @@ package works.earendil.pi.server
 import java.nio.file.Path
 import java.time.Instant
 import java.util.UUID
-import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import works.earendil.pi.codingagent.RpcRuntime
-import works.earendil.pi.codingagent.RpcRuntimeOptions
-import works.earendil.pi.codingagent.loadBuiltInModels
 
-fun interface RpcRuntimeFactory {
-    suspend fun create(
-        cwd: Path,
-        provider: String?,
-        model: String?,
-    ): RpcRuntime
-}
-
-class ServerSupervisor(
+class ServerSupervisor internal constructor(
     private val storage: ServerStorage,
-    private val runtimeFactory: RpcRuntimeFactory = defaultRuntimeFactory(),
+    private val processFactory: RpcProcessFactory,
 ) {
     private data class LiveInstance(
         var record: InstanceRecord,
-        val runtime: RpcRuntime,
+        val process: RpcProcess,
         val subscribers: CopyOnWriteArrayList<(JsonObject) -> Unit> = CopyOnWriteArrayList(),
-        val unsubscribe: () -> Unit,
+        var unsubscribeEvents: (() -> Unit)? = null,
+        var unsubscribeExit: (() -> Unit)? = null,
     )
 
     private val liveInstances = ConcurrentHashMap<String, LiveInstance>()
+
+    constructor(storage: ServerStorage) : this(
+        storage,
+        RpcProcessFactory { cwd, provider, model ->
+            ChildRpcProcess(
+                cwd = cwd,
+                provider = provider,
+                model = model,
+            )
+        },
+    )
+
+    constructor(
+        storage: ServerStorage,
+        runtimeFactory: RpcRuntimeFactory,
+    ) : this(
+        storage,
+        RpcProcessFactory { cwd, provider, model ->
+            InProcessRpcProcess(runtimeFactory.create(cwd, provider, model))
+        },
+    )
 
     suspend fun recoverAfterRestart() {
         val now = Instant.now().toString()
@@ -59,7 +69,7 @@ class ServerSupervisor(
     ): InstanceRecord {
         val now = Instant.now().toString()
         val id = UUID.randomUUID().toString()
-        var record =
+        val record =
             InstanceRecord(
                 id = id,
                 status = InstanceStatus.STARTING,
@@ -69,28 +79,35 @@ class ServerSupervisor(
                 label = label,
             )
         storage.upsertInstance(record)
-        val runtime =
+        val process =
             try {
-                runtimeFactory.create(cwd.toAbsolutePath().normalize(), provider, model)
-            } catch (error: Exception) {
-                storage.upsertInstance(record.copy(status = InstanceStatus.ERROR, lastSeenAt = Instant.now().toString()))
+                processFactory.create(cwd.toAbsolutePath().normalize(), provider, model)
+            } catch (error: Throwable) {
+                val failedAt = Instant.now().toString()
+                storage.upsertInstance(
+                    record.copy(
+                        status = InstanceStatus.ERROR,
+                        lastSeenAt = failedAt,
+                    ),
+                )
+                storage.upsertInstance(
+                    record.copy(
+                        status = InstanceStatus.STOPPED,
+                        lastSeenAt = Instant.now().toString(),
+                    ),
+                )
                 throw error
             }
-        val liveReference = AtomicReference<LiveInstance?>()
-        val unsubscribe =
-            runtime.subscribe { event ->
-                liveReference.get()?.let { live ->
-                    live.subscribers.forEach { subscriber -> subscriber(event) }
-                }
-            }
-        val live = LiveInstance(record, runtime, unsubscribe = unsubscribe)
-        liveReference.set(live)
+        val live = LiveInstance(record, process)
         liveInstances[id] = live
-        syncSessionMetadata(live)
-        record = live.record.copy(status = InstanceStatus.ONLINE, lastSeenAt = Instant.now().toString())
-        live.record = record
-        storage.upsertInstance(record)
-        return record.copy()
+        bindProcess(live)
+        return try {
+            syncSessionMetadata(live)
+            update(live, status = InstanceStatus.ONLINE)
+            live.record.copy()
+        } catch (error: Exception) {
+            failSpawn(live, error)
+        }
     }
 
     fun listInstances(): List<InstanceRecord> = storage.loadInstances().map(InstanceRecord::copy)
@@ -102,8 +119,8 @@ class ServerSupervisor(
         val live = liveInstances[id] ?: return null
         update(live, status = InstanceStatus.STOPPING)
         try {
-            live.unsubscribe()
-            live.runtime.close()
+            clearBindings(live)
+            live.process.close()
         } finally {
             val stopped =
                 live.record.copy(
@@ -121,13 +138,20 @@ class ServerSupervisor(
         command: JsonObject,
     ): JsonObject? {
         val live = liveInstances[id] ?: return null
-        val response = live.runtime.handle(command)
+        val response = live.process.send(command)
         if (command.string("type") in sessionMetadataCommands) {
             syncSessionMetadata(live)
-        } else {
-            update(live)
         }
         return response
+    }
+
+    suspend fun handleUiResponse(
+        id: String,
+        response: JsonObject,
+    ): Boolean {
+        val live = liveInstances[id] ?: return false
+        live.process.sendUiResponse(response)
+        return true
     }
 
     fun subscribe(
@@ -145,13 +169,13 @@ class ServerSupervisor(
 
     private suspend fun syncSessionMetadata(live: LiveInstance) {
         val state =
-            live.runtime.handle(
+            live.process.send(
                 buildJsonObject {
                     put("type", "get_state")
                     put("id", "server_state")
                 },
             )
-        val (sessionId, sessionFile) = state?.let(::stateSessionFields) ?: (null to null)
+        val (sessionId, sessionFile) = stateSessionFields(state)
         update(live, sessionId = sessionId, sessionFile = sessionFile)
     }
 
@@ -171,20 +195,61 @@ class ServerSupervisor(
         storage.upsertInstance(live.record)
     }
 
+    private fun bindProcess(live: LiveInstance) {
+        clearBindings(live)
+        live.unsubscribeEvents =
+            live.process.subscribe { event ->
+                live.subscribers.forEach { subscriber -> subscriber(event) }
+            }
+        live.unsubscribeExit =
+            live.process.onExit { error ->
+                handleUnexpectedExit(live, error)
+            }
+    }
+
+    private fun clearBindings(live: LiveInstance) {
+        live.unsubscribeEvents?.invoke()
+        live.unsubscribeExit?.invoke()
+        live.unsubscribeEvents = null
+        live.unsubscribeExit = null
+    }
+
+    private fun handleUnexpectedExit(
+        live: LiveInstance,
+        error: Throwable,
+    ) {
+        if (liveInstances[live.record.id] !== live) {
+            return
+        }
+        if (
+            live.record.status == InstanceStatus.STOPPING ||
+            live.record.status == InstanceStatus.STOPPED
+        ) {
+            return
+        }
+        update(live, status = InstanceStatus.ERROR)
+        clearBindings(live)
+        liveInstances.remove(live.record.id, live)
+        System.err.println(
+            "RPC process for instance ${live.record.id} exited unexpectedly: " +
+                (error.message ?: error::class.simpleName.orEmpty()),
+        )
+    }
+
+    private suspend fun failSpawn(
+        live: LiveInstance,
+        error: Throwable,
+    ): Nothing {
+        update(live, status = InstanceStatus.ERROR)
+        clearBindings(live)
+        runCatching { live.process.close() }
+        update(live, status = InstanceStatus.STOPPED)
+        liveInstances.remove(live.record.id, live)
+        throw error
+    }
+
     companion object {
         private val sessionMetadataCommands =
             setOf("new_session", "switch_session", "fork", "clone", "set_session_name", "prompt")
-
-        private fun defaultRuntimeFactory(): RpcRuntimeFactory =
-            RpcRuntimeFactory { cwd, provider, model ->
-                RpcRuntime(
-                    loadBuiltInModels(),
-                    RpcRuntimeOptions(
-                        cwd = cwd,
-                        provider = provider,
-                        model = model,
-                    ),
-                )
-            }
     }
 }

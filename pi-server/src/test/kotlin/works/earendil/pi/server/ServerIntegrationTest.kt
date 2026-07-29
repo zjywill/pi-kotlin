@@ -11,6 +11,8 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.UUID
+import java.util.concurrent.CopyOnWriteArrayList
+import kotlinx.coroutines.async
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
@@ -30,11 +32,75 @@ import works.earendil.pi.ai.fauxAssistantMessage
 import works.earendil.pi.codingagent.RpcRuntime
 import works.earendil.pi.codingagent.RpcRuntimeOptions
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class ServerIntegrationTest {
+    @Test
+    fun `child rpc process rejects an in-flight request when it exits`() =
+        runTest {
+            val root = Files.createTempDirectory("pi-kotlin-rpc-child-exit")
+            val process =
+                ChildRpcProcess(
+                    cwd = root,
+                    command = listOf("/bin/sh", "-c", "read line; exit 43"),
+                )
+            try {
+                val error =
+                    runCatching {
+                        process.send(
+                            buildJsonObject {
+                                put("id", "pending")
+                                put("type", "get_state")
+                            },
+                        )
+                    }.exceptionOrNull()
+                assertNotNull(error)
+                assertContains(error.message.orEmpty(), "code=43")
+            } finally {
+                process.close()
+            }
+        }
+
+    @Test
+    fun `supervisor persists error state after an unexpected rpc process exit`() =
+        runTest {
+            val root = Files.createTempDirectory("pi-kotlin-server-process-exit")
+            val config = ServerConfig(root.resolve("server"))
+            val process = ControllableRpcProcess()
+            val supervisor =
+                ServerSupervisor(
+                    ServerStorage(config),
+                    RpcProcessFactory { _, _, _ -> process },
+                )
+            val instance = supervisor.spawnInstance(root, label = "exit")
+            val pending =
+                async(Dispatchers.Default) {
+                    runCatching {
+                        supervisor.handleRpc(
+                            instance.id,
+                            buildJsonObject {
+                                put("id", "pending")
+                                put("type", "wait")
+                            },
+                        )
+                    }.exceptionOrNull()
+                }
+            withTimeout(5_000) { process.requestStarted.await() }
+
+            process.exit(IllegalStateException("fixture process exited"))
+
+            val error = withTimeout(5_000) { pending.await() }
+            assertNotNull(error)
+            assertContains(error.message.orEmpty(), "fixture process exited")
+            assertEquals(InstanceStatus.ERROR, supervisor.getInstance(instance.id)?.status)
+            assertEquals(InstanceStatus.ERROR, supervisor.listInstances().single().status)
+            assertFalse(supervisor.handleUiResponse(instance.id, buildJsonObject { put("type", "ignored") }))
+        }
+
     @Test
     fun `supervisor persists lifecycle and fans out rpc events`() =
         runTest {
@@ -412,4 +478,59 @@ class ServerIntegrationTest {
             process.exitValue() == 0 &&
                 process.inputStream.bufferedReader().readText().trim().removePrefix("v").substringBefore('.').toInt() >= 22
         }.getOrDefault(false)
+
+    private class ControllableRpcProcess : RpcProcess {
+        val requestStarted = CompletableDeferred<Unit>()
+        private val pending = CompletableDeferred<JsonObject>()
+        private val listeners = CopyOnWriteArrayList<(JsonObject) -> Unit>()
+        private val exitListeners = CopyOnWriteArrayList<(Throwable) -> Unit>()
+        private var exitError: Throwable? = null
+
+        override suspend fun send(command: JsonObject): JsonObject {
+            if (command.string("type") == "get_state") {
+                return buildJsonObject {
+                    put("id", command.string("id").orEmpty())
+                    put("type", "response")
+                    put("command", "get_state")
+                    put("success", true)
+                    put(
+                        "data",
+                        buildJsonObject {
+                            put("sessionId", "fixture-session")
+                        },
+                    )
+                }
+            }
+            exitError?.let { throw it }
+            requestStarted.complete(Unit)
+            return pending.await()
+        }
+
+        override suspend fun sendUiResponse(response: JsonObject) {
+            exitError?.let { throw it }
+        }
+
+        override fun subscribe(listener: (JsonObject) -> Unit): () -> Unit {
+            listeners += listener
+            return { listeners -= listener }
+        }
+
+        override fun onExit(listener: (Throwable) -> Unit): () -> Unit {
+            exitError?.let {
+                listener(it)
+                return {}
+            }
+            exitListeners += listener
+            return { exitListeners -= listener }
+        }
+
+        override suspend fun close() = Unit
+
+        fun exit(error: Throwable) {
+            exitError = error
+            pending.completeExceptionally(error)
+            exitListeners.toList().forEach { listener -> listener(error) }
+            exitListeners.clear()
+        }
+    }
 }

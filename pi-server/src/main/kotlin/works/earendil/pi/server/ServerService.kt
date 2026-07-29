@@ -89,5 +89,11 @@ class ServerService(
     suspend fun handleStreamCommand(
         instanceId: String,
         command: JsonObject,
-    ): JsonObject? = supervisor.handleRpc(instanceId, command)
+    ): JsonObject? =
+        if (command.string("type") == "extension_ui_response") {
+            supervisor.handleUiResponse(instanceId, command)
+            null
+        } else {
+            supervisor.handleRpc(instanceId, command)
+        }
 }

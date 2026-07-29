@@ -41,6 +41,7 @@ Run the available comparisons from the Kotlin repository:
 ./migration/oracle/compare-provider-stream-events.sh
 ./migration/oracle/compare-radius.sh
 ./migration/oracle/compare-resource-loading.sh
+./migration/oracle/compare-server-recovery.sh
 ./migration/oracle/compare-session-jsonl.sh
 ./migration/oracle/compare-theme-runtime.sh
 ./migration/oracle/compare-xai-oauth.sh
@@ -164,6 +165,14 @@ explicitly enabled.
 The model catalog runtime comparison covers bundled-versus-remote timestamp
 selection, a newer persisted overlay restored without network access, and
 404/501-style unavailable catalog fallback.
+
+The server-recovery comparison applies the same persisted instance records to
+the upstream TypeScript supervisor and Kotlin supervisor. It compares restart
+handling for `starting`, `online`, `stopping`, `stopped`, and `error`, together
+with metadata preservation and refreshed last-seen timestamps. Kotlin server
+tests additionally cover child-process request correlation, pending rejection,
+unexpected-exit error persistence, JSONL event/UI routing, and socket lifecycle
+behavior.
 
 The GitHub Copilot comparison covers enterprise-domain device OAuth, the
 GitHub-to-Copilot token exchange, policy enablement for every known model,

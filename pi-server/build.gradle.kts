@@ -25,3 +25,9 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.13.4")
 }
+
+tasks.register<JavaExec>("serverRecoveryOracle") {
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass = "works.earendil.pi.server.ServerRecoveryOracleKt"
+}

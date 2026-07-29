@@ -101,16 +101,16 @@ Last reviewed: July 29, 2026
   - [x] Port Qwen Token Plan reasoning controls
   - [x] Show system prompt file sources in startup Context output
 
-The latest implementation stage completes HTML export parity through
-`d7b02636`. Kotlin now emits the upstream standalone application with the exact
-HTML, CSS, JavaScript, Markdown, and syntax-highlighting resources; reproduces
-theme variables and export colors; renders the session tree, branches, labels,
-filters, statistics, messages, and tool output; and supports extension plus
-built-in `find`/`grep` tool renderers. `./gradlew clean test installDist` passes
-with 378 tests, all 26 deterministic migration oracles pass, installed
-`pi --export` is byte-identical to upstream, and a Playwright smoke verifies
-rendering, highlighting, theme colors, links, and XSS rejection without browser
-errors. The full audit remains nonzero on the five partial areas listed below.
+The latest implementation stage migrates server process isolation and recovery
+through `d7b02636`. Each Kotlin server instance now runs an independent
+`pi --mode rpc` child process with correlated requests, event fan-out,
+extension UI response routing, stderr/exit propagation, pending-request
+rejection, and persistent error-state handling. Restart recovery matches
+upstream for `starting`, `online`, `stopping`, `stopped`, and `error` records.
+`./gradlew clean test installDist` passes with 380 tests, all 27 deterministic
+migration oracles pass, and installed crash/restart smoke verifies that child
+failure does not terminate the server. The full audit remains nonzero on the
+five partial areas listed below.
 
 ## Remaining
 
@@ -223,16 +223,36 @@ errors. The full audit remains nonzero on the five partial areas listed below.
 
 ### 8. RPC and server
 
-- [ ] Process recovery
+- [x] Process recovery
 - [ ] Full RPC command parity
 - [ ] Full event parity
 - [x] Extension UI request/response support over JSONL and server streams
 
 ## Next stage
 
-Complete the remaining interactive extension integration together with the
-full-screen terminal model, then continue the CLI/package and RPC/server gaps
-as separately audited slices.
+Complete full RPC command and event parity, then continue the remaining
+interactive extension/full-screen terminal and CLI/package gaps as separately
+audited slices.
+
+Evidence for the completed server process recovery stage:
+
+- [x] One independent `pi --mode rpc` child process per server instance
+- [x] Correlated JSONL requests and responses with generated IDs
+- [x] Event and extension UI request fan-out over `rpc-stream`
+- [x] Extension UI responses routed without waiting for a command response
+- [x] Child stderr and exit propagation with pending-request rejection
+- [x] Unexpected child exit persists the instance as `error` while the server
+      remains available
+- [x] Server restart converts persisted `starting` and `online` instances to
+      `stopped` while preserving other statuses and metadata
+- [x] Independent TypeScript/Kotlin server recovery oracle
+- [x] `./gradlew clean test installDist` with 380 tests and no failures,
+      errors, or skips
+- [x] All 27 deterministic migration oracles
+- [x] Installed lifecycle, child crash, and server restart recovery smoke
+- [x] `./migration/audit-migration.sh sync` through `d7b02636`
+- [x] `./migration/audit-migration.sh full` still identifies exactly five
+      partial areas
 
 Evidence for the completed HTML export stage:
 
