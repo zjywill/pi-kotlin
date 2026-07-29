@@ -8,6 +8,8 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.jsonObject
 import works.earendil.pi.ai.AuthEvent
@@ -27,6 +29,7 @@ class OpenRouterOAuthTest {
             val requests = mutableListOf<OAuthHttpRequest>()
             val callbackResponse = AtomicReference<HttpResponse<String>>()
             val callbackThread = AtomicReference<Thread>()
+            val manualCancelled = CompletableDeferred<Unit>()
             val events = mutableListOf<AuthEvent>()
             val oauth =
                 OpenRouterOAuth(
@@ -41,8 +44,14 @@ class OpenRouterOAuthTest {
             val credential =
                 oauth.login(
                     object : AuthInteraction {
-                        override suspend fun prompt(prompt: AuthPrompt): String =
-                            error("OpenRouter login does not prompt for manual input")
+                        override suspend fun prompt(prompt: AuthPrompt): String {
+                            assertTrue(prompt is AuthPrompt.ManualCode)
+                            try {
+                                awaitCancellation()
+                            } finally {
+                                manualCancelled.complete(Unit)
+                            }
+                        }
 
                         override fun notify(event: AuthEvent) {
                             events += event
@@ -71,6 +80,7 @@ class OpenRouterOAuthTest {
                     },
                 )
             assertNotNull(callbackThread.get()).join()
+            manualCancelled.await()
 
             val progress = events[0] as AuthEvent.Progress
             val authUrl = (events[1] as AuthEvent.AuthUrl).url
@@ -85,6 +95,11 @@ class OpenRouterOAuthTest {
             assertEquals("/oauth/callback/test-flow", callback.path)
             assertEquals("S256", query["code_challenge_method"])
             assertEquals("Listening for OpenRouter OAuth callback on $callback", progress.message)
+            assertEquals(
+                "Complete sign-in in your browser. If the browser is on another machine, " +
+                    "paste the final redirect URL here.",
+                (events[1] as AuthEvent.AuthUrl).instructions,
+            )
 
             val exchange = requests.single()
             val body = providerJson.parseToJsonElement(exchange.body).jsonObject
@@ -121,6 +136,112 @@ class OpenRouterOAuthTest {
                 callbackResult.headers().firstValue("cache-control").orElse(null),
             )
             assertTrue(callbackResult.body().contains("Signed in to OpenRouter"))
+        }
+
+    @Test
+    fun `manual redirect URL exchanges code when callback never arrives`() =
+        runBlocking {
+            val requests = mutableListOf<OAuthHttpRequest>()
+            val events = mutableListOf<AuthEvent>()
+            val oauth =
+                OpenRouterOAuth(
+                    transport =
+                        OAuthHttpTransport { request ->
+                            requests += request
+                            OAuthHttpResponse(200, """{"key":"manual-key"}""")
+                        },
+                    callbackPath = { "/oauth/callback/manual" },
+                )
+
+            val credential =
+                oauth.login(
+                    object : AuthInteraction {
+                        override suspend fun prompt(prompt: AuthPrompt): String {
+                            assertTrue(prompt is AuthPrompt.ManualCode)
+                            return "${prompt.placeholder}?code=manual-code"
+                        }
+
+                        override fun notify(event: AuthEvent) {
+                            events += event
+                        }
+                    },
+                )
+
+            assertEquals("manual-key", credential.access)
+            assertEquals("manual-code", providerJson.parseToJsonElement(requests.single().body).jsonObject.string("code"))
+            assertEquals(
+                "Exchanging authorization code for an API key...",
+                (events.last() as AuthEvent.Progress).message,
+            )
+        }
+
+    @Test
+    fun `manual input accepts bare codes and query strings`() =
+        runBlocking {
+            listOf(
+                "  bare-code  " to "bare-code",
+                "code=query-code&state=ignored" to "query-code",
+            ).forEach { (input, expectedCode) ->
+                val requests = mutableListOf<OAuthHttpRequest>()
+                val oauth =
+                    OpenRouterOAuth(
+                        transport =
+                            OAuthHttpTransport { request ->
+                                requests += request
+                                OAuthHttpResponse(200, """{"key":"manual-key"}""")
+                            },
+                    )
+
+                oauth.login(
+                    object : AuthInteraction {
+                        override suspend fun prompt(prompt: AuthPrompt): String = input
+
+                        override fun notify(event: AuthEvent) = Unit
+                    },
+                )
+
+                assertEquals(
+                    expectedCode,
+                    providerJson.parseToJsonElement(requests.single().body).jsonObject.string("code"),
+                )
+            }
+        }
+
+    @Test
+    fun `manual redirect URL without a code is rejected`() =
+        runBlocking {
+            assertEquals(
+                null,
+                parseOpenRouterAuthorizationInput("https://localhost/oauth/callback"),
+            )
+        }
+
+    @Test
+    fun `empty manual input fails without exchanging a code`() =
+        runBlocking {
+            val requests = mutableListOf<OAuthHttpRequest>()
+            val oauth =
+                OpenRouterOAuth(
+                    transport =
+                        OAuthHttpTransport { request ->
+                            requests += request
+                            OAuthHttpResponse(200, """{"key":"unexpected"}""")
+                        },
+                )
+
+            val error =
+                assertFailsWith<IllegalStateException> {
+                    oauth.login(
+                        object : AuthInteraction {
+                            override suspend fun prompt(prompt: AuthPrompt): String = "   "
+
+                            override fun notify(event: AuthEvent) = Unit
+                        },
+                    )
+                }
+
+            assertEquals("Missing authorization code", error.message)
+            assertTrue(requests.isEmpty())
         }
 
     @Test
@@ -189,7 +310,7 @@ class OpenRouterOAuthTest {
                 assertFailsWith<IllegalStateException> {
                     oauth.login(
                         object : AuthInteraction {
-                            override suspend fun prompt(prompt: AuthPrompt): String = error("Unexpected prompt")
+                            override suspend fun prompt(prompt: AuthPrompt): String = awaitCancellation()
 
                             override fun notify(event: AuthEvent) = Unit
                         },
@@ -205,7 +326,7 @@ private fun callbackInteraction(
     callbackQuery: String,
 ): AuthInteraction =
     object : AuthInteraction {
-        override suspend fun prompt(prompt: AuthPrompt): String = error("Unexpected prompt")
+        override suspend fun prompt(prompt: AuthPrompt): String = awaitCancellation()
 
         override fun notify(event: AuthEvent) {
             if (event is AuthEvent.AuthUrl) {

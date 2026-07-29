@@ -35,6 +35,7 @@ interface ImagesProvider {
 data class ImagesAuthOverrides(
     val apiKey: String? = null,
     val env: Map<String, String> = emptyMap(),
+    val minOAuthValidityMs: Long? = null,
 )
 
 class ImagesModelsException(
@@ -218,7 +219,12 @@ class ImagesModels(
                 )
             }
         return when (stored) {
-            is OAuthCredential -> resolveStoredOAuth(provider, stored)
+            is OAuthCredential ->
+                resolveStoredOAuth(
+                    provider = provider,
+                    stored = stored,
+                    minOAuthValidityMs = overrides.minOAuthValidityMs,
+                )
             is ApiKeyCredential ->
                 resolveApiKeyAuth(
                     provider = provider,
@@ -273,14 +279,26 @@ class ImagesModels(
     private suspend fun resolveStoredOAuth(
         provider: ImagesProvider,
         stored: OAuthCredential,
+        minOAuthValidityMs: Long? = null,
     ): AuthResult? {
         val oauth = provider.oauth ?: return null
+        val minimumValidityMs =
+            maxOf(
+                DEFAULT_IMAGES_OAUTH_MINIMUM_VALIDITY_MS,
+                minOAuthValidityMs ?: 0L,
+            )
+        fun expiresSoon(credential: OAuthCredential): Boolean =
+            credential.expires - currentTimeMillis() <= minimumValidityMs
+
         var credential = stored
-        if (currentTimeMillis() >= credential.expires) {
+        if (expiresSoon(credential)) {
             val post =
                 try {
                     credentials.modify(provider.id) { current ->
-                        if (current !is OAuthCredential || currentTimeMillis() < current.expires) {
+                        if (
+                            current !is OAuthCredential ||
+                            current.expires - currentTimeMillis() > minimumValidityMs
+                        ) {
                             null
                         } else {
                             try {
@@ -309,6 +327,12 @@ class ImagesModels(
                 }
             if (post !is OAuthCredential) return null
             credential = post
+            if (minOAuthValidityMs != null && expiresSoon(credential)) {
+                throw ImagesModelsException(
+                    code = "oauth",
+                    message = "OAuth refresh returned a token that expires too soon for ${provider.id}",
+                )
+            }
         }
         return try {
             AuthResult(
@@ -326,6 +350,8 @@ class ImagesModels(
         }
     }
 }
+
+private const val DEFAULT_IMAGES_OAUTH_MINIMUM_VALIDITY_MS = 5 * 60 * 1_000L
 
 class ConfigurableImagesProvider(
     override val id: String,

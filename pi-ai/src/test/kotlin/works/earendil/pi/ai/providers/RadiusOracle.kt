@@ -207,7 +207,12 @@ fun main() =
                         modelsStore = store,
                         credentials =
                             InMemoryCredentialStore(
-                                mapOf("radius" to refreshedCredential),
+                                mapOf(
+                                    "radius" to
+                                        refreshedCredential.copy(
+                                            expires = currentTime + 10 * 60_000,
+                                        ),
+                                ),
                             ),
                         currentTimeMillis = { currentTime },
                     )

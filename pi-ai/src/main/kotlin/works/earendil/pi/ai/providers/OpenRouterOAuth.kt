@@ -3,6 +3,7 @@ package works.earendil.pi.ai.providers
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
+import java.net.URI
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -12,8 +13,12 @@ import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -21,6 +26,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import works.earendil.pi.ai.AuthEvent
 import works.earendil.pi.ai.AuthInteraction
+import works.earendil.pi.ai.AuthPrompt
 import works.earendil.pi.ai.ModelAuth
 import works.earendil.pi.ai.OAuthAuth
 import works.earendil.pi.ai.OAuthCredential
@@ -65,26 +71,32 @@ internal class OpenRouterOAuth(
     override suspend fun login(interaction: AuthInteraction): OAuthCredential {
         val pkce = createOpenRouterPkce(random)
         val callback = callbackServerFactory(callbackPath(), pkce.verifier)
-        val authorizationUrl =
-            createOpenRouterAuthorizationUrl(
-                endpoints.authorizeUrl,
-                callback.callbackUrl,
-                pkce.challenge,
-            )
-        interaction.notify(
-            AuthEvent.Progress(
-                "Listening for OpenRouter OAuth callback on ${callback.callbackUrl}",
-            ),
-        )
-        interaction.notify(
-            AuthEvent.AuthUrl(
-                url = authorizationUrl,
-                instructions = "Complete sign-in in your browser.",
-            ),
-        )
         return try {
             withTimeout(loginTimeoutMs) {
-                callback.credential.await()
+                val authorizationUrl =
+                    createOpenRouterAuthorizationUrl(
+                        endpoints.authorizeUrl,
+                        callback.callbackUrl,
+                        pkce.challenge,
+                    )
+                interaction.notify(
+                    AuthEvent.Progress(
+                        "Listening for OpenRouter OAuth callback on ${callback.callbackUrl}",
+                    ),
+                )
+                interaction.notify(
+                    AuthEvent.AuthUrl(
+                        url = authorizationUrl,
+                        instructions =
+                            "Complete sign-in in your browser. If the browser is on another machine, " +
+                                "paste the final redirect URL here.",
+                    ),
+                )
+                awaitOpenRouterCredential(
+                    interaction = interaction,
+                    callback = callback,
+                    verifier = pkce.verifier,
+                )
             }
         } catch (_: TimeoutCancellationException) {
             error("OpenRouter OAuth login timed out")
@@ -97,6 +109,82 @@ internal class OpenRouterOAuth(
 
     override suspend fun toAuth(credential: OAuthCredential): ModelAuth =
         ModelAuth(apiKey = credential.access)
+
+    private suspend fun awaitOpenRouterCredential(
+        interaction: AuthInteraction,
+        callback: OpenRouterCallbackServer,
+        verifier: String,
+    ): OAuthCredential =
+        coroutineScope {
+            val manual =
+                async(Dispatchers.IO) {
+                    runCatching {
+                        interaction.prompt(
+                            AuthPrompt.ManualCode(
+                                message =
+                                    "Complete sign-in in your browser, or paste the authorization code / " +
+                                        "redirect URL here:",
+                                placeholder = callback.callbackUrl,
+                            ),
+                        )
+                    }
+                }
+            val callbackWait = async { callback.waitForCredential() }
+            val first =
+                select<OpenRouterLoginResult> {
+                    callbackWait.onAwait { credential ->
+                        OpenRouterLoginResult.Callback(credential)
+                    }
+                    manual.onAwait { result ->
+                        callback.cancelWait()
+                        OpenRouterLoginResult.Manual(result)
+                    }
+                }
+            val manualResult =
+                when (first) {
+                    is OpenRouterLoginResult.Callback -> {
+                        if (first.credential != null) {
+                            manual.cancel()
+                            return@coroutineScope first.credential
+                        }
+                        manual.await()
+                    }
+
+                    is OpenRouterLoginResult.Manual -> {
+                        val callbackCredential = callbackWait.await()
+                        first.result.exceptionOrNull()?.let { throw it }
+                        if (callbackCredential != null) {
+                            return@coroutineScope callbackCredential
+                        }
+                        first.result
+                    }
+                }
+            val input = manualResult.getOrThrow()
+            val code =
+                parseOpenRouterAuthorizationInput(input)
+                    ?: error("Missing authorization code")
+            interaction.notify(
+                AuthEvent.Progress(
+                    "Exchanging authorization code for an API key...",
+                ),
+            )
+            exchangeOpenRouterAuthorizationCode(
+                code = code,
+                verifier = verifier,
+                transport = transport,
+                endpoints = endpoints,
+            )
+        }
+}
+
+private sealed interface OpenRouterLoginResult {
+    data class Callback(
+        val credential: OAuthCredential?,
+    ) : OpenRouterLoginResult
+
+    data class Manual(
+        val result: Result<String>,
+    ) : OpenRouterLoginResult
 }
 
 internal fun createOpenRouterPkce(random: SecureRandom = SecureRandom()): OpenRouterPkce {
@@ -127,12 +215,22 @@ internal fun createOpenRouterAuthorizationUrl(
 internal class OpenRouterCallbackServer(
     private val server: HttpServer,
     val callbackUrl: String,
-    val credential: CompletableDeferred<OAuthCredential>,
+    private val credential: CompletableDeferred<OAuthCredential?>,
+    private val claimed: AtomicBoolean,
 ) {
-    fun close() {
-        if (!credential.isCompleted) {
-            credential.completeExceptionally(IllegalStateException("Login cancelled"))
+    suspend fun waitForCredential(): OAuthCredential? = credential.await()
+
+    fun cancelWait() {
+        if (credential.isCompleted) {
+            return
         }
+        if (claimed.compareAndSet(false, true)) {
+            credential.complete(null)
+            server.stop(0)
+        }
+    }
+
+    fun close() {
         server.stop(0)
     }
 }
@@ -144,7 +242,7 @@ private fun startOpenRouterCallbackServer(
     transport: OAuthHttpTransport,
     endpoints: OpenRouterOAuthEndpoints,
 ): OpenRouterCallbackServer {
-    val credential = CompletableDeferred<OAuthCredential>()
+    val credential = CompletableDeferred<OAuthCredential?>()
     val claimed = AtomicBoolean(false)
     val server = HttpServer.create(InetSocketAddress(host, 0), 0)
     server.createContext("/") { exchange ->
@@ -163,6 +261,7 @@ private fun startOpenRouterCallbackServer(
         server = server,
         callbackUrl = "http://$host:${server.address.port}$callbackPath",
         credential = credential,
+        claimed = claimed,
     )
 }
 
@@ -171,7 +270,7 @@ private fun handleOpenRouterCallback(
     callbackPath: String,
     verifier: String,
     claimed: AtomicBoolean,
-    credential: CompletableDeferred<OAuthCredential>,
+    credential: CompletableDeferred<OAuthCredential?>,
     transport: OAuthHttpTransport,
     endpoints: OpenRouterOAuthEndpoints,
 ) {
@@ -249,6 +348,22 @@ private fun handleOpenRouterCallback(
         )
         credential.completeExceptionally(error)
     }
+}
+
+internal fun parseOpenRouterAuthorizationInput(input: String): String? {
+    val value = input.trim()
+    if (value.isEmpty()) {
+        return null
+    }
+    runCatching {
+        URI.create(value)
+    }.getOrNull()?.takeIf(URI::isAbsolute)?.let { uri ->
+        return uri.rawQuery?.let(::parseOpenRouterQuery)?.get("code")
+    }
+    if ("code=" in value) {
+        return parseOpenRouterQuery(value.removePrefix("?"))["code"]
+    }
+    return value
 }
 
 private suspend fun exchangeOpenRouterAuthorizationCode(

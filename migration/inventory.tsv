@@ -4,7 +4,7 @@ Built-in model catalog	packages/ai/src/providers/data	pi-ai	complete	Catalog che
 Provider protocols	packages/ai/src/api	pi-ai	complete	Provider payload, stream, OAuth, and image-generation oracles
 Agent loop	packages/agent/src	pi-agent-core	complete	Agent loop and session tests
 SQLite session storage	packages/storage/sqlite-node	pi-storage-sqlite	complete	SQLite repository tests
-CLI argument and print modes	packages/coding-agent/src	pi-coding-agent	partial	CLI help oracle plus CLI and package-command tests	API-key login, self-update/config workflows, and several parsed flags remain incomplete
+CLI argument and print modes	packages/coding-agent/src	pi-coding-agent	partial	CLI and auth help oracle plus credential-print, CLI, and package-command tests	API-key login, self-update/config workflows, and several parsed flags remain incomplete
 Context, skills, and prompt templates	packages/coding-agent/src/core/resource-loader.ts packages/coding-agent/src/core/skills.ts packages/coding-agent/src/core/prompt-templates.ts	pi-coding-agent	complete	Resource loading oracle plus CLI, RPC, and resource tests
 Project trust	packages/coding-agent/src/core/project-trust.ts packages/coding-agent/src/core/trust-manager.ts	pi-coding-agent	complete	Resource loading and extension runtime oracles plus trust-store, startup, and interactive tests
 Package management	packages/coding-agent/src/core/package-manager.ts packages/coding-agent/src/package-manager-cli.ts	pi-coding-agent	partial	Package resources oracle plus settings, resolver, and package-command tests	Config selector, self-update, legacy global npm lookup, available-update checks, and some git/npm recovery paths remain incomplete

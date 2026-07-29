@@ -78,11 +78,11 @@ globalThis.fetch = async (input: string | URL | Request, init?: RequestInit): Pr
 			if (refreshCall === 1) return jsonResponse({ error: "temporarily_unavailable" }, 429);
 			if (refreshCall === 2) return jsonResponse({ error: "server_error" }, 500);
 			if (refreshCall === 3) {
-				return jsonResponse({
-					access_token: "refreshed-access",
-					refresh_token: "refreshed-refresh",
-					expires_in: 60,
-				});
+					return jsonResponse({
+						access_token: "refreshed-access",
+						refresh_token: "refreshed-refresh",
+						expires_in: 600,
+					});
 			}
 			return jsonResponse({ error: "invalid_grant", error_description: "session revoked" }, 400);
 		}

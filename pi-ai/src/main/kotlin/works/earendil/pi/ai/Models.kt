@@ -136,13 +136,16 @@ class Models(
         }
     }
 
-    suspend fun getAuth(providerId: String): AuthResult? {
+    suspend fun getAuth(
+        providerId: String,
+        overrides: AuthResolutionOverrides = AuthResolutionOverrides(),
+    ): AuthResult? {
         val provider = providersById[providerId] ?: return null
         val stored = readStoredCredential(provider.id)
         return if (stored == null) {
             provider.resolveAmbientAuth(environment)
         } else {
-            resolveStoredAuth(provider, stored)
+            resolveStoredAuth(provider, stored, overrides.minOAuthValidityMs)
         }
     }
 
@@ -423,6 +426,7 @@ class Models(
     private suspend fun resolveStoredAuth(
         provider: Provider,
         stored: Credential,
+        minOAuthValidityMs: Long? = null,
     ): AuthResult? {
         return when (stored) {
             is ApiKeyCredential ->
@@ -435,7 +439,14 @@ class Models(
                 )
 
             is OAuthCredential ->
-                provider.oauth?.let { resolveStoredOAuth(provider, stored, it) }
+                provider.oauth?.let {
+                    resolveStoredOAuth(
+                        provider = provider,
+                        stored = stored,
+                        oauth = it,
+                        minOAuthValidityMs = minOAuthValidityMs,
+                    )
+                }
                     ?: throw ModelsAuthException(
                         code = "auth",
                         message = "Stored OAuth credential is not supported by ${provider.id}",
@@ -447,14 +458,29 @@ class Models(
         provider: Provider,
         stored: OAuthCredential,
         oauth: OAuthAuth,
+        minOAuthValidityMs: Long? = null,
     ): AuthResult? {
+        val minimumValidityMs =
+            maxOf(
+                DEFAULT_OAUTH_MINIMUM_VALIDITY_MS,
+                minOAuthValidityMs ?: 0L,
+            )
+        fun expiresSoon(credential: OAuthCredential): Boolean =
+            credential.expires - currentTimeMillis() <= minimumValidityMs
+
         var credential = stored
-        if (currentTimeMillis() >= credential.expires) {
-            val post = refreshStoredOAuth(provider, oauth)
+        if (expiresSoon(credential)) {
+            val post = refreshStoredOAuth(provider, oauth, minimumValidityMs)
             if (post !is OAuthCredential) {
                 return null
             }
             credential = post
+            if (minOAuthValidityMs != null && expiresSoon(credential)) {
+                throw ModelsAuthException(
+                    code = "oauth",
+                    message = "OAuth refresh returned a token that expires too soon for ${provider.id}",
+                )
+            }
         }
         return try {
             AuthResult(
@@ -475,10 +501,14 @@ class Models(
     private suspend fun refreshStoredOAuth(
         provider: Provider,
         oauth: OAuthAuth,
+        minimumValidityMs: Long = 0L,
     ): Credential? =
         try {
             credentials.modify(provider.id) { current ->
-                if (current !is OAuthCredential || currentTimeMillis() < current.expires) {
+                if (
+                    current !is OAuthCredential ||
+                    current.expires - currentTimeMillis() > minimumValidityMs
+                ) {
                     null
                 } else {
                     try {
@@ -526,6 +556,7 @@ class Models(
 }
 
 private const val MAX_CONCURRENT_MODEL_REFRESHES = 8
+private const val DEFAULT_OAUTH_MINIMUM_VALIDITY_MS = 5 * 60 * 1_000L
 
 private data class PreparedRequest(
     val model: Model,

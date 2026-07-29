@@ -1,11 +1,13 @@
 # Migration TODO
 
-Last reviewed: July 27, 2026
+Last reviewed: July 29, 2026
 
 ## Completion gate
 
 - Source repository: `/Users/junyizhang/Git/pi`
 - Reviewed source commit: `cee5ff7520d8828bed9955ef00419e995d1f91e0`
+- Current source HEAD pending full review:
+  `027a5847901b5dde30270abaa1041046cd2b4b55`
 - Target repository: `/Users/junyizhang/Git/pi-kotlin`
 - The migration is complete only when:
 
@@ -21,6 +23,14 @@ Last reviewed: July 27, 2026
 - [x] AI message and stream contracts
 - [x] Built-in model catalog and remote catalog refresh
 - [x] Provider protocols and OAuth flows covered by the migration oracles
+  - [x] Refresh OAuth credentials with less than five minutes remaining
+  - [x] Enforce caller-provided minimum OAuth validity after refresh
+  - [x] OpenRouter loopback and manual redirect URL login
+- [x] Credential export commands
+  - [x] `pi auth print-api-key`
+  - [x] `pi auth print-bearer-token`
+  - [x] `--min-expiry` duration parsing and 30-minute bearer default
+  - [x] Credential-only stdout and typed validation errors
 - [x] Agent loop
 - [x] SQLite session storage
 - [x] Context files, skills, and prompt templates
@@ -38,22 +48,48 @@ Last reviewed: July 27, 2026
   - [x] Request-bound dynamic tool, command, flag, and provider refresh
   - [x] Fire-and-forget extension UI notifications and status actions
 
-The latest completed stage is commit `8d26333`, which added interactive project
-trust and request-bound dynamic extension registration refresh. Its validation
-included focused runtime tests, `./gradlew clean test installDist`, all 17
-migration oracles, the source synchronization audit, and an installed PTY
-smoke test.
+The latest implementation stage synchronized upstream credential printing,
+OAuth minimum-validity refresh behavior, and OpenRouter manual redirect login.
+`./gradlew clean test installDist` and 16 deterministic migration oracles pass.
+The GitHub Copilot oracle is currently blocked before comparison by a
+`models.dev` connection timeout while hydrating the TypeScript source archive.
+Both migration audits currently stop at source drift because the new upstream
+range has not yet been fully reviewed and entered in the synchronization
+manifests.
 
 ## Remaining
 
-### 1. CLI argument and print modes
+### 1. Upstream synchronization
+
+- [ ] Review and classify every commit in
+      `cee5ff7520d8828bed9955ef00419e995d1f91e0..027a5847901b5dde30270abaa1041046cd2b4b55`
+- [x] OAuth five-minute refresh window and credential print commands
+- [x] OpenRouter manual redirect URL fallback
+- [ ] Pending stop reason while streaming
+- [ ] GitHub Copilot Claude Opus 5 metadata overrides
+- [ ] Configured Bedrock profile precedence over ambient AWS keys
+- [ ] Z.AI `max_tokens` request field
+- [ ] Per-request fetch injection
+- [ ] Extension `ctx.scopedModels` in base and TUI contexts
+- [ ] Preserve resource metadata after extension reload
+- [ ] Route RPC bash through `user_bash`
+- [ ] Concurrent bash cancellation
+- [ ] Failed git-install cleanup
+- [ ] Session replacement subscription fix
+- [ ] Classify eval, documentation, test-only, and known-TUI-gap commits
+- [ ] Update `migration/upstream-sync.tsv` only after the whole range is
+      classified
+- [ ] Advance `migration/sync-state.tsv` only after all required ports and
+      classifications are complete
+
+### 2. CLI argument and print modes
 
 - [ ] API-key login workflow
 - [ ] Self-update workflow
 - [ ] Remaining configuration workflows
 - [ ] Implement and verify the parsed flags that still have no runtime effect
 
-### 2. Package management
+### 3. Package management
 
 - [ ] Config selector
 - [ ] Self-update integration
@@ -61,7 +97,7 @@ smoke test.
 - [ ] Available-update checks
 - [ ] Remaining git/npm recovery and error paths
 
-### 3. Extension runtime
+### 4. Extension runtime
 
 - [ ] Bidirectional extension dialogs
   - [ ] Make the Node JSONL reader accept `ui_response` messages while an
@@ -80,26 +116,26 @@ smoke test.
 - [ ] Message and session-entry renderers
 - [ ] Unsolicited background registration updates
 
-### 4. Themes and resource composition
+### 5. Themes and resource composition
 
 - [ ] Parse upstream-compatible theme files
 - [ ] Apply themes to terminal rendering
 - [ ] Verify package and extension theme precedence
 
-### 5. Interactive terminal
+### 6. Interactive terminal
 
 - [ ] Full-screen component model
 - [ ] Overlays and selectors
 - [ ] Upstream-compatible editor behavior
 - [ ] Transcript and rendering parity at multiple terminal widths
 
-### 6. HTML export
+### 7. HTML export
 
 - [ ] Theme parity
 - [ ] Markdown rendering parity
 - [ ] Syntax highlighting parity
 
-### 7. RPC and server
+### 8. RPC and server
 
 - [ ] Process recovery
 - [ ] Full RPC command parity
@@ -108,22 +144,21 @@ smoke test.
 
 ## Next stage
 
-Resume with bidirectional extension dialogs. The current blocker is structural:
-the Node host processes stdin serially, so an extension awaiting
-`ctx.ui.select()`, `ctx.ui.confirm()`, or `ctx.ui.input()` cannot receive a
-response until its own handler returns. The next implementation must make the
-host protocol reentrant rather than returning placeholder values.
+Finish the upstream synchronization range before returning to bidirectional
+extension dialogs. The next coherent implementation slice is the AI-provider
+batch: pending stream stop reasons, GitHub Copilot Claude Opus 5 metadata,
+Bedrock profile precedence, Z.AI `max_tokens`, and per-request fetch injection.
 
 Required evidence for that stage:
 
-- [ ] Node host test proving a command continues only after a UI response
-- [ ] Interactive runtime tests for select, confirm, input, and cancellation
-- [ ] RPC test proving `extension_ui_request` and `extension_ui_response`
-      complete the original command
-- [ ] TypeScript/Kotlin extension-runtime oracle comparison
-- [ ] Installed PTY smoke using an extension that awaits all three dialogs
+- [ ] Focused tests for pending-to-terminal stream state transitions
+- [ ] Provider payload coverage for Bedrock and Z.AI changes
+- [ ] Per-request transport injection tests across supported HTTP providers
+- [ ] GitHub Copilot metadata assertion for Claude Opus 5
 - [ ] `./gradlew clean test installDist`
-- [ ] All migration oracles
+- [ ] All deterministic migration oracles
+- [ ] GitHub Copilot oracle after `models.dev` hydration is available or made
+      deterministic without weakening its catalog comparison
 - [ ] `./migration/audit-migration.sh sync`
 - [ ] `./migration/audit-migration.sh full` with the remaining partial areas
       reported exactly

@@ -199,10 +199,10 @@ try {
 	if (!address || typeof address === "string") throw new Error("Radius fixture did not bind");
 	const gateway = `http://127.0.0.1:${address.port}`;
 	const credentials = new InMemoryCredentialStore();
-	await credentials.modify("radius", async () => ({
-		...refreshedCredential,
-		expires: Date.now() + 60_000,
-	}));
+		await credentials.modify("radius", async () => ({
+			...refreshedCredential,
+			expires: Date.now() + 10 * 60_000,
+		}));
 	const store = new InMemoryModelsStore();
 	const models = createModels({ credentials, modelsStore: store });
 	const provider = radiusProvider({ gateway });

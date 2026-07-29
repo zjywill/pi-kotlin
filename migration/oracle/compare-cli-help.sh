@@ -22,3 +22,15 @@ fi
 ) >"$TMP_DIR/kotlin.txt"
 
 diff -u "$TMP_DIR/typescript.txt" "$TMP_DIR/kotlin.txt"
+
+(
+  cd "$SOURCE_ROOT"
+  ./pi-test.sh auth --help
+) >"$TMP_DIR/typescript-auth.txt"
+
+(
+  cd "$ROOT"
+  ./gradlew -q :pi-coding-agent:run --args="auth --help"
+) >"$TMP_DIR/kotlin-auth.txt"
+
+diff -u "$TMP_DIR/typescript-auth.txt" "$TMP_DIR/kotlin-auth.txt"

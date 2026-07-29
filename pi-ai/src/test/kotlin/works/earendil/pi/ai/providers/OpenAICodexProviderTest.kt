@@ -339,7 +339,7 @@ class OpenAICodexProviderTest {
                                 OAuthCredential(
                                     access = token,
                                     refresh = "refresh-token",
-                                    expires = System.currentTimeMillis() + 60_000,
+                                    expires = System.currentTimeMillis() + 10 * 60_000,
                                     accountId = "stored-account",
                                 ),
                         ),

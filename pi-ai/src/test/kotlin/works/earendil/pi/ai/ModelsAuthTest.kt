@@ -18,7 +18,7 @@ class ModelsAuthTest {
                 OAuthCredential(
                     access = "access",
                     refresh = "refresh",
-                    expires = 10_000,
+                    expires = 1_000_000,
                     accountId = "account",
                 )
             val store =
@@ -55,7 +55,7 @@ class ModelsAuthTest {
                             OAuthCredential(
                                 access = "stored-access",
                                 refresh = "refresh",
-                                expires = 10_000,
+                                expires = 1_000_000,
                             ),
                     ),
                 )
@@ -116,7 +116,7 @@ class ModelsAuthTest {
                         return credential.copy(
                             access = "rotated-access",
                             refresh = "rotated-refresh",
-                            expires = 20_000,
+                            expires = 1_000_000,
                         )
                     }
 
@@ -138,9 +138,96 @@ class ModelsAuthTest {
                 OAuthCredential(
                     access = "rotated-access",
                     refresh = "rotated-refresh",
-                    expires = 20_000,
+                    expires = 1_000_000,
                 ),
                 store.read("faux"),
+            )
+        }
+
+    @Test
+    fun `OAuth refreshes with less than five minutes remaining`() =
+        runTest {
+            val refreshes = AtomicInteger()
+            val store =
+                InMemoryCredentialStore(
+                    mapOf(
+                        "faux" to
+                            OAuthCredential(
+                                access = "old-access",
+                                refresh = "refresh",
+                                expires = 1_060_000,
+                            ),
+                    ),
+                )
+            val oauth =
+                object : OAuthAuth {
+                    override val name: String = "Test OAuth"
+
+                    override suspend fun login(interaction: AuthInteraction): OAuthCredential =
+                        error("not used")
+
+                    override suspend fun refresh(credential: OAuthCredential): OAuthCredential {
+                        refreshes.incrementAndGet()
+                        return credential.copy(
+                            access = "fresh-access",
+                            expires = 4_600_000,
+                        )
+                    }
+
+                    override suspend fun toAuth(credential: OAuthCredential): ModelAuth =
+                        ModelAuth(apiKey = credential.access)
+                }
+            val models = Models(listOf(FauxProvider(oauth = oauth)), InMemoryModelsStore(), store) { 1_000_000 }
+
+            assertEquals("fresh-access", models.getAuth("faux")?.auth?.apiKey)
+            assertEquals(1, refreshes.get())
+            assertEquals("fresh-access", (store.read("faux") as OAuthCredential).access)
+        }
+
+    @Test
+    fun `explicit OAuth minimum validity is enforced after refresh`() =
+        runTest {
+            val store =
+                InMemoryCredentialStore(
+                    mapOf(
+                        "faux" to
+                            OAuthCredential(
+                                access = "old-access",
+                                refresh = "refresh",
+                                expires = 1_600_000,
+                            ),
+                    ),
+                )
+            val oauth =
+                object : OAuthAuth {
+                    override val name: String = "Test OAuth"
+
+                    override suspend fun login(interaction: AuthInteraction): OAuthCredential =
+                        error("not used")
+
+                    override suspend fun refresh(credential: OAuthCredential): OAuthCredential =
+                        credential.copy(
+                            access = "still-too-short",
+                            expires = 2_200_000,
+                        )
+
+                    override suspend fun toAuth(credential: OAuthCredential): ModelAuth =
+                        ModelAuth(apiKey = credential.access)
+                }
+            val models = Models(listOf(FauxProvider(oauth = oauth)), InMemoryModelsStore(), store) { 1_000_000 }
+
+            val error =
+                kotlin.test.assertFailsWith<ModelsAuthException> {
+                    models.getAuth(
+                        "faux",
+                        AuthResolutionOverrides(minOAuthValidityMs = 30 * 60_000),
+                    )
+                }
+
+            assertEquals("oauth", error.code)
+            assertEquals(
+                "OAuth refresh returned a token that expires too soon for faux",
+                error.message,
             )
         }
 
@@ -195,7 +282,7 @@ class ModelsAuthTest {
             OAuthCredential(
                 access = "access",
                 refresh = "refresh",
-                expires = 10_000,
+                expires = 1_000_000,
             ),
     ): OAuthAuth =
         object : OAuthAuth {
@@ -204,7 +291,7 @@ class ModelsAuthTest {
             override suspend fun login(interaction: AuthInteraction): OAuthCredential = loginCredential
 
             override suspend fun refresh(credential: OAuthCredential): OAuthCredential =
-                credential.copy(expires = 10_000)
+                credential.copy(expires = 1_000_000)
 
             override suspend fun toAuth(credential: OAuthCredential): ModelAuth =
                 ModelAuth(apiKey = credential.access)

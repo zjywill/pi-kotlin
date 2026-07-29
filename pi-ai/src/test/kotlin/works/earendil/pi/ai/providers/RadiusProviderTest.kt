@@ -78,7 +78,7 @@ class RadiusProviderTest {
                     OAuthCredential(
                         access = "stored-access",
                         refresh = "stored-refresh",
-                        expires = 100_000,
+                        expires = 1_000_000,
                     )
                 val credentials = InMemoryCredentialStore(mapOf("radius" to credential))
                 val store = InMemoryModelsStore()

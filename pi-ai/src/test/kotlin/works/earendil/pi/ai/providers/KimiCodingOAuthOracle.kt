@@ -78,7 +78,7 @@ fun main() =
                                             {
                                               "access_token":"refreshed-access",
                                               "refresh_token":"refreshed-refresh",
-                                              "expires_in":60
+                                              "expires_in":600
                                             }
                                             """.trimIndent(),
                                         )

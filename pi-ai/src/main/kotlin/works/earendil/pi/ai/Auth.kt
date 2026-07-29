@@ -104,6 +104,10 @@ data class AuthResult(
     val env: Map<String, String> = emptyMap(),
 )
 
+data class AuthResolutionOverrides(
+    val minOAuthValidityMs: Long? = null,
+)
+
 data class AuthOption(
     val id: String,
     val label: String,

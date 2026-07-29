@@ -48,9 +48,9 @@ and identity headers, the mandatory system identity, and canonical tool-name
 mapping in requests and responses.
 
 The OpenRouter OAuth comparison covers the random one-shot loopback callback,
-PKCE authorization, permanent API-key exchange, callback response headers,
-no-op refresh, request-auth derivation, and a real local OpenRouter-compatible
-provider request using the stored OAuth credential.
+manual redirect-URL fallback, PKCE authorization, permanent API-key exchange,
+callback response headers, no-op refresh, request-auth derivation, and a real
+local OpenRouter-compatible provider request using the stored OAuth credential.
 
 The OpenRouter Images comparison covers the exact 40-model generated catalog
 and checksum, final `/chat/completions` URL/headers/payload, text and data-URL

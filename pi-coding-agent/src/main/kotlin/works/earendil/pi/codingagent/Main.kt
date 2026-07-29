@@ -5,6 +5,16 @@ import kotlinx.coroutines.runBlocking
 private const val VERSION = "0.1.0-SNAPSHOT"
 
 fun main(rawArguments: Array<String>) {
+    val credentialCommandExitCode =
+        runBlocking {
+            runCredentialPrintCommand(rawArguments.toList())
+        }
+    if (credentialCommandExitCode != null) {
+        if (credentialCommandExitCode != 0) {
+            kotlin.system.exitProcess(credentialCommandExitCode)
+        }
+        return
+    }
     val catalogCommandExitCode =
         runBlocking {
             runModelCatalogCommand(rawArguments.toList())
@@ -135,7 +145,8 @@ fun printHelp() {
           pi update [source|self|pi]   Update pi, extensions, or model catalogs
           pi list                      List installed extensions from settings
           pi config [-l]               Open TUI to enable/disable package resources (Tab switches scope)
-          pi <command> --help          Show help for install/remove/uninstall/update/list/config
+          pi auth <command>            Print credentials for external clients
+          pi <command> --help          Show help for install/remove/uninstall/update/list/config/auth
 
         Options:
           --provider <name>              Provider name (default: google)
@@ -183,6 +194,12 @@ fun printHelp() {
         Extensions can register additional flags (e.g., --plan from plan-mode extension).
 
         Examples:
+          # Print a provider API key for an external client
+          pi auth print-api-key --provider openai --model gpt-5.5
+
+          # Print an OAuth bearer token for an external client (refreshes if expired)
+          pi auth print-bearer-token --provider openai-codex --model gpt-5.5
+
           # Interactive mode
           pi
 

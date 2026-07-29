@@ -11,24 +11,23 @@ const { stream } = await import(
 
 const tokenUrl = "https://openrouter.ai/api/v1/auth/keys";
 const originalFetch = globalThis.fetch;
-let tokenRequest:
-	| {
-			url: string;
-			method: string;
-			headers: Record<string, string>;
-			body: Record<string, unknown>;
-	  }
-	| undefined;
+type TokenRequest = {
+	url: string;
+	method: string;
+	headers: Record<string, string>;
+	body: Record<string, unknown>;
+};
+const tokenRequests: TokenRequest[] = [];
 
 globalThis.fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 	const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 	if (url !== tokenUrl) return originalFetch(input, init);
-	tokenRequest = {
+	tokenRequests.push({
 		url,
 		method: init?.method ?? "GET",
 		headers: Object.fromEntries(new Headers(init?.headers).entries()),
 		body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
-	};
+	});
 	return new Response(JSON.stringify({ key: "openrouter-oauth-key" }), {
 		status: 200,
 		headers: { "content-type": "application/json" },
@@ -38,15 +37,22 @@ globalThis.fetch = async (input: string | URL | Request, init?: RequestInit): Pr
 let progressMessage = "";
 let authorizationUrl = "";
 let authorizationInstructions: string | undefined;
+let manualExchangeProgress = "";
+let manualCredentialResult:
+	| {
+			type: "oauth";
+			access: string;
+			refresh: string;
+			expires: number;
+	  }
+	| undefined;
 let callbackResponsePromise:
 	| Promise<{ status: number; contentType: string | null; cacheControl: string | null; success: boolean }>
 	| undefined;
 let credential;
 try {
 	credential = await openRouterOAuth.login({
-		prompt: async (prompt) => {
-			throw new Error(`Unexpected OpenRouter prompt: ${prompt.type}`);
-		},
+		prompt: () => new Promise<string>(() => {}),
 		notify: (event) => {
 			if (event.type === "progress") progressMessage = event.message;
 			if (event.type === "auth_url") {
@@ -63,10 +69,26 @@ try {
 			}
 		},
 	});
+	const manualCredential = await openRouterOAuth.login({
+		prompt: async (prompt) => {
+			if (prompt.type !== "manual_code") throw new Error(`Unexpected OpenRouter prompt: ${prompt.type}`);
+			return `${prompt.placeholder}?code=manual-oracle-code`;
+		},
+		notify: (event) => {
+			if (event.type === "progress" && event.message.startsWith("Exchanging authorization code")) {
+				manualExchangeProgress = event.message;
+			}
+		},
+	});
+	manualCredentialResult = manualCredential;
 } finally {
 	globalThis.fetch = originalFetch;
 }
-if (!tokenRequest || !callbackResponsePromise) throw new Error("OpenRouter OAuth request was not captured");
+if (tokenRequests.length !== 2 || !callbackResponsePromise || !manualCredentialResult) {
+	throw new Error("OpenRouter OAuth request was not captured");
+}
+const tokenRequest = tokenRequests[0];
+const manualTokenRequest = tokenRequests[1];
 const callbackResponse = await callbackResponsePromise;
 const refreshed = await openRouterOAuth.refresh(credential);
 const auth = await openRouterOAuth.toAuth(credential);
@@ -178,9 +200,14 @@ console.log(
 				callback: callbackResponse,
 				credential,
 				refreshUnchanged: JSON.stringify(refreshed) === JSON.stringify(credential),
-				auth,
-			},
-			provider: {
+					auth,
+				},
+				manual: {
+					code: manualTokenRequest.body.code,
+					exchangeProgress: manualExchangeProgress,
+					credential: manualCredentialResult,
+				},
+				provider: {
 				path: providerRequest.path,
 				authorization: providerRequest.headers.authorization,
 				body: providerRequest.body,

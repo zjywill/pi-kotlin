@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
@@ -53,7 +54,7 @@ fun main() =
             oauth.login(
                 object : AuthInteraction {
                     override suspend fun prompt(prompt: AuthPrompt): String =
-                        error("Unexpected OpenRouter prompt")
+                        awaitCancellation()
 
                     override fun notify(event: AuthEvent) {
                         when (event) {
@@ -89,6 +90,25 @@ fun main() =
                 },
             )
         requireNotNull(callbackThread.get()).join()
+        var manualExchangeProgress = ""
+        val manualCredential =
+            oauth.login(
+                object : AuthInteraction {
+                    override suspend fun prompt(prompt: AuthPrompt): String {
+                        require(prompt is AuthPrompt.ManualCode)
+                        return "${prompt.placeholder}?code=manual-oracle-code"
+                    }
+
+                    override fun notify(event: AuthEvent) {
+                        if (
+                            event is AuthEvent.Progress &&
+                            event.message.startsWith("Exchanging authorization code")
+                        ) {
+                            manualExchangeProgress = event.message
+                        }
+                    }
+                },
+            )
         val refreshed = oauth.refresh(credential)
         val auth = oauth.toAuth(credential)
 
@@ -132,8 +152,11 @@ fun main() =
         val authorization = URI.create(authorizationUrl)
         val authorizationQuery = parseOpenRouterOracleQuery(authorization.rawQuery)
         val callback = URI.create(authorizationQuery.getValue("callback_url"))
-        val tokenRequest = tokenRequests.single()
+        require(tokenRequests.size == 2)
+        val tokenRequest = tokenRequests.first()
+        val manualTokenRequest = tokenRequests.last()
         val tokenBody = providerJson.parseToJsonElement(tokenRequest.body).jsonObject
+        val manualTokenBody = providerJson.parseToJsonElement(manualTokenRequest.body).jsonObject
         val verifier = tokenBody.string("code_verifier").orEmpty()
         val challenge =
             MessageDigest
@@ -221,6 +244,14 @@ fun main() =
                                 put("apiKey", auth.apiKey)
                             },
                         )
+                    },
+                )
+                put(
+                    "manual",
+                    buildJsonObject {
+                        put("code", manualTokenBody.string("code"))
+                        put("exchangeProgress", manualExchangeProgress)
+                        put("credential", credentialProjection(manualCredential))
                     },
                 )
                 put(

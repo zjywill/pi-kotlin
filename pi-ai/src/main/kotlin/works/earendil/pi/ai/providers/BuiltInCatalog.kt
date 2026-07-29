@@ -10,6 +10,7 @@ import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import works.earendil.pi.ai.AssistantMessageEventStream
+import works.earendil.pi.ai.AuthResult
 import works.earendil.pi.ai.Context
 import works.earendil.pi.ai.CredentialStore
 import works.earendil.pi.ai.InMemoryCredentialStore
@@ -17,6 +18,7 @@ import works.earendil.pi.ai.InMemoryModelsStore
 import works.earendil.pi.ai.ImagesModels
 import works.earendil.pi.ai.ImagesProvider
 import works.earendil.pi.ai.Model
+import works.earendil.pi.ai.ModelAuth
 import works.earendil.pi.ai.Models
 import works.earendil.pi.ai.ModelsRefreshOptions
 import works.earendil.pi.ai.ModelsStore
@@ -201,7 +203,7 @@ private class CatalogProvider(
     override val id: String,
     override val name: String,
     private val models: List<Model>,
-    apiKeyEnvNames: List<String>,
+    private val apiKeyEnvNames: List<String>,
     override val oauth: OAuthAuth? = null,
 ) : Provider {
     override val baseUrl: String? = models.firstOrNull()?.baseUrl
@@ -283,6 +285,19 @@ private class CatalogProvider(
                     else -> error("Unsupported catalog API: $api")
                 }
             }
+
+    override fun resolveAmbientAuth(environment: (String) -> String?): AuthResult? {
+        val configured =
+            apiKeyEnvNames.firstNotNullOfOrNull { name ->
+                environment(name)
+                    ?.takeIf(String::isNotBlank)
+                    ?.let { name to it }
+            } ?: return null
+        return AuthResult(
+            auth = ModelAuth(apiKey = configured.second),
+            source = configured.first,
+        )
+    }
 
     override fun getModels(): List<Model> = models
 

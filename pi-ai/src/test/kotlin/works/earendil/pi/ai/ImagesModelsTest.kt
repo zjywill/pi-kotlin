@@ -191,6 +191,58 @@ class ImagesModelsTest {
         }
 
     @Test
+    fun `image OAuth refreshes within the default validity window`() =
+        runTest {
+            val refreshes = AtomicInteger()
+            val store =
+                InMemoryCredentialStore(
+                    mapOf(
+                        "p1" to
+                            OAuthCredential(
+                                access = "old-key",
+                                refresh = "refresh",
+                                expires = 1_060_000,
+                            ),
+                    ),
+                )
+            val oauth =
+                object : OAuthAuth {
+                    override val name: String = "Images OAuth"
+
+                    override suspend fun login(interaction: AuthInteraction): OAuthCredential =
+                        error("not used")
+
+                    override suspend fun refresh(credential: OAuthCredential): OAuthCredential {
+                        refreshes.incrementAndGet()
+                        return credential.copy(
+                            access = "fresh-key",
+                            expires = 4_600_000,
+                        )
+                    }
+
+                    override suspend fun toAuth(credential: OAuthCredential): ModelAuth =
+                        ModelAuth(apiKey = credential.access)
+                }
+            val models =
+                ImagesModels(
+                    providers =
+                        listOf(
+                            ConfigurableImagesProvider(
+                                id = "p1",
+                                oauth = oauth,
+                                initialModels = listOf(imageModel("p1", "model-a")),
+                                generate = ImagesFunction { model, _, _ -> okImages(model) },
+                            ),
+                        ),
+                    credentials = store,
+                    currentTimeMillis = { 1_000_000 },
+                )
+
+            assertEquals("fresh-key", models.getAuth("p1")?.auth?.apiKey)
+            assertEquals(1, refreshes.get())
+        }
+
+    @Test
     fun `unknown unconfigured and cancelled providers return terminal results`() =
         runTest {
             val models = ImagesModels()
