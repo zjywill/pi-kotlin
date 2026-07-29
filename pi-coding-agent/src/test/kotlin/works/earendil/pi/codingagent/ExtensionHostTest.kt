@@ -380,6 +380,12 @@ class ExtensionHostTest {
                               pi.appendEntry("command", { args });
                             },
                           });
+                          pi.registerShortcut("ctrl+y", {
+                            description: "Runs a greeting shortcut",
+                            async handler(ctx) {
+                              ctx.ui.notify("shortcut:hello", "info");
+                            },
+                          });
                           pi.on("session_start", (_event, ctx) => {
                             ctx.ui.setStatus("fixture", "started");
                           });
@@ -429,6 +435,9 @@ class ExtensionHostTest {
             assertEquals("Plan mode", host.registrations.flags.single().description)
             assertEquals(false, host.registrations.flags.single().defaultValue?.jsonPrimitive?.content?.toBoolean())
             assertEquals(setOf("session_start", "tool_call", "before_agent_start"), host.registrations.extensions.single().events)
+            val shortcut = host.registrations.extensions.single().shortcuts.single()
+            assertEquals("ctrl+y", shortcut.shortcut)
+            assertEquals("Runs a greeting shortcut", shortcut.description)
 
             val tool =
                 host.invokeTool(
@@ -460,6 +469,17 @@ class ExtensionHostTest {
                 )
             assertTrue(command.actions.any { it.type == "ui" && it.data["method"]?.jsonPrimitive?.content == "notify" })
             assertTrue(command.actions.any { it.type == "append_entry" })
+
+            val shortcutInvocation =
+                host.invokeShortcut(
+                    id = shortcut.id,
+                    context = extensionTestContext(root),
+                )
+            assertTrue(
+                shortcutInvocation.actions.any {
+                    it.type == "ui" && it.data.stringValue("message") == "shortcut:hello"
+                },
+            )
 
             val blocked =
                 host.emit(

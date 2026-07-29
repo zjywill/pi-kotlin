@@ -23,6 +23,7 @@ Run the available comparisons from the Kotlin repository:
 ./migration/oracle/compare-coding-message-projection.sh
 ./migration/oracle/compare-extension-jiti-compat.sh
 ./migration/oracle/compare-extension-runtime.sh
+./migration/oracle/compare-extension-shortcuts.sh
 ./migration/oracle/compare-github-copilot.sh
 ./migration/oracle/compare-kimi-coding-oauth.sh
 ./migration/oracle/compare-model-catalog-runtime.sh
@@ -112,6 +113,12 @@ credential fields, native auth `env`/`fileExists` correlation, model-store
 `read`/`write`/`delete`, immediate and background active-tool refresh,
 background provider discovery, request-scoped blocking TUI timeout/AbortSignal
 interruption, host lifecycle cleanup, and invalid re-registration rollback.
+
+The extension-shortcuts comparison loads the same ordered extension set into
+the upstream runner and Kotlin host. It compares reserved built-in rejection,
+allowed non-reserved overrides, user keybinding rebinding, case-insensitive
+keys, later-extension-wins ownership, diagnostics, descriptions, and the
+actions emitted by the handlers that actually win resolution.
 
 The jiti compatibility comparison loads isolated extensions through the
 upstream loader and the Kotlin distribution's vendored jiti 2.7.0 runtime. It

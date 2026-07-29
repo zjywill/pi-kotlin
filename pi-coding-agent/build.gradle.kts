@@ -73,3 +73,10 @@ tasks.register<JavaExec>("extensionJitiCompatibilityOracle") {
     mainClass = "works.earendil.pi.codingagent.ExtensionJitiCompatibilityOracleKt"
     args(rootProject.file("migration/fixtures/extension-jiti-compat").absolutePath)
 }
+
+tasks.register<JavaExec>("extensionShortcutsOracle") {
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass = "works.earendil.pi.codingagent.ExtensionShortcutsOracleKt"
+    args(rootProject.file("migration/fixtures/extension-shortcuts").absolutePath)
+}

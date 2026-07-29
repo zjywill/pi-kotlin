@@ -67,6 +67,8 @@ Last reviewed: July 29, 2026
         `read`, `write`, and `delete`
   - [x] Official jiti 2.7 TypeScript transpilation and module loading
   - [x] Blocking TUI dialog interruption on timeout and `AbortSignal`
+  - [x] Extension shortcut registration, conflict resolution, TUI dispatch,
+        `/hotkeys`, and editor-buffer preservation
   - [x] Unsolicited background registration updates after the originating
         extension invocation has returned
   - [x] Provider cancellation and extension-host lifecycle cleanup
@@ -80,15 +82,15 @@ Last reviewed: July 29, 2026
   - [x] Accept nullable array schemas with `items`
   - [x] Classify the AgentHarness v2 design document as documentation-only
 
-The latest implementation stage makes direct TUI extension dialogs
-request-scoped and cancellable. The host now handles each dialog on a separate
-worker so its response loop can continue receiving Node `ui_cancel` messages.
-Timeout and explicit `AbortSignal` cancellation remove the matching pending
-request, notify an `ExtensionUiCancellation`, interrupt the active JLine
-`readLine()` thread, wait for cleanup, and suppress late UI responses. The same
-fixture verifies timeout and abort behavior through unit tests, an installed
-JLine PTY, installed RPC JSONL, and installed server `rpc-stream`.
-`./gradlew clean test installDist` passes with 356 tests and all 18
+The latest implementation stage ports extension shortcuts end to end. The Node
+host exports stable shortcut IDs and descriptions and invokes the selected
+handler with a live TUI context. Kotlin resolves conflicts against the same
+effective built-in and user `keybindings.json` configuration as upstream:
+reserved actions stay protected, non-reserved overrides warn but run, keys are
+case-insensitive, and the later extension wins. JLine binds all editor keymaps,
+returns shortcut events to the main loop, preserves the current editor buffer,
+allows handlers to open blocking dialogs, and exposes descriptions through
+`/hotkeys`. `./gradlew clean test installDist` passes with 359 tests and all 19
 deterministic migration oracles pass. The sync audit reaches `4f0437e2`; the
 full audit remains nonzero on the seven partial areas listed below.
 
@@ -156,7 +158,7 @@ full audit remains nonzero on the seven partial areas listed below.
 - [x] Direct registration of a complete native `Provider`
 - [x] Native provider API-key `login`, `check`, and `resolve` callbacks
 - [x] Function-valued `refreshModels(context.store)`
-- [ ] Extension shortcuts
+- [x] Extension shortcuts
 - [ ] Message and session-entry renderers
 - [ ] Custom extension UI components
 - [x] Unsolicited background registration updates
@@ -191,29 +193,28 @@ full audit remains nonzero on the seven partial areas listed below.
 
 ## Next stage
 
-Implement extension shortcuts end to end: registration metadata, conflict
-handling, TUI dispatch, and installed PTY behavior. Keep renderers/custom UI
+Implement extension message and session-entry renderers across registration,
+host invocation, persisted entries, and interactive rendering. Keep custom UI
 and the other six global partial areas as separately audited slices.
 
-Evidence for the completed blocking TUI dialog interruption stage:
+Evidence for the completed extension shortcuts stage:
 
-- [x] Direct TUI handlers run asynchronously so host responses remain readable
-- [x] Request-scoped cancellation with race-safe callback registration
-- [x] Matching direct-dialog pending request removal and late-response suppression
-- [x] Bounded cleanup wait before the originating extension request resumes
-- [x] JLine `readLine()` interruption without a process-wide terminal signal
-- [x] Timeout and explicit `AbortController.abort()` regression fixture
-- [x] Existing awaited dialog and RPC EOF/shutdown tests remain unchanged
-- [x] `pi-coding-agent` with 133 tests and no failures, errors, or skips
-- [x] `./gradlew clean test installDist` with 356 tests and no failures,
+- [x] Stable host shortcut IDs, descriptions, and handler invocation
+- [x] Effective default and user `keybindings.json` resolution
+- [x] Reserved built-in shortcut protection
+- [x] Non-reserved built-in override diagnostics
+- [x] Case-insensitive keys and later-extension-wins conflict behavior
+- [x] JLine `main`, `emacs`, `vi`, menu, safe, and dumb keymap dispatch
+- [x] Editor buffer preservation across shortcut handler execution
+- [x] Shortcut handlers can open blocking extension UI dialogs
+- [x] `/hotkeys` lists extension keys and descriptions
+- [x] Independent TypeScript/Kotlin shortcut conflict and handler oracle
+- [x] `pi-coding-agent` with 136 tests and no failures, errors, or skips
+- [x] `./gradlew clean test installDist` with 359 tests and no failures,
       errors, or skips
-- [x] All 18 deterministic migration oracles
-- [x] Installed JLine PTY cancels both dialogs and restores the main prompt
-- [x] Installed `pi --mode rpc` emits input/select/notify and completes without
-      client dialog responses
-- [x] Installed `pi-server rpc-stream` emits the same events and completes the
-      slash command
-- [x] Installed server status, stop, and removed-instance read-back
+- [x] All 19 deterministic migration oracles
+- [x] Installed JLine PTY renders `/hotkeys`, dispatches raw `Ctrl-Y`, opens an
+      input dialog, emits `shortcut:Ada`, restores `/ex`, and exits after `it`
 - [x] `./migration/audit-migration.sh sync` through `4f0437e2`
 - [x] `./migration/audit-migration.sh full` confirms exactly seven remaining
       partial areas

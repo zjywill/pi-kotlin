@@ -204,6 +204,37 @@ class RpcRuntime(
     internal val pendingExtensionUiCount: Int
         get() = pendingExtensionUiRequests.size + pendingDirectExtensionUiRequests.size
 
+    internal fun extensionShortcuts(): ExtensionShortcutResolution =
+        resolveExtensionShortcuts(
+            registrations = extensionHost?.registrations?.extensions.orEmpty(),
+            resolvedKeybindings = loadExtensionShortcutKeybindings(options.agentDir),
+        )
+
+    internal suspend fun invokeExtensionShortcut(id: String): Boolean {
+        val host = extensionHost ?: return false
+        val registration =
+            host.registrations.extensions
+                .asSequence()
+                .flatMap { it.shortcuts.asSequence() }
+                .firstOrNull { it.id == id }
+                ?: return false
+        return runCatching {
+            val invocation =
+                withContext(Dispatchers.IO) {
+                    host.invokeShortcut(id, extensionContextProvider())
+                }
+            applyExtensionActions(invocation.actions)
+        }.onFailure { error ->
+            emitExtensionError(
+                ExtensionDiagnostic(
+                    extensionPath = registration.extensionPath.toString(),
+                    event = "shortcut",
+                    error = error.message ?: error::class.simpleName.orEmpty(),
+                ),
+            )
+        }.isSuccess
+    }
+
     suspend fun handleLine(line: String): JsonObject? {
         val command =
             try {

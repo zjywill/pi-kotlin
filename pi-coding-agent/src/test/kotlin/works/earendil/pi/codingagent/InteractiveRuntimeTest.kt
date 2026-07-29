@@ -466,6 +466,65 @@ class InteractiveRuntimeTest {
             assertTrue(console.output.contains("dialog-cancelled:timeout|aborted"))
         }
 
+    @Test
+    fun `interactive extension shortcuts execute handlers and preserve the editor buffer`() =
+        runTest {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                nodeAvailable(),
+                "Node.js 22+ is required for extension runtime tests",
+            )
+            val root = Files.createTempDirectory("pi-kotlin-interactive-extension-shortcut")
+            val extension =
+                root.resolve("shortcut.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          pi.registerShortcut("ctrl+y", {
+                            description: "Ask for a name",
+                            async handler(ctx) {
+                              const name = await ctx.ui.input("Shortcut name", "name");
+                              ctx.ui.notify(`shortcut:${'$'}{name}`, "info");
+                            },
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val console = ShortcutConsole()
+            val runtime =
+                InteractiveRuntime(
+                    Models(listOf(FauxProvider())),
+                    cwd = root,
+                    agentDir = Files.createDirectories(root.resolve("agent")),
+                    consoleFactory = { console },
+                )
+
+            val exit =
+                runtime.run(
+                    parseArgs(
+                        listOf(
+                            "--provider",
+                            "faux",
+                            "--model",
+                            "faux-1",
+                            "--no-session",
+                            "--extension",
+                            extension.toString(),
+                        ),
+                    ),
+                )
+
+            assertEquals(0, exit)
+            assertEquals("ctrl+y", console.shortcutKey)
+            assertEquals("draft", console.restoredBuffer)
+            assertTrue(console.output.contains("Shortcut name"))
+            assertTrue(console.output.contains("shortcut:Ada"))
+            assertTrue(console.output.contains("built-in shortcut for tui.editor.yank"))
+            assertTrue(console.output.contains("Ctrl+Y"))
+            assertTrue(console.output.contains("Ask for a name"))
+        }
+
     private fun nodeAvailable(): Boolean =
         runCatching {
             val process = ProcessBuilder("node", "--version").start()
@@ -552,6 +611,52 @@ class InteractiveRuntimeTest {
             synchronized(output) {
                 output.append("Error: ").append(text).append('\n')
             }
+        }
+    }
+
+    private class ShortcutConsole : InteractiveConsole {
+        private var mainReadCount = 0
+        val output = StringBuilder()
+        var shortcutKey: String? = null
+        var restoredBuffer: String? = null
+
+        override fun readLine(prompt: String): String? {
+            output.append(prompt)
+            return "Ada"
+        }
+
+        override fun readLineWithShortcuts(
+            prompt: String,
+            shortcuts: List<InteractiveShortcutBinding>,
+            initialBuffer: String,
+        ): InteractiveReadResult {
+            output.append(prompt)
+            return when (mainReadCount++) {
+                0 -> {
+                    val shortcut = shortcuts.single()
+                    shortcutKey = shortcut.key
+                    InteractiveReadResult.Shortcut(shortcut.id, "draft")
+                }
+
+                1 -> {
+                    restoredBuffer = initialBuffer
+                    InteractiveReadResult.Line("/hotkeys")
+                }
+
+                else -> InteractiveReadResult.Line("/exit")
+            }
+        }
+
+        override fun print(text: String) {
+            output.append(text)
+        }
+
+        override fun println(text: String) {
+            output.append(text).append('\n')
+        }
+
+        override fun error(text: String) {
+            output.append("Error: ").append(text).append('\n')
         }
     }
 }

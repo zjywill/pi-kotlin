@@ -100,10 +100,17 @@ internal data class ExtensionFlagRegistration(
     val extensionPath: Path,
 )
 
+internal data class ExtensionShortcutRegistration(
+    val id: String,
+    val shortcut: String,
+    val description: String?,
+    val extensionPath: Path,
+)
+
 internal data class ExtensionRegistration(
     val path: Path,
     val events: Set<String>,
-    val shortcuts: List<String>,
+    val shortcuts: List<ExtensionShortcutRegistration>,
     val messageRenderers: List<String>,
     val entryRenderers: List<String>,
 )
@@ -352,6 +359,18 @@ internal class ExtensionHost private constructor(
                 put("type", "invoke_command")
                 put("name", name)
                 put("args", args)
+                put("context", context)
+            },
+        )
+
+    fun invokeShortcut(
+        id: String,
+        context: JsonObject,
+    ): ExtensionInvocation =
+        invoke(
+            buildJsonObject {
+                put("type", "invoke_shortcut")
+                put("shortcutId", id)
                 put("context", context)
             },
         )
@@ -938,14 +957,25 @@ internal class ExtensionHost private constructor(
                 .orEmpty()
                 .map { element ->
                     val item = element.jsonObject
+                    val path = Path.of(requireNotNull(item.string("path"))).toAbsolutePath().normalize()
                     ExtensionRegistration(
-                        path = Path.of(requireNotNull(item.string("path"))).toAbsolutePath().normalize(),
+                        path = path,
                         events = item.stringList("events").toSet(),
                         shortcuts =
                             item["shortcuts"]
                                 ?.jsonArray
                                 .orEmpty()
-                                .mapNotNull { it.jsonObject.string("shortcut") },
+                                .mapNotNull { shortcutElement ->
+                                    val shortcut = shortcutElement.jsonObject
+                                    val id = shortcut.string("id") ?: return@mapNotNull null
+                                    val key = shortcut.string("shortcut") ?: return@mapNotNull null
+                                    ExtensionShortcutRegistration(
+                                        id = id,
+                                        shortcut = key,
+                                        description = shortcut.string("description"),
+                                        extensionPath = path,
+                                    )
+                                },
                         messageRenderers = item.stringList("messageRenderers"),
                         entryRenderers = item.stringList("entryRenderers"),
                     )

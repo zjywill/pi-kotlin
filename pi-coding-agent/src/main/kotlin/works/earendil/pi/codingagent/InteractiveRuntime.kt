@@ -19,10 +19,15 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import org.jline.keymap.KeyMap
+import org.jline.reader.Binding
 import org.jline.reader.EndOfFileException
 import org.jline.reader.LineReader
 import org.jline.reader.LineReaderBuilder
+import org.jline.reader.MaskingCallback
+import org.jline.reader.Reference
 import org.jline.reader.UserInterruptException
+import org.jline.reader.Widget
 import org.jline.terminal.Terminal
 import org.jline.terminal.TerminalBuilder
 import works.earendil.pi.ai.AuthEvent
@@ -35,6 +40,22 @@ import works.earendil.pi.ai.Provider
 import works.earendil.pi.ai.UserMessage
 import works.earendil.pi.codingagent.session.SessionManager
 
+data class InteractiveShortcutBinding(
+    val id: String,
+    val key: String,
+)
+
+sealed interface InteractiveReadResult {
+    data class Line(
+        val value: String?,
+    ) : InteractiveReadResult
+
+    data class Shortcut(
+        val id: String,
+        val buffer: String,
+    ) : InteractiveReadResult
+}
+
 interface InteractiveConsole : AutoCloseable {
     fun readLine(prompt: String): String?
 
@@ -42,6 +63,12 @@ interface InteractiveConsole : AutoCloseable {
         prompt: String,
         cancellation: ExtensionUiCancellation,
     ): String? = readLine(prompt)
+
+    fun readLineWithShortcuts(
+        prompt: String,
+        shortcuts: List<InteractiveShortcutBinding>,
+        initialBuffer: String = "",
+    ): InteractiveReadResult = InteractiveReadResult.Line(readLine(prompt))
 
     fun print(text: String)
 
@@ -174,6 +201,12 @@ class InteractiveRuntime(
 
                         "extension_ui_request" -> renderExtensionUiRequest(event, console)
 
+                        "extension_error" ->
+                            console.error(
+                                "Extension ${event.string("extensionPath").orEmpty()} " +
+                                    "${event.string("event").orEmpty()}: ${event.string("error").orEmpty()}",
+                            )
+
                         "agent_settled" -> settled.getAndSet(null)?.complete(Unit)
                     }
                 }
@@ -205,14 +238,36 @@ class InteractiveRuntime(
                         return 1
                     }
                 }
+                var editorBuffer = ""
+                val reportedShortcutDiagnostics = mutableSetOf<String>()
                 while (true) {
-                    val line =
+                    val shortcutResolution = runtime.extensionShortcuts()
+                    shortcutResolution.diagnostics.forEach { diagnostic ->
+                        if (reportedShortcutDiagnostics.add(diagnostic.error)) {
+                            console.println("Warning: ${diagnostic.error}")
+                        }
+                    }
+                    val read =
                         try {
-                            console.readLine("> ")
+                            console.readLineWithShortcuts(
+                                prompt = "> ",
+                                shortcuts =
+                                    shortcutResolution.shortcuts.values.map { shortcut ->
+                                        InteractiveShortcutBinding(shortcut.id, shortcut.shortcut)
+                                    },
+                                initialBuffer = editorBuffer,
+                            )
                         } catch (_: UserInterruptException) {
                             console.println("^C")
                             continue
                         }
+                    if (read is InteractiveReadResult.Shortcut) {
+                        editorBuffer = read.buffer
+                        runtime.invokeExtensionShortcut(read.id)
+                        continue
+                    }
+                    val line = (read as InteractiveReadResult.Line).value
+                    editorBuffer = ""
                     val input = line?.trim() ?: break
                     if (input.isEmpty()) {
                         continue
@@ -220,6 +275,7 @@ class InteractiveRuntime(
                     when {
                         input == "/exit" || input == "/quit" -> break
                         input == "/help" -> printInteractiveHelp(console)
+                        input == "/hotkeys" -> printInteractiveHotkeys(console, shortcutResolution)
                         input == "/new" || input == "/clear" ->
                             printCommandResponse(
                                 runtime.handle(buildJsonObject { put("type", "new_session") }),
@@ -865,7 +921,7 @@ private fun openBrowser(url: String) {
     }
 }
 
-private class JLineConsole(
+internal class JLineConsole(
     private val terminal: Terminal =
         TerminalBuilder
             .builder()
@@ -889,6 +945,53 @@ private class JLineConsole(
         cancellation: ExtensionUiCancellation,
     ): String? = readLineInternal(prompt, cancellation)
 
+    override fun readLineWithShortcuts(
+        prompt: String,
+        shortcuts: List<InteractiveShortcutBinding>,
+        initialBuffer: String,
+    ): InteractiveReadResult {
+        if (shortcuts.isEmpty()) {
+            return InteractiveReadResult.Line(readLineWithInitialBuffer(prompt, initialBuffer))
+        }
+        val triggered = AtomicReference<String?>(null)
+        val keyMaps: Map<String, KeyMap<Binding>> = reader.keyMaps
+        val activeKeyMaps = keyMaps.values.distinct()
+        check(activeKeyMaps.isNotEmpty()) { "JLine editor keymaps are unavailable" }
+        val previousBindings = mutableListOf<InstalledJLineBinding>()
+        val widgetNames = mutableListOf<String>()
+        shortcuts.forEachIndexed { index, shortcut ->
+            val widgetName = "pi-extension-shortcut-$index"
+            widgetNames += widgetName
+            reader.widgets[widgetName] =
+                Widget {
+                    triggered.compareAndSet(null, shortcut.id)
+                    reader.callWidget(LineReader.ACCEPT_LINE)
+                    true
+                }
+            jlineSequencesForKeyId(shortcut.key).forEach { sequence ->
+                activeKeyMaps.forEach { keyMap ->
+                    previousBindings += InstalledJLineBinding(keyMap, sequence, keyMap.getBound(sequence))
+                    keyMap.bind(Reference(widgetName), sequence)
+                }
+            }
+        }
+        return try {
+            val line = readLineWithInitialBuffer(prompt, initialBuffer)
+            triggered.get()?.let { id ->
+                InteractiveReadResult.Shortcut(id, line.orEmpty())
+            } ?: InteractiveReadResult.Line(line)
+        } finally {
+            previousBindings.forEach { installed ->
+                if (installed.previous == null) {
+                    installed.keyMap.unbind(installed.sequence)
+                } else {
+                    installed.keyMap.bind(installed.previous, installed.sequence)
+                }
+            }
+            widgetNames.forEach(reader.widgets::remove)
+        }
+    }
+
     private fun readLineInternal(
         prompt: String,
         cancellation: ExtensionUiCancellation?,
@@ -909,6 +1012,16 @@ private class JLineConsole(
             }
         }
     }
+
+    private fun readLineWithInitialBuffer(
+        prompt: String,
+        initialBuffer: String,
+    ): String? =
+        try {
+            reader.readLine(prompt, null, null as MaskingCallback?, initialBuffer)
+        } catch (_: EndOfFileException) {
+            null
+        }
 
     override fun print(text: String) {
         output.print(text)
@@ -938,10 +1051,108 @@ private class JLineConsole(
     }
 }
 
+private data class InstalledJLineBinding(
+    val keyMap: KeyMap<Binding>,
+    val sequence: String,
+    val previous: Binding?,
+)
+
+private fun jlineSequencesForKeyId(keyId: String): List<String> {
+    val parts = keyId.lowercase().split('+')
+    val rawKey = parts.lastOrNull()?.takeIf(String::isNotEmpty) ?: return emptyList()
+    val key =
+        when (rawKey) {
+            "esc" -> "escape"
+            "return" -> "enter"
+            else -> rawKey
+        }
+    val modifiers = parts.dropLast(1).toSet()
+    val sequences = linkedSetOf<String>()
+    val codepoint =
+        when (key) {
+            "escape" -> 27
+            "enter" -> 13
+            "tab" -> 9
+            "space" -> 32
+            "backspace" -> 127
+            else -> key.singleOrNull()?.code
+        }
+
+    when {
+        modifiers.isEmpty() ->
+            when (key) {
+                "escape" -> sequences += "\u001B"
+                "enter" -> sequences += "\r"
+                "tab" -> sequences += "\t"
+                "space" -> sequences += " "
+                "backspace" -> sequences += "\u007F"
+                "delete" -> sequences += "\u001B[3~"
+                "insert" -> sequences += "\u001B[2~"
+                "home" -> sequences += "\u001B[H"
+                "end" -> sequences += "\u001B[F"
+                "pageup" -> sequences += "\u001B[5~"
+                "pagedown" -> sequences += "\u001B[6~"
+                "up" -> sequences += "\u001B[A"
+                "down" -> sequences += "\u001B[B"
+                "right" -> sequences += "\u001B[C"
+                "left" -> sequences += "\u001B[D"
+                else -> key.singleOrNull()?.let { sequences += it.toString() }
+            }
+
+        modifiers == setOf("ctrl") && key.singleOrNull() != null -> {
+            val character = key.single().lowercaseChar()
+            when {
+                character in 'a'..'z' || character in setOf('[', '\\', ']', '_') ->
+                    sequences += (character.code and 0x1F).toChar().toString()
+
+                character == '-' -> sequences += "\u001F"
+            }
+        }
+
+        modifiers == setOf("alt") && key.singleOrNull() != null ->
+            sequences += KeyMap.alt(key.single())
+
+        modifiers == setOf("alt") && key == "enter" ->
+            sequences += "\u001B\r"
+
+        modifiers == setOf("shift") && key == "tab" ->
+            sequences += "\u001B[Z"
+
+        modifiers == setOf("shift") && key.singleOrNull()?.isLetter() == true ->
+            sequences += key.uppercase()
+    }
+
+    val modifierMask =
+        (if ("shift" in modifiers) 1 else 0) +
+            (if ("alt" in modifiers) 2 else 0) +
+            (if ("ctrl" in modifiers) 4 else 0) +
+            (if ("super" in modifiers) 8 else 0)
+    if (modifierMask != 0) {
+        val encodedModifier = modifierMask + 1
+        if (codepoint != null) {
+            sequences += "\u001B[$codepoint;${encodedModifier}u"
+        }
+        when (key) {
+            "up" -> sequences += "\u001B[1;${encodedModifier}A"
+            "down" -> sequences += "\u001B[1;${encodedModifier}B"
+            "right" -> sequences += "\u001B[1;${encodedModifier}C"
+            "left" -> sequences += "\u001B[1;${encodedModifier}D"
+            "home" -> sequences += "\u001B[1;${encodedModifier}H"
+            "end" -> sequences += "\u001B[1;${encodedModifier}F"
+            "insert" -> sequences += "\u001B[2;${encodedModifier}~"
+            "delete" -> sequences += "\u001B[3;${encodedModifier}~"
+            "pageup" -> sequences += "\u001B[5;${encodedModifier}~"
+            "pagedown" -> sequences += "\u001B[6;${encodedModifier}~"
+        }
+    }
+    return sequences.toList()
+}
+
 private fun printInteractiveHelp(console: InteractiveConsole) {
     console.println(
         """
         /help                         Show commands
+        /hotkeys                      Show keyboard shortcuts
         /new, /clear                  Start a new session
         /session                      Show session information
         /stats                        Show token and cost totals
@@ -956,6 +1167,39 @@ private fun printInteractiveHelp(console: InteractiveConsole) {
         """.trimIndent(),
     )
 }
+
+private fun printInteractiveHotkeys(
+    console: InteractiveConsole,
+    resolution: ExtensionShortcutResolution,
+) {
+    console.println("Keyboard Shortcuts")
+    console.println("Ctrl-D                         Exit when the editor is empty")
+    console.println("Ctrl-C                         Clear or interrupt input")
+    if (resolution.shortcuts.isNotEmpty()) {
+        console.println()
+        console.println("Extensions")
+        resolution.shortcuts.forEach { (key, shortcut) ->
+            console.println(
+                "${formatShortcutKey(key).padEnd(30)} ${shortcut.description ?: shortcut.extensionPath}",
+            )
+        }
+    }
+}
+
+private fun formatShortcutKey(key: String): String =
+    key
+        .split('+')
+        .joinToString("+") { part ->
+            when (part.lowercase()) {
+                "ctrl" -> "Ctrl"
+                "alt" -> "Alt"
+                "shift" -> "Shift"
+                "super" -> "Super"
+                "pageup" -> "PageUp"
+                "pagedown" -> "PageDown"
+                else -> part.replaceFirstChar(Char::uppercase)
+            }
+        }
 
 private fun JsonObject.string(name: String): String? = (this[name] as? JsonPrimitive)?.contentOrNull
 

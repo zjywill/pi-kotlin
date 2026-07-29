@@ -770,7 +770,8 @@ function createAPI(extension) {
 			registrationChanged();
 		},
 		registerShortcut(shortcut, options) {
-			extension.shortcuts.set(shortcut, { shortcut, ...options });
+			const id = `${extension.index}:shortcut:${shortcut}`;
+			extension.shortcuts.set(shortcut, { id, shortcut, ...options });
 			registrationChanged();
 		},
 		registerFlag(name, options) {
@@ -908,6 +909,7 @@ function registrationMetadata() {
 			path: extension.path,
 			events: [...extension.handlers.keys()],
 			shortcuts: [...extension.shortcuts.values()].map(value => ({
+				id: value.id,
 				shortcut: value.shortcut,
 				description: value.description,
 			})),
@@ -1630,6 +1632,16 @@ async function invokeCommand(request) {
 	return { result: null };
 }
 
+async function invokeShortcut(request) {
+	const registration = extensions
+		.flatMap(extension => [...extension.shortcuts.values()])
+		.find(value => value.id === request.shortcutId);
+	if (!registration) throw new Error(`Unknown extension shortcut: ${request.shortcutId}`);
+	updateState(request.context);
+	await registration.handler(contextFor(request.context));
+	return { result: null };
+}
+
 async function handle(request) {
 	currentActions = pendingBackgroundActions.splice(0);
 	try {
@@ -1649,6 +1661,9 @@ async function handle(request) {
 				break;
 			case "invoke_command":
 				response = await invokeCommand(request);
+				break;
+			case "invoke_shortcut":
+				response = await invokeShortcut(request);
 				break;
 			case "provider_stream":
 				response = await invokeProviderStream(request);
