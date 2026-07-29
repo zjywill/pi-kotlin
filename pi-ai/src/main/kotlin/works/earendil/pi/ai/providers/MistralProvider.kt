@@ -151,6 +151,8 @@ class MistralProvider(
         var responseId: String? = null
         var usage = Usage()
         var stopReason = StopReason.PENDING
+        var rawStopReason: String? = null
+        var stopError: String? = null
 
         fun snapshot(): AssistantMessage =
             AssistantMessage(
@@ -161,6 +163,8 @@ class MistralProvider(
                 responseId = responseId,
                 usage = usage,
                 stopReason = stopReason,
+                errorMessage = stopError,
+                rawStopReason = rawStopReason,
             )
 
         fun finishCurrentBlock() {
@@ -253,7 +257,12 @@ class MistralProvider(
             }
 
             val choice = chunk.array("choices")?.firstOrNull()?.jsonObject ?: return@postSse
-            choice.string("finish_reason")?.let { stopReason = mistralStopReason(it) }
+            choice.string("finish_reason")?.let { reason ->
+                rawStopReason = reason
+                val mapped = mapMistralStopReason(reason)
+                stopReason = mapped.first
+                stopError = mapped.second
+            }
             val delta = choice.obj("delta") ?: return@postSse
             when (val content = delta["content"]) {
                 is JsonPrimitive ->
@@ -330,7 +339,12 @@ class MistralProvider(
         if (stopReason == StopReason.PENDING) {
             error("Mistral stream ended without a finish reason")
         } else if (stopReason == StopReason.ERROR) {
-            stream.push(AssistantError(StopReason.ERROR, final.copy(errorMessage = "Mistral response failed")))
+            stream.push(
+                AssistantError(
+                    StopReason.ERROR,
+                    final.copy(errorMessage = stopError ?: "An unknown error occurred"),
+                ),
+            )
         } else {
             stream.push(AssistantDone(stopReason, final))
         }
@@ -741,12 +755,13 @@ private fun mistralCachedPromptTokens(
     return cached.coerceIn(0, promptTokens)
 }
 
-private fun mistralStopReason(reason: String): StopReason =
+internal fun mapMistralStopReason(reason: String): Pair<StopReason, String?> =
     when (reason) {
-        "length", "model_length" -> StopReason.LENGTH
-        "tool_calls" -> StopReason.TOOL_USE
-        "error" -> StopReason.ERROR
-        else -> StopReason.STOP
+        "stop" -> StopReason.STOP to null
+        "length", "model_length" -> StopReason.LENGTH to null
+        "tool_calls" -> StopReason.TOOL_USE to null
+        "error" -> StopReason.ERROR to "Provider stopped with: error"
+        else -> StopReason.ERROR to "Provider stopped with: $reason"
     }
 
 private fun formatMistralError(error: Throwable): String =

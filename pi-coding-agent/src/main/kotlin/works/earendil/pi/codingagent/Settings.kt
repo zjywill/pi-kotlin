@@ -68,6 +68,7 @@ internal data class SettingsSnapshot(
     val skills: List<String> = emptyList(),
     val prompts: List<String> = emptyList(),
     val themes: List<String> = emptyList(),
+    val theme: String? = null,
     val enabledModels: List<String>? = null,
     val npmCommand: List<String>? = null,
 ) {
@@ -103,6 +104,20 @@ internal class SettingsStore(
             SettingsScope.USER -> global()
             SettingsScope.PROJECT -> project()
         }.packages
+
+    fun mergedThemeSetting(): String? = project().theme ?: global().theme
+
+    fun setTheme(theme: String) {
+        withSettingsLock(globalPath) {
+            val current = readRaw(globalPath, SettingsScope.USER)
+            val updated =
+                buildJsonObject {
+                    current.forEach { (key, value) -> put(key, value) }
+                    put("theme", theme)
+                }
+            writeRaw(globalPath, updated)
+        }
+    }
 
     fun setPackages(
         scope: SettingsScope,
@@ -148,6 +163,10 @@ internal class SettingsStore(
             skills = raw.stringList("skills", path),
             prompts = raw.stringList("prompts", path),
             themes = raw.stringList("themes", path),
+            theme =
+                (raw["theme"] as? JsonPrimitive)
+                    ?.takeIf(JsonPrimitive::isString)
+                    ?.contentOrNull,
             enabledModels = raw.optionalSettingStringList("enabledModels", path),
             npmCommand =
                 raw["npmCommand"]?.let { value ->

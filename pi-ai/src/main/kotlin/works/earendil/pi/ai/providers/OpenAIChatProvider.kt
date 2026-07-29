@@ -89,6 +89,8 @@ class OpenAIChatProvider(
         val blocks = mutableListOf<works.earendil.pi.ai.ContentBlock>()
         var usage = Usage()
         var stopReason = StopReason.PENDING
+        var rawStopReason: String? = null
+        var stopError: String? = null
         var textIndex: Int? = null
         var thinkingIndex: Int? = null
         val tools = linkedMapOf<Int, StreamingTool>()
@@ -101,6 +103,8 @@ class OpenAIChatProvider(
                 model = model.id,
                 usage = usage,
                 stopReason = stopReason,
+                errorMessage = stopError,
+                rawStopReason = rawStopReason,
             )
 
         stream.push(AssistantStart(snapshot()))
@@ -231,13 +235,10 @@ class OpenAIChatProvider(
                 }
             }
             choice.string("finish_reason")?.let { reason ->
-                stopReason =
-                    when (reason) {
-                        "length" -> StopReason.LENGTH
-                        "tool_calls", "function_call" -> StopReason.TOOL_USE
-                        "content_filter" -> StopReason.ERROR
-                        else -> StopReason.STOP
-                    }
+                rawStopReason = reason
+                val mapped = mapOpenAIChatStopReason(reason)
+                stopReason = mapped.first
+                stopError = mapped.second
             }
         }
 
@@ -273,7 +274,12 @@ class OpenAIChatProvider(
         if (stopReason == StopReason.PENDING) {
             error("Stream ended without finish_reason")
         } else if (stopReason == StopReason.ERROR) {
-            stream.push(AssistantError(StopReason.ERROR, final.copy(errorMessage = "Content filtered")))
+            stream.push(
+                AssistantError(
+                    StopReason.ERROR,
+                    final.copy(errorMessage = stopError ?: "Provider returned an error stop reason"),
+                ),
+            )
         } else {
             stream.push(AssistantDone(stopReason, final))
         }
@@ -369,7 +375,12 @@ internal fun buildOpenAIChatRequestBody(
                     }
                 }
 
-                "qwen" -> put("enable_thinking", effort != null && effort != "off")
+                "qwen" -> {
+                    put("enable_thinking", effort != null && effort != "off")
+                    if (effort != null && effort != "off" && compat.supportsReasoningEffort) {
+                        put("reasoning_effort", effort)
+                    }
+                }
                 "qwen-chat-template" ->
                     put(
                         "chat_template_kwargs",
@@ -428,6 +439,14 @@ internal fun buildOpenAIChatRequestBody(
         }
     }
 }
+
+internal fun mapOpenAIChatStopReason(reason: String): Pair<StopReason, String?> =
+    when (reason) {
+        "stop", "end" -> StopReason.STOP to null
+        "length" -> StopReason.LENGTH to null
+        "function_call", "tool_calls" -> StopReason.TOOL_USE to null
+        else -> StopReason.ERROR to "Provider finish_reason: $reason"
+    }
 
 private data class OpenAIChatCompat(
     val supportsStore: Boolean,

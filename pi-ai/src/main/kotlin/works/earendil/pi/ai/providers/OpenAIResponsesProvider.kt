@@ -386,6 +386,8 @@ internal class OpenAIResponsesEventState(
     private var responseId: String? = null
     private var usage = Usage()
     private var stopReason = StopReason.PENDING
+    private var rawStopReason: String? = null
+    private var stopError: String? = null
     private var started = false
 
     var sawTerminal: Boolean = false
@@ -400,6 +402,8 @@ internal class OpenAIResponsesEventState(
             responseId = responseId,
             usage = usage,
             stopReason = stopReason,
+            errorMessage = stopError,
+            rawStopReason = rawStopReason,
         )
 
     private fun createSlot(
@@ -746,8 +750,10 @@ internal class OpenAIResponsesEventState(
                                     ),
                             )
                     }
+                val status = response.string("status")
+                rawStopReason = status
                 stopReason =
-                    when (response.string("status")) {
+                    when (status) {
                         "incomplete" -> StopReason.LENGTH
                         "failed", "cancelled" -> StopReason.ERROR
                         else -> StopReason.STOP
@@ -760,8 +766,18 @@ internal class OpenAIResponsesEventState(
             "response.failed" -> {
                 sawTerminal = true
                 val response = event.obj("response")
+                rawStopReason = response?.string("status")
                 val error = response?.obj("error")
-                error("${error?.string("code") ?: "unknown"}: ${error?.string("message") ?: "no message"}")
+                val details = response?.obj("incomplete_details")
+                stopReason = StopReason.ERROR
+                stopError =
+                    if (error != null) {
+                        "${error.string("code") ?: "unknown"}: ${error.string("message") ?: "no message"}"
+                    } else {
+                        details?.string("reason")
+                            ?.let { "incomplete: $it" }
+                            ?: "Unknown error (no error details in response)"
+                    }
             }
 
             "error" ->
@@ -780,7 +796,7 @@ internal class OpenAIResponsesEventState(
             stream.push(
                 AssistantError(
                     StopReason.ERROR,
-                    final.copy(errorMessage = "OpenAI response failed"),
+                    final.copy(errorMessage = stopError ?: "OpenAI response failed"),
                 ),
             )
         } else {

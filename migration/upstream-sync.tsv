@@ -64,4 +64,14 @@ fdbedcad8aeb7c1e2ebd3b85f16e60e5fab0b2c3	not-applicable	AgentHarness design-docu
 fb4ecd633e10680063e6cd38c607361e03c19181	covered-by-known-gap	Image fallback shortening hyperlinks and render-width clamping belong to the unported full-screen image rendering surface
 f9476a61e557bfdce2fbf3ffeaad0988fe47c184	ported	Kotlin tool validation and the virtual TypeBox compile/value modules accept nullable array schemas with items
 cced6a21da273b26ee4a23a803680614bbe8dd1e	ported	Context discovery detects nested linked worktrees and skips the shadowed main-worktree context file
+23cb385b672b4d7d552fe080fd327c5cb77e9e33	ported	Google Generative AI and Vertex terminal messages preserve raw provider finish reasons and use generic provider-stop errors
+926eb15c18ad6f03c621f5b557a13e76a1fddb51	ported	Anthropic terminal messages preserve raw stop reasons including refusal details and sensitive-content errors
+637737ca71d673b209908d17a00170040db90ba6	ported	Bedrock terminal messages preserve raw SDK stop reasons and generic provider-stop errors
+fe1c9b6d52eb011eff9891f0b7b0e117138e6fa1	ported	OpenAI Chat Completions terminal messages preserve raw finish reasons and provider error classifications
+e5ef8d0654b57f559aa427b4d89b70cd9dab3c31	ported	OpenAI Responses terminal messages preserve completed incomplete failed and cancelled response statuses
+5a53f086ee678613462e61685fee166abe22eae9	ported	Mistral terminal messages preserve raw finish reasons and classify unknown reasons as provider errors
 4f0437e2d58d651dd934119ecabea2893975f62f	not-applicable	AgentHarness v2 design document only; no runtime contract change
+4c1a0b92e50edaef297226a9edc4e04e05bd05d5	ported	Qwen Token Plan models send enable_thinking and only supported mapped reasoning_effort values
+bff5ab71743b442efa234dbed369e0a96da791f3	ported	File-backed SYSTEM.md and APPEND_SYSTEM.md sources are retained and shown before AGENTS.md startup context
+5a2539a7bdb9be06ce70f9f7ce02decece89762a	ported	Provider stop errors use the shared Provider stopped with copy across Anthropic Bedrock Google and Mistral
+d7b02636a0c7e8e615d0cff70679d18d2ff59573	not-applicable	Merge commit containing the preceding preserved-stop-reason changes

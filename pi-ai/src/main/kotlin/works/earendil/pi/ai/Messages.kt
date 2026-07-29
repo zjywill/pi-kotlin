@@ -279,6 +279,7 @@ data class AssistantMessage(
     val stopReason: StopReason = StopReason.STOP,
     val errorMessage: String? = null,
     override val timestamp: Long = System.currentTimeMillis(),
+    val rawStopReason: String? = null,
 ) : Message
 
 @Serializable

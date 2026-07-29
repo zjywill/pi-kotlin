@@ -5,7 +5,7 @@ Last reviewed: July 29, 2026
 ## Completion gate
 
 - Source repository: `/Users/junyizhang/Git/pi`
-- Reviewed source commit: `4f0437e2d58d651dd934119ecabea2893975f62f`
+- Reviewed source commit: `d7b02636a0c7e8e615d0cff70679d18d2ff59573`
 - Target repository: `/Users/junyizhang/Git/pi-kotlin`
 - The migration is complete only when:
 
@@ -22,7 +22,11 @@ Last reviewed: July 29, 2026
   - [x] Serialized `pending` stop reason for partial assistant messages
   - [x] Provider-specific errors when a stream ends without a terminal reason
   - [x] OpenAI Responses `final_answer` provisional stop and incomplete override
+  - [x] Provider-native `rawStopReason` preservation across Anthropic, Bedrock,
+        Google, Vertex, OpenAI Chat, OpenAI Responses, and Mistral
 - [x] Built-in model catalog and remote catalog refresh
+  - [x] Qwen Token Plan `enable_thinking`, supported `reasoning_effort` maps,
+        and unsupported-model exclusions
 - [x] Provider protocols and OAuth flows covered by the migration oracles
   - [x] GitHub Copilot Claude Opus 5 minimal-thinking metadata
   - [x] Configured Bedrock profile precedence over ambient AWS keys
@@ -40,6 +44,8 @@ Last reviewed: July 29, 2026
 - [x] Agent loop
 - [x] SQLite session storage
 - [x] Context files, skills, and prompt templates
+  - [x] File-backed `SYSTEM.md` and `APPEND_SYSTEM.md` source paths in startup
+        Context output before `AGENTS.md`
 - [x] Project trust
   - [x] Stored project and inherited parent decisions
   - [x] Global `defaultProjectTrust` behavior
@@ -74,7 +80,15 @@ Last reviewed: July 29, 2026
   - [x] Unsolicited background registration updates after the originating
         extension invocation has returned
   - [x] Provider cancellation and extension-host lifecycle cleanup
-- [x] Upstream coding-agent synchronization through `4f0437e2`
+- [x] Themes and resource composition
+  - [x] Upstream-compatible theme JSON validation and variable resolution
+  - [x] Built-in dark/light themes and automatic terminal appearance selection
+  - [x] Truecolor and 256-color ANSI rendering
+  - [x] Project/user/package/extension first-wins composition and diagnostics
+  - [x] Project-over-user active-theme settings
+  - [x] Named and in-memory extension theme switching
+  - [x] Persistent header/widget/footer rerendering after theme changes
+- [x] Upstream coding-agent synchronization through `d7b02636`
   - [x] Preserve package and extension metadata across resource reloads
   - [x] Route RPC `user_bash` through extension direct-result interception
   - [x] Track and cancel concurrent user bash executions independently
@@ -83,26 +97,28 @@ Last reviewed: July 29, 2026
   - [x] Avoid duplicate context files in nested linked worktrees
   - [x] Accept nullable array schemas with `items`
   - [x] Classify the AgentHarness v2 design document as documentation-only
+  - [x] Preserve raw provider stop reasons and generic provider-stop errors
+  - [x] Port Qwen Token Plan reasoning controls
+  - [x] Show system prompt file sources in startup Context output
 
-The latest implementation stage ports persistent extension component surfaces
-and focused `ctx.ui.custom()` flows. The Node host keeps stable component IDs,
-executes factories and `render(width)`, forwards `requestRender()` updates,
-disposes replaced or cleared components, exposes status/git footer data, and
-provides functional virtual `Key`, `Editor`, and `CustomEditor` primitives.
-Kotlin collects startup header/widget/footer state before the first prompt,
-renders later updates in the linear JLine UI, maps line commands to terminal key
-sequences, and restores the normal prompt after a focused custom component
-finishes. `./gradlew clean test installDist` passes with 369 tests, all 21
-deterministic migration oracles pass, and the installed 67-column PTY completes
-both selection and editor flows. The sync audit reaches `4f0437e2`; the full
-audit remains nonzero on the seven partial areas listed below.
+The latest implementation stage completes the theme subsystem and synchronizes
+through `d7b02636`. Kotlin now parses upstream-compatible themes, resolves
+variables and fallbacks, applies truecolor or 256-color ANSI output, composes
+project/user/package/extension sources, persists active settings, and exposes
+named or in-memory themes to extensions with persistent-surface rerendering.
+Provider terminal messages retain raw stop reasons, Qwen Token Plan uses the
+correct thinking controls, and startup Context output includes system prompt
+file sources. `./gradlew clean test installDist` passes with 376 tests, all 23
+deterministic migration oracles pass, the installed PTY loads a custom theme,
+and the installed server lifecycle smoke passes. The full audit remains
+nonzero on the six partial areas listed below.
 
 ## Remaining
 
 ### 1. Upstream synchronization
 
 - [x] Review and classify every commit in
-      `027a5847901b5dde30270abaa1041046cd2b4b55..4f0437e2d58d651dd934119ecabea2893975f62f`
+      `4f0437e2d58d651dd934119ecabea2893975f62f..d7b02636a0c7e8e615d0cff70679d18d2ff59573`
 - [x] OAuth five-minute refresh window and credential print commands
 - [x] OpenRouter manual redirect URL fallback
 - [x] Pending stop reason while streaming
@@ -125,6 +141,9 @@ audit remains nonzero on the seven partial areas listed below.
 - [x] Nullable array schema validation with `items`
 - [x] Classify llama streaming usage, TUI image fallback, and contributor-only
       commits against their existing migration gaps
+- [x] Raw Anthropic, Bedrock, Google, Vertex, OpenAI, and Mistral stop reasons
+- [x] Qwen Token Plan reasoning controls and catalog metadata
+- [x] Startup system/append prompt source display
 
 ### 2. CLI argument and print modes
 
@@ -183,9 +202,11 @@ audit remains nonzero on the seven partial areas listed below.
 
 ### 5. Themes and resource composition
 
-- [ ] Parse upstream-compatible theme files
-- [ ] Apply themes to terminal rendering
-- [ ] Verify package and extension theme precedence
+- [x] Parse upstream-compatible theme files
+- [x] Apply themes to terminal rendering
+- [x] Verify package and extension theme precedence
+- [x] Verify named and in-memory extension theme switching
+- [x] Verify truecolor/256-color output and automatic light/dark selection
 
 ### 6. Interactive terminal
 
@@ -211,8 +232,26 @@ audit remains nonzero on the seven partial areas listed below.
 ## Next stage
 
 Complete the remaining interactive extension integration together with the
-full-screen terminal model, while keeping theme parsing and the other global
-partial areas as separately audited slices.
+full-screen terminal model, then continue the CLI/package, HTML export, and
+RPC/server gaps as separately audited slices.
+
+Evidence for the completed theme and upstream synchronization stage:
+
+- [x] Upstream-compatible theme parsing, validation, variables, and fallbacks
+- [x] Built-in and custom light/dark selection with truecolor and 256-color ANSI
+- [x] Project/user/package/extension theme precedence and collision diagnostics
+- [x] Named and in-memory extension theme switching with persistent rerendering
+- [x] Provider-native raw stop reasons and generic provider-stop errors
+- [x] Qwen Token Plan reasoning controls and catalog metadata
+- [x] Startup Context paths for `SYSTEM.md`, `APPEND_SYSTEM.md`, and `AGENTS.md`
+- [x] `./gradlew clean test installDist` with 376 tests and no failures,
+      errors, or skips
+- [x] All 23 deterministic migration oracles
+- [x] Installed JLine PTY custom-theme and startup Context smoke
+- [x] Installed `pi-server` lifecycle and state smoke
+- [x] `./migration/audit-migration.sh sync` through `d7b02636`
+- [x] `./migration/audit-migration.sh full` confirms exactly six remaining
+      partial areas
 
 Evidence for the completed extension renderer stage:
 

@@ -78,6 +78,8 @@ interface InteractiveConsole : AutoCloseable {
 
     fun width(): Int = 80
 
+    fun supportsAnsi(): Boolean = false
+
     override fun close() = Unit
 }
 
@@ -94,7 +96,7 @@ class InteractiveRuntime(
     private var extensionFooter: List<String>? = null
     @Volatile
     private var renderLiveExtensionSurfaces = false
-    private var defaultInteractiveHeader = "pi Kotlin"
+    private var defaultInteractiveHeaderText = "pi Kotlin"
 
     suspend fun run(args: Args): Int {
         if (args.diagnostics.any { it.type == Diagnostic.Type.ERROR }) {
@@ -157,6 +159,8 @@ class InteractiveRuntime(
                         noSkills = args.noSkills,
                         promptTemplatePaths = args.promptTemplates,
                         noPromptTemplates = args.noPromptTemplates,
+                        themePaths = args.themes,
+                        noThemes = args.noThemes,
                         projectTrusted = args.projectTrustOverride,
                         extensionPaths = args.extensions,
                         noExtensions = args.noExtensions,
@@ -196,7 +200,7 @@ class InteractiveRuntime(
                 extensionFooter = null
             }
             renderLiveExtensionSurfaces = false
-            defaultInteractiveHeader = "pi Kotlin ${currentModel(runtime)}"
+            defaultInteractiveHeaderText = "pi Kotlin ${currentModel(runtime)}"
             val settled = AtomicReference<CompletableDeferred<Unit>?>(null)
             val streamedText = AtomicBoolean(false)
             val unsubscribe =
@@ -206,7 +210,7 @@ class InteractiveRuntime(
                             val assistantEvent = event["assistantMessageEvent"] as? JsonObject
                             if (assistantEvent?.string("type") == "text_delta") {
                                 assistantEvent.string("delta")?.let { delta ->
-                                    console.print(delta)
+                                    console.print(themeForeground(runtime, console, "text", delta))
                                     streamedText.set(true)
                                 }
                             }
@@ -216,7 +220,12 @@ class InteractiveRuntime(
                             if (streamedText.getAndSet(false)) {
                                 console.println()
                             }
-                            console.println("[${event.string("toolName").orEmpty()}]")
+                            val label = "[${event.string("toolName").orEmpty()}]"
+                            console.println(
+                                themeStyle(runtime, console, label) { theme, text ->
+                                    theme.bold(theme.fg("toolTitle", text))
+                                },
+                            )
                         }
 
                         "tool_execution_end" -> {
@@ -225,7 +234,7 @@ class InteractiveRuntime(
                             }
                         }
 
-                        "extension_ui_request" -> renderExtensionUiRequest(event, console)
+                        "extension_ui_request" -> renderExtensionUiRequest(event, console, runtime)
 
                         "extension_render" -> {
                             if (streamedText.get()) {
@@ -246,10 +255,18 @@ class InteractiveRuntime(
 
                         "agent_settled" -> settled.getAndSet(null)?.complete(Unit)
                     }
-                }
+            }
             try {
-                renderInteractiveHeader(console)
-                console.println("Type /help for commands. Ctrl-D or /exit quits.")
+                renderInteractiveHeader(console, runtime)
+                renderStartupContext(console, runtime)
+                console.println(
+                    themeForeground(
+                        runtime,
+                        console,
+                        "dim",
+                        "Type /help for commands. Ctrl-D or /exit quits.",
+                    ),
+                )
                 runtime.renderExtensionTranscript()
                 renderInitialExtensionSurfaces(console)
                 renderLiveExtensionSurfaces = true
@@ -284,13 +301,15 @@ class InteractiveRuntime(
                     val shortcutResolution = runtime.extensionShortcuts()
                     shortcutResolution.diagnostics.forEach { diagnostic ->
                         if (reportedShortcutDiagnostics.add(diagnostic.error)) {
-                            console.println("Warning: ${diagnostic.error}")
+                            console.println(
+                                themeForeground(runtime, console, "warning", "Warning: ${diagnostic.error}"),
+                            )
                         }
                     }
                     val read =
                         try {
                             console.readLineWithShortcuts(
-                                prompt = "> ",
+                                prompt = themeForeground(runtime, console, "accent", "> "),
                                 shortcuts =
                                     shortcutResolution.shortcuts.values.map { shortcut ->
                                         InteractiveShortcutBinding(shortcut.id, shortcut.shortcut)
@@ -328,7 +347,9 @@ class InteractiveRuntime(
                         input == "/reload" -> {
                             try {
                                 runtime.reloadResources()
-                                console.println("Reloaded resources.")
+                                console.println(
+                                    themeForeground(runtime, console, "success", "Reloaded resources."),
+                                )
                             } catch (error: Exception) {
                                 console.error(error.message ?: "Reload failed")
                             }
@@ -431,6 +452,7 @@ class InteractiveRuntime(
     private fun renderExtensionUiRequest(
         event: JsonObject,
         console: InteractiveConsole,
+        runtime: RpcRuntime,
     ) {
         when (event.string("method")) {
             "notify" -> {
@@ -452,7 +474,7 @@ class InteractiveRuntime(
 
             "setTitle" -> event.string("title")?.let { console.println(it) }
             "setWidget" -> updateExtensionWidget(event, console)
-            "setHeader" -> updateExtensionHeader(event, console)
+            "setHeader" -> updateExtensionHeader(event, console, runtime)
             "setFooter" -> updateExtensionFooter(event, console)
         }
     }
@@ -486,6 +508,7 @@ class InteractiveRuntime(
     private fun updateExtensionHeader(
         event: JsonObject,
         console: InteractiveConsole,
+        runtime: RpcRuntime,
     ) {
         val lines = event.stringLines("headerLines") ?: event.stringLines("lines")
         synchronized(extensionSurfaceLock) {
@@ -493,7 +516,7 @@ class InteractiveRuntime(
         }
         if (renderLiveExtensionSurfaces) {
             if (lines == null) {
-                console.println(defaultInteractiveHeader)
+                renderDefaultInteractiveHeader(console, runtime)
             } else {
                 renderExtensionLines(lines, console)
             }
@@ -513,14 +536,76 @@ class InteractiveRuntime(
         }
     }
 
-    private fun renderInteractiveHeader(console: InteractiveConsole) {
+    private fun renderInteractiveHeader(
+        console: InteractiveConsole,
+        runtime: RpcRuntime,
+    ) {
         val lines = synchronized(extensionSurfaceLock) { extensionHeader }
         if (lines == null) {
-            console.println(defaultInteractiveHeader)
+            renderDefaultInteractiveHeader(console, runtime)
         } else {
             renderExtensionLines(lines, console)
         }
     }
+
+    private fun renderDefaultInteractiveHeader(
+        console: InteractiveConsole,
+        runtime: RpcRuntime,
+    ) {
+        val rendered =
+            if (!console.supportsAnsi()) {
+                defaultInteractiveHeaderText
+            } else {
+                val theme = runtime.currentTheme()
+                val prefix = "pi Kotlin"
+                val suffix = defaultInteractiveHeaderText.removePrefix(prefix)
+                theme.bold(theme.fg("accent", prefix)) + theme.fg("dim", suffix)
+        }
+        console.println(rendered)
+    }
+
+    private fun renderStartupContext(
+        console: InteractiveConsole,
+        runtime: RpcRuntime,
+    ) {
+        val resources = runtime.currentPromptResources()
+        val paths =
+            buildList {
+                resources.systemPromptSourcePath?.let(::add)
+                addAll(resources.appendPromptSourcePaths)
+                resources.contextFiles.mapTo(this, ProjectContextFile::path)
+            }
+        if (paths.isEmpty()) {
+            return
+        }
+        console.println()
+        console.println(themeForeground(runtime, console, "mdHeading", "[Context]"))
+        console.println(
+            themeForeground(
+                runtime,
+                console,
+                "dim",
+                "  " + paths.joinToString(", ") { formatStartupContextPath(runtime.currentCwd(), it) },
+            ),
+        )
+    }
+
+    private fun themeForeground(
+        runtime: RpcRuntime,
+        console: InteractiveConsole,
+        color: String,
+        text: String,
+    ): String =
+        themeStyle(runtime, console, text) { theme, value ->
+            theme.fg(color, value)
+        }
+
+    private fun themeStyle(
+        runtime: RpcRuntime,
+        console: InteractiveConsole,
+        text: String,
+        style: (Theme, String) -> String,
+    ): String = if (console.supportsAnsi()) style(runtime.currentTheme(), text) else text
 
     private fun renderInitialExtensionSurfaces(console: InteractiveConsole) {
         val surfaces =
@@ -1201,6 +1286,8 @@ internal class JLineConsole(
 
     override fun width(): Int = normalizeTerminalWidth(terminal.width)
 
+    override fun supportsAnsi(): Boolean = true
+
     override fun close() {
         terminal.close()
     }
@@ -1311,6 +1398,22 @@ private fun jlineSequencesForKeyId(keyId: String): List<String> {
         }
     }
     return sequences.toList()
+}
+
+private fun formatStartupContextPath(
+    cwd: Path,
+    path: Path,
+): String {
+    val normalizedPath = path.toAbsolutePath().normalize()
+    val normalizedCwd = cwd.toAbsolutePath().normalize()
+    if (normalizedPath.startsWith(normalizedCwd)) {
+        return normalizedCwd.relativize(normalizedPath).toString().replace('\\', '/')
+    }
+    val home = defaultHomeDirectory()
+    if (normalizedPath.startsWith(home)) {
+        return "~/" + home.relativize(normalizedPath).toString().replace('\\', '/')
+    }
+    return normalizedPath.toString().replace('\\', '/')
 }
 
 private fun printInteractiveHelp(console: InteractiveConsole) {

@@ -115,6 +115,7 @@ class GoogleVertexProvider(
         var currentThinking = false
         var responseId: String? = null
         var stopReason = StopReason.PENDING
+        var rawStopReason: String? = null
         var usage = Usage()
 
         fun snapshot(): AssistantMessage =
@@ -126,6 +127,7 @@ class GoogleVertexProvider(
                 responseId = responseId,
                 usage = usage,
                 stopReason = stopReason,
+                rawStopReason = rawStopReason,
             )
 
         fun finishCurrent() {
@@ -218,7 +220,8 @@ class GoogleVertexProvider(
                 }
             }
             candidate?.string("finishReason")?.let { reason ->
-                stopReason = googleVertexStopReason(reason)
+                rawStopReason = reason
+                stopReason = mapGoogleStopReason(reason)
                 if (blocks.any { it is ToolCall }) {
                     stopReason = StopReason.TOOL_USE
                 }
@@ -241,7 +244,16 @@ class GoogleVertexProvider(
         if (stopReason == StopReason.PENDING) {
             error("Google Vertex stream ended without a finish reason")
         } else if (stopReason == StopReason.ERROR) {
-            stream.push(AssistantError(StopReason.ERROR, final.copy(errorMessage = "Google blocked the response")))
+            stream.push(
+                AssistantError(
+                    StopReason.ERROR,
+                    final.copy(
+                        errorMessage =
+                            rawStopReason?.let { "Provider stopped with: $it" }
+                                ?: "An unknown error occurred",
+                    ),
+                ),
+            )
         } else {
             stream.push(AssistantDone(stopReason, final))
         }
@@ -863,13 +875,6 @@ private fun retainSignature(
     existing: String?,
     incoming: String?,
 ): String? = incoming?.takeIf(String::isNotEmpty) ?: existing
-
-private fun googleVertexStopReason(reason: String): StopReason =
-    when (reason) {
-        "STOP" -> StopReason.STOP
-        "MAX_TOKENS" -> StopReason.LENGTH
-        else -> StopReason.ERROR
-    }
 
 private val vertexToolCounter = AtomicLong()
 private val PLACEHOLDER_API_KEY = Regex("^<[^>]+>$")

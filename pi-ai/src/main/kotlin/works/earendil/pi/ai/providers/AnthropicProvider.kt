@@ -146,6 +146,8 @@ class AnthropicProvider(
         val toolArguments = mutableMapOf<Int, String>()
         var responseId: String? = null
         var stopReason = StopReason.PENDING
+        var rawStopReason: String? = null
+        var stopError: String? = null
         var usage = Usage()
 
         fun snapshot(): AssistantMessage =
@@ -157,6 +159,8 @@ class AnthropicProvider(
                 responseId = responseId,
                 usage = usage,
                 stopReason = stopReason,
+                errorMessage = stopError,
+                rawStopReason = rawStopReason,
             )
 
         stream.push(AssistantStart(snapshot()))
@@ -313,13 +317,16 @@ class AnthropicProvider(
 
                 "message_delta" -> {
                     val delta = event.obj("delta")
-                    stopReason =
-                        when (delta?.string("stop_reason")) {
-                            "max_tokens" -> StopReason.LENGTH
-                            "tool_use" -> StopReason.TOOL_USE
-                            "refusal" -> StopReason.ERROR
-                            else -> StopReason.STOP
-                        }
+                    delta?.string("stop_reason")?.let { reason ->
+                        rawStopReason = reason
+                        val mapped =
+                            mapAnthropicStopReason(
+                                reason = reason,
+                                stopDetails = delta.obj("stop_details"),
+                            )
+                        stopReason = mapped.first
+                        stopError = mapped.second
+                    }
                     event.obj("usage")?.let { rawUsage ->
                         usage =
                             calculateUsageCost(
@@ -338,7 +345,12 @@ class AnthropicProvider(
         if (stopReason == StopReason.PENDING) {
             error("Anthropic stream ended without a stop reason")
         } else if (stopReason == StopReason.ERROR) {
-            stream.push(AssistantError(StopReason.ERROR, final.copy(errorMessage = "Anthropic refused the request")))
+            stream.push(
+                AssistantError(
+                    StopReason.ERROR,
+                    final.copy(errorMessage = stopError ?: "An unknown error occurred"),
+                ),
+            )
         } else {
             stream.push(AssistantDone(stopReason, final))
         }
@@ -544,6 +556,25 @@ private fun anthropicRequestHeaders(
         }
     }
 }
+
+internal fun mapAnthropicStopReason(
+    reason: String,
+    stopDetails: JsonObject? = null,
+): Pair<StopReason, String?> =
+    when (reason) {
+        "end_turn", "pause_turn", "stop_sequence" -> StopReason.STOP to null
+        "max_tokens" -> StopReason.LENGTH to null
+        "tool_use" -> StopReason.TOOL_USE to null
+        "refusal" ->
+            StopReason.ERROR to
+                (
+                    stopDetails?.string("explanation")
+                        ?: "The model refused to complete the request"
+                )
+
+        "sensitive" -> StopReason.ERROR to "Provider stopped with: sensitive"
+        else -> StopReason.ERROR to "Unhandled stop reason: $reason"
+    }
 
 private fun requireAnthropicRequestAuth(
     provider: String,

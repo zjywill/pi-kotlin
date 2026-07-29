@@ -216,7 +216,13 @@ try {
 				templateExpansion: expandPromptTemplate("/review \"auth flow\" strict mode", trustedPrompts.prompts),
 				trusted: {
 					systemPrompt: trusted.getSystemPrompt(),
+					systemPromptSource: trusted.getSystemPromptSource()
+						? normalizePath(trusted.getSystemPromptSource()!.path)
+						: null,
 					appendSystemPrompt: trusted.getAppendSystemPrompt(),
+					appendSystemPromptSources: trusted
+						.getAppendSystemPromptSources()
+						.map((source) => normalizePath(source.path)),
 					contextFiles: trusted
 						.getAgentsFiles()
 						.agentsFiles.map((file) => ({ path: normalizePath(file.path), content: file.content })),
@@ -228,7 +234,13 @@ try {
 				},
 				untrusted: {
 					systemPrompt: untrusted.getSystemPrompt(),
+					systemPromptSource: untrusted.getSystemPromptSource()
+						? normalizePath(untrusted.getSystemPromptSource()!.path)
+						: null,
 					appendSystemPrompt: untrusted.getAppendSystemPrompt(),
+					appendSystemPromptSources: untrusted
+						.getAppendSystemPromptSources()
+						.map((source) => normalizePath(source.path)),
 					contextFiles: untrusted
 						.getAgentsFiles()
 						.agentsFiles.map((file) => ({ path: normalizePath(file.path), content: file.content })),

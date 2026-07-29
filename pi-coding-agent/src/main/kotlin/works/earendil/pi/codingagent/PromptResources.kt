@@ -12,10 +12,13 @@ internal data class ProjectContextFile(
 
 internal data class PromptResources(
     val customPrompt: String?,
+    val systemPromptSourcePath: Path?,
     val appendPrompts: List<String>,
+    val appendPromptSourcePaths: List<Path>,
     val contextFiles: List<ProjectContextFile>,
     val skills: List<Skill>,
     val promptTemplates: List<PromptTemplate>,
+    val themeRegistry: ThemeRegistry,
     val diagnostics: List<ResourceDiagnostic>,
     val packageResources: ResolvedPackageResources,
 )
@@ -46,6 +49,8 @@ internal fun loadPromptResources(
     noSkills: Boolean = false,
     promptTemplatePaths: List<String> = emptyList(),
     noPromptTemplates: Boolean = false,
+    themePaths: List<String> = emptyList(),
+    noThemes: Boolean = false,
     projectTrusted: Boolean = false,
     homeDir: Path = defaultHomeDirectory(),
     resolvedPackageResources: ResolvedPackageResources? = null,
@@ -83,6 +88,10 @@ internal fun loadPromptResources(
                 ),
             )
         }
+    val systemPromptPath =
+        discoveredSystemPrompt?.let { resolvePromptSourcePath(it, normalizedCwd) }
+    val appendPromptPaths =
+        discoveredAppendPrompts.mapNotNull { resolvePromptSourcePath(it, normalizedCwd) }
     val loadedSkills =
         loadSkills(
             cwd = normalizedCwd,
@@ -102,7 +111,20 @@ internal fun loadPromptResources(
             projectTrusted = projectTrusted,
             defaultResources = packageResources.prompts,
         )
-    val diagnostics = loadedSkills.diagnostics + loadedPrompts.diagnostics
+    val themeRegistry =
+        createThemeRegistry(
+            cwd = normalizedCwd,
+            agentDir = normalizedAgentDir,
+            projectTrusted = projectTrusted,
+            themePaths = themePaths,
+            noThemes = noThemes,
+            homeDir = homeDir,
+            resolvedPackageResources = packageResources,
+        )
+    val diagnostics =
+        loadedSkills.diagnostics +
+            loadedPrompts.diagnostics +
+            themeRegistry.loaded.diagnostics
     diagnostics.forEach { diagnostic ->
         val path = diagnostic.path?.let { ": $it" }.orEmpty()
         onWarning("${diagnostic.message}$path")
@@ -113,10 +135,12 @@ internal fun loadPromptResources(
             discoveredSystemPrompt?.let {
                 resolvePromptInput(it, normalizedCwd, "system prompt", onWarning)
             },
+        systemPromptSourcePath = systemPromptPath,
         appendPrompts =
             discoveredAppendPrompts.map {
                 resolvePromptInput(it, normalizedCwd, "append system prompt", onWarning)
             },
+        appendPromptSourcePaths = appendPromptPaths,
         contextFiles =
             if (noContextFiles) {
                 emptyList()
@@ -125,6 +149,7 @@ internal fun loadPromptResources(
             },
         skills = loadedSkills.skills,
         promptTemplates = loadedPrompts.prompts,
+        themeRegistry = themeRegistry,
         diagnostics = diagnostics,
         packageResources = packageResources,
     )
@@ -402,6 +427,14 @@ private fun resolvePromptInput(
         input
     }
 }
+
+private fun resolvePromptSourcePath(
+    input: String,
+    cwd: Path,
+): Path? =
+    runCatching { resolvePromptPath(cwd, input) }
+        .getOrNull()
+        ?.takeIf(Files::isRegularFile)
 
 private fun resolvePromptPath(
     cwd: Path,

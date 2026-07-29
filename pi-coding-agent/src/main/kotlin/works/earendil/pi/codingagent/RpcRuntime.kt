@@ -90,6 +90,8 @@ data class RpcRuntimeOptions(
     val noSkills: Boolean = false,
     val promptTemplatePaths: List<String> = emptyList(),
     val noPromptTemplates: Boolean = false,
+    val themePaths: List<String> = emptyList(),
+    val noThemes: Boolean = false,
     val projectTrusted: Boolean? = null,
     val extensionPaths: List<String> = emptyList(),
     val noExtensions: Boolean = false,
@@ -200,6 +202,10 @@ class RpcRuntime(
     }
 
     internal fun currentCwd(): Path = sessionManager.getCwd()
+
+    internal fun currentTheme(): Theme = requireNotNull(promptResources).themeRegistry.activeTheme
+
+    internal fun currentPromptResources(): PromptResources = requireNotNull(promptResources)
 
     internal val activeBashCount: Int
         get() = activeBashes.size
@@ -1053,6 +1059,19 @@ class RpcRuntime(
         var modelRef: Model? =
             context.model?.let { models.getModel(it.provider, it.modelId) }
                 ?: models.getModels().firstOrNull()
+        val initialThemeRegistries = mutableMapOf<Boolean, ThemeRegistry>()
+
+        fun themeRegistry(trusted: Boolean): ThemeRegistry =
+            promptResources?.themeRegistry
+                ?: initialThemeRegistries.getOrPut(trusted) {
+                    createThemeRegistry(
+                        cwd = sessionManager.getCwd(),
+                        agentDir = options.agentDir,
+                        projectTrusted = trusted,
+                        themePaths = options.themePaths,
+                        noThemes = options.noThemes,
+                    )
+                }
 
         fun currentExtensionUiWidth(): Int? =
             if (options.extensionMode == ExtensionMode.TUI) {
@@ -1083,6 +1102,7 @@ class RpcRuntime(
                 flagValues = options.extensionFlagValues,
                 scopedModels = sessionScopedModels,
                 uiWidth = currentExtensionUiWidth(),
+                themeRegistry = themeRegistry(projectTrusted),
             )
         }
 
@@ -1120,6 +1140,7 @@ class RpcRuntime(
                                 projectTrusted = trusted,
                             ).scopedModels,
                         uiWidth = currentExtensionUiWidth(),
+                        themeRegistry = themeRegistry(trusted),
                     )
                 },
                 onWarning = { warning ->
@@ -1193,6 +1214,8 @@ class RpcRuntime(
                 noSkills = options.noSkills,
                 promptTemplatePaths = options.promptTemplatePaths,
                 noPromptTemplates = options.noPromptTemplates,
+                themePaths = options.themePaths,
+                noThemes = options.noThemes,
                 projectTrusted = projectTrusted,
                 resolvedPackageResources = bootstrap.packageResources,
             )
@@ -1328,6 +1351,8 @@ class RpcRuntime(
                         noSkills = options.noSkills,
                         promptTemplatePaths = options.promptTemplatePaths,
                         noPromptTemplates = options.noPromptTemplates,
+                        themePaths = options.themePaths,
+                        noThemes = options.noThemes,
                         projectTrusted = extensionContextProvider()["projectTrusted"]
                             ?.jsonPrimitive
                             ?.booleanOrNull == true,
@@ -1424,6 +1449,41 @@ class RpcRuntime(
                             agent.state.thinkingLevel = level
                             sessionManager.appendThinkingLevelChange(level.toProtocolValue())
                         }
+
+                "set_theme" -> {
+                    val name = action.data.stringValue("name")
+                    val persist =
+                        action.data.stringValue("persist")
+                            ?.toBooleanStrictOrNull()
+                            ?: true
+                    val result = name?.let { promptResources?.themeRegistry?.setTheme(it, persist) }
+                    if (result?.success != true) {
+                        emitExtensionError(
+                            ExtensionDiagnostic(
+                                extensionPath = "<action>",
+                                event = "set_theme",
+                                error = result?.error ?: "Extension requested an unavailable theme",
+                            ),
+                        )
+                    }
+                }
+
+                "set_theme_instance" -> {
+                    val value = action.data["theme"] as? JsonObject
+                    runCatching {
+                        Theme.fromExtensionJson(requireNotNull(value))
+                    }.onSuccess { theme ->
+                        promptResources?.themeRegistry?.setThemeInstance(theme)
+                    }.onFailure { error ->
+                        emitExtensionError(
+                            ExtensionDiagnostic(
+                                extensionPath = "<action>",
+                                event = "set_theme_instance",
+                                error = error.message ?: "Invalid in-memory theme",
+                            ),
+                        )
+                    }
+                }
 
                 "set_model" -> {
                     val requested = action.data["model"] as? JsonObject
@@ -1695,6 +1755,7 @@ class RpcRuntime(
                     width = renderOptions.width,
                     expanded = renderOptions.expanded,
                     outputPad = renderOptions.outputPad,
+                    context = extensionContextProvider(),
                 )
             applyExtensionActions(invocation.actions)
             parseRendererLines(invocation)
@@ -1720,6 +1781,7 @@ class RpcRuntime(
                     width = renderOptions.width,
                     expanded = renderOptions.expanded,
                     outputPad = renderOptions.outputPad,
+                    context = extensionContextProvider(),
                 )
             applyExtensionActions(invocation.actions)
             parseRendererLines(invocation)

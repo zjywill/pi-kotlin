@@ -388,6 +388,7 @@ internal class ExtensionHost private constructor(
         width: Int,
         expanded: Boolean,
         outputPad: Int,
+        context: JsonObject = JsonObject(emptyMap()),
     ): ExtensionInvocation =
         invoke(
             buildJsonObject {
@@ -400,6 +401,7 @@ internal class ExtensionHost private constructor(
                 if (kind == "message") {
                     put("outputPad", outputPad)
                 }
+                put("context", context)
             },
         )
 
@@ -1357,6 +1359,7 @@ internal fun extensionContextJson(
     flagValues: Map<String, Any>,
     scopedModels: List<ScopedModel> = emptyList(),
     uiWidth: Int? = null,
+    themeRegistry: ThemeRegistry? = null,
 ): JsonObject =
     buildJsonObject {
         put("cwd", cwd.toString())
@@ -1397,6 +1400,7 @@ internal fun extensionContextJson(
         put("hasPendingMessages", hasPendingMessages)
         put("flags", extensionFlagValuesJson(flagValues))
         uiWidth?.takeIf { it > 0 }?.let { put("uiWidth", it) }
+        themeRegistry?.extensionJson()?.forEach { (name, value) -> put(name, value) }
     }
 
 internal fun decodeExtensionToolResult(value: JsonObject): AgentToolResult =

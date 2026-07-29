@@ -168,6 +168,45 @@ payloads["openai-completions-reasoning"] = await capturePayload(
 	{ apiKey: "test", cacheRetention: "none", maxTokens: 123, reasoning: "high" },
 	true,
 );
+payloads["openai-completions-qwen-reasoning-effort"] = await capturePayload(
+	"openai-completions",
+	{
+		...fixtureModel("openai-completions", "qwen-token-plan"),
+		reasoning: true,
+		thinkingLevelMap: {
+			minimal: null,
+			low: null,
+			medium: null,
+			high: "high",
+			xhigh: null,
+			max: "max",
+		},
+		compat: {
+			thinkingFormat: "qwen",
+			supportsDeveloperRole: false,
+			supportsStore: false,
+			supportsReasoningEffort: true,
+		},
+	},
+	{ apiKey: "test", cacheRetention: "none", maxTokens: 123, reasoning: "high" },
+	true,
+);
+payloads["openai-completions-qwen-thinking-only"] = await capturePayload(
+	"openai-completions",
+	{
+		...fixtureModel("openai-completions", "qwen-token-plan"),
+		id: "qwen3.7-plus",
+		reasoning: true,
+		compat: {
+			thinkingFormat: "qwen",
+			supportsDeveloperRole: false,
+			supportsStore: false,
+			supportsReasoningEffort: false,
+		},
+	},
+	{ apiKey: "test", cacheRetention: "none", maxTokens: 123, reasoning: "high" },
+	true,
+);
 payloads["mistral-conversations-reasoning-effort"] = await capturePayload(
 	"mistral-conversations",
 	{

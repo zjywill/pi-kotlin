@@ -6,6 +6,10 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 import works.earendil.pi.ai.AuthInteraction
 import works.earendil.pi.ai.AuthOption
 import works.earendil.pi.ai.AuthPrompt
@@ -134,6 +138,129 @@ class InteractiveRuntimeTest {
             assertTrue(console.output.contains("Session:"))
             assertTrue(console.output.contains("Messages:"))
             assertTrue(console.output.contains("shell"))
+        }
+
+    @Test
+    fun `interactive mode applies the selected theme on ANSI consoles`() =
+        runTest {
+            val root = Files.createTempDirectory("pi-kotlin-interactive-theme")
+            val agentDir = Files.createDirectories(root.resolve("agent"))
+            val theme = readBuiltinThemeJson("dark").toMutableMap()
+            theme["name"] = JsonPrimitive("terminal")
+            val colors = theme.getValue("colors").jsonObject.toMutableMap()
+            colors["accent"] = JsonPrimitive(201)
+            theme["colors"] = JsonObject(colors)
+            val themesDir = Files.createDirectories(agentDir.resolve("themes"))
+            Files.writeString(
+                themesDir.resolve("renamed.json"),
+                protocolJson.encodeToString(JsonObject.serializer(), JsonObject(theme)),
+            )
+            Files.writeString(agentDir.resolve("settings.json"), """{"theme":"terminal"}""")
+            val console = ScriptedConsole(listOf("/exit"), ansi = true)
+            val runtime =
+                InteractiveRuntime(
+                    Models(listOf(FauxProvider())),
+                    cwd = root,
+                    agentDir = agentDir,
+                    consoleFactory = { console },
+                )
+
+            val exit =
+                runtime.run(
+                    parseArgs(
+                        listOf(
+                            "--provider",
+                            "faux",
+                            "--model",
+                            "faux-1",
+                            "--no-session",
+                        ),
+                    ),
+                )
+
+            assertEquals(0, exit)
+            assertTrue(console.output.contains("\u001B[38;5;201m"))
+            assertTrue(console.output.contains("\u001B[1m"))
+            assertTrue(console.output.contains("\u001B[38;5;201m> \u001B[39m"))
+        }
+
+    @Test
+    fun `interactive startup lists system append and agent context files in order`() =
+        runTest {
+            val root = Files.createTempDirectory("pi-kotlin-interactive-context")
+            val agentDir = Files.createDirectories(root.resolve("agent"))
+            Files.writeString(agentDir.resolve("SYSTEM.md"), "system")
+            Files.writeString(agentDir.resolve("APPEND_SYSTEM.md"), "append")
+            Files.writeString(root.resolve("AGENTS.md"), "context")
+            val console = ScriptedConsole(listOf("/exit"))
+            val runtime =
+                InteractiveRuntime(
+                    Models(listOf(FauxProvider())),
+                    cwd = root,
+                    agentDir = agentDir,
+                    consoleFactory = { console },
+                )
+
+            val exit =
+                runtime.run(
+                    parseArgs(
+                        listOf(
+                            "--provider",
+                            "faux",
+                            "--model",
+                            "faux-1",
+                            "--no-session",
+                        ),
+                    ),
+                )
+
+            assertEquals(0, exit)
+            val contextHeader = console.output.indexOf("[Context]")
+            val system = console.output.indexOf("SYSTEM.md")
+            val append = console.output.indexOf("APPEND_SYSTEM.md")
+            val agents = console.output.indexOf("AGENTS.md")
+            assertTrue(contextHeader >= 0)
+            assertTrue(system > contextHeader)
+            assertTrue(append > system)
+            assertTrue(agents > append)
+        }
+
+    @Test
+    fun `interactive prompt follows an in-memory theme selected by an extension`() =
+        runTest {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                nodeAvailable(),
+                "Node.js 22+ is required for extension runtime tests",
+            )
+            val projectRoot = java.nio.file.Path.of(requireNotNull(System.getProperty("pi.project.root")))
+            val extension = projectRoot.resolve("migration/fixtures/extension-theme.ts")
+            val root = Files.createTempDirectory("pi-kotlin-interactive-memory-theme")
+            val console = ScriptedConsole(listOf("/theme-probe", "/exit"), ansi = true)
+            val runtime =
+                InteractiveRuntime(
+                    Models(listOf(FauxProvider())),
+                    cwd = root,
+                    agentDir = Files.createDirectories(root.resolve("agent")),
+                    consoleFactory = { console },
+                )
+
+            val exit =
+                runtime.run(
+                    parseArgs(
+                        listOf(
+                            "--provider",
+                            "faux",
+                            "--model",
+                            "faux-1",
+                            "--no-session",
+                            "--extension",
+                            extension.toString(),
+                        ),
+                    ),
+                )
+
+            assertEquals(0, exit)
+            assertTrue(console.output.contains("\u001B[38;2;1;2;3m> \u001B[39m"))
         }
 
     @Test
@@ -710,6 +837,7 @@ class InteractiveRuntimeTest {
     private class ScriptedConsole(
         private val inputs: List<String>,
         private val terminalWidth: Int = 80,
+        private val ansi: Boolean = false,
     ) : InteractiveConsole {
         private var index = 0
         val output = StringBuilder()
@@ -732,6 +860,8 @@ class InteractiveRuntimeTest {
         }
 
         override fun width(): Int = terminalWidth
+
+        override fun supportsAnsi(): Boolean = ansi
     }
 
     private class CancellingDialogConsole : InteractiveConsole {

@@ -6,6 +6,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import works.earendil.pi.ai.AssistantDone
+import works.earendil.pi.ai.AssistantError
 import works.earendil.pi.ai.AssistantStart
 import works.earendil.pi.ai.Model
 import works.earendil.pi.ai.ModelCost
@@ -34,6 +35,10 @@ class OpenAIResponsesPendingTest {
             assertEquals(StopReason.PENDING, events.filterIsInstance<TextStart>().single().partial.stopReason)
             assertEquals(StopReason.STOP, events.filterIsInstance<TextEnd>().single().partial.stopReason)
             assertEquals(StopReason.STOP, events.filterIsInstance<AssistantDone>().single().reason)
+            assertEquals(
+                "completed",
+                events.filterIsInstance<AssistantDone>().single().message.rawStopReason,
+            )
         }
 
     @Test
@@ -51,6 +56,42 @@ class OpenAIResponsesPendingTest {
             assertEquals(StopReason.PENDING, events.filterIsInstance<AssistantStart>().single().partial.stopReason)
             assertEquals(StopReason.STOP, events.filterIsInstance<TextStart>().single().partial.stopReason)
             assertEquals(StopReason.LENGTH, events.filterIsInstance<AssistantDone>().single().reason)
+            assertEquals(
+                "incomplete",
+                events.filterIsInstance<AssistantDone>().single().message.rawStopReason,
+            )
+        }
+
+    @Test
+    fun `failed terminal event preserves raw response status`() =
+        runTest {
+            val stream = createAssistantMessageEventStream()
+            val state = OpenAIResponsesEventState(model(), stream, emptyMap())
+
+            state.handle(
+                buildJsonObject {
+                    put("type", "response.failed")
+                    put(
+                        "response",
+                        buildJsonObject {
+                            put("status", "failed")
+                            put(
+                                "error",
+                                buildJsonObject {
+                                    put("code", "policy_error")
+                                    put("message", "blocked")
+                                },
+                            )
+                        },
+                    )
+                },
+            )
+            state.finish()
+
+            val error = stream.events.toList().filterIsInstance<AssistantError>().single()
+            assertEquals(StopReason.ERROR, error.reason)
+            assertEquals("failed", error.error.rawStopReason)
+            assertEquals("policy_error: blocked", error.error.errorMessage)
         }
 
     private fun messageEvent(

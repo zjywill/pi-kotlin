@@ -26,6 +26,10 @@ class BuiltInCatalogTest {
             catalog.modelsByProvider
                 .getValue("github-copilot")
                 .single { it.id == "claude-opus-5" }
+        val qwenTokenPlan = catalog.modelsByProvider.getValue("qwen-token-plan")
+        val qwenDeepSeek = qwenTokenPlan.single { it.id == "deepseek-v4-flash" }
+        val qwen38 = qwenTokenPlan.single { it.id == "qwen3.8-max-preview" }
+        val qwenUnsupported = qwenTokenPlan.single { it.id == "qwen3.7-plus" }
 
         assertEquals(3, catalog.schemaVersion)
         Instant.parse(assertNotNull(catalog.generatedAt))
@@ -54,6 +58,38 @@ class BuiltInCatalogTest {
             "max",
             copilotOpus5.thinkingLevelMap[works.earendil.pi.ai.ModelThinkingLevel.MAX],
         )
+        assertEquals(
+            "qwen",
+            qwenDeepSeek.compat?.get("thinkingFormat")?.toString()?.trim('"'),
+        )
+        assertEquals(
+            true,
+            qwenDeepSeek.compat?.get("supportsReasoningEffort")?.toString()?.toBoolean(),
+        )
+        assertEquals(
+            "high",
+            qwenDeepSeek.thinkingLevelMap[works.earendil.pi.ai.ModelThinkingLevel.HIGH],
+        )
+        assertEquals(
+            "max",
+            qwenDeepSeek.thinkingLevelMap[works.earendil.pi.ai.ModelThinkingLevel.MAX],
+        )
+        assertEquals(
+            "xhigh",
+            qwen38.thinkingLevelMap[works.earendil.pi.ai.ModelThinkingLevel.XHIGH],
+        )
+        assertEquals(
+            null,
+            qwen38.thinkingLevelMap[works.earendil.pi.ai.ModelThinkingLevel.HIGH],
+        )
+        assertFalse(
+            qwenUnsupported.compat
+                ?.get("supportsReasoningEffort")
+                ?.toString()
+                ?.toBoolean()
+                ?: false,
+        )
+        assertTrue(qwenUnsupported.thinkingLevelMap.isEmpty())
         assertTrue(catalog.unsupportedApis.isEmpty())
     }
 

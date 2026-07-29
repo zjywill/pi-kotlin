@@ -235,6 +235,50 @@ fun main() {
                 ),
             )
             put(
+                "openai-completions-qwen-reasoning-effort",
+                buildOpenAIChatRequestBody(
+                    fixtureModel("openai-completions", provider = "qwen-token-plan").copy(
+                        reasoning = true,
+                        thinkingLevelMap =
+                            mapOf(
+                                ModelThinkingLevel.MINIMAL to null,
+                                ModelThinkingLevel.LOW to null,
+                                ModelThinkingLevel.MEDIUM to null,
+                                ModelThinkingLevel.HIGH to "high",
+                                ModelThinkingLevel.XHIGH to null,
+                                ModelThinkingLevel.MAX to "max",
+                            ),
+                        compat =
+                            buildJsonObject {
+                                put("thinkingFormat", "qwen")
+                                put("supportsDeveloperRole", false)
+                                put("supportsStore", false)
+                                put("supportsReasoningEffort", true)
+                            },
+                    ),
+                    context,
+                    options.copy(temperature = null, reasoning = ThinkingLevel.HIGH),
+                ),
+            )
+            put(
+                "openai-completions-qwen-thinking-only",
+                buildOpenAIChatRequestBody(
+                    fixtureModel("openai-completions", provider = "qwen-token-plan").copy(
+                        id = "qwen3.7-plus",
+                        reasoning = true,
+                        compat =
+                            buildJsonObject {
+                                put("thinkingFormat", "qwen")
+                                put("supportsDeveloperRole", false)
+                                put("supportsStore", false)
+                                put("supportsReasoningEffort", false)
+                            },
+                    ),
+                    context,
+                    options.copy(temperature = null, reasoning = ThinkingLevel.HIGH),
+                ),
+            )
+            put(
                 "mistral-conversations-reasoning-effort",
                 buildMistralRequestBody(
                     fixtureModel("mistral-conversations", provider = "mistral").copy(

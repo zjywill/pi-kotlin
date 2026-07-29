@@ -26,6 +26,7 @@ Run the available comparisons from the Kotlin repository:
 ./migration/oracle/compare-extension-renderers.sh
 ./migration/oracle/compare-extension-runtime.sh
 ./migration/oracle/compare-extension-shortcuts.sh
+./migration/oracle/compare-extension-theme.sh
 ./migration/oracle/compare-github-copilot.sh
 ./migration/oracle/compare-kimi-coding-oauth.sh
 ./migration/oracle/compare-model-catalog-runtime.sh
@@ -38,6 +39,7 @@ Run the available comparisons from the Kotlin repository:
 ./migration/oracle/compare-radius.sh
 ./migration/oracle/compare-resource-loading.sh
 ./migration/oracle/compare-session-jsonl.sh
+./migration/oracle/compare-theme-runtime.sh
 ./migration/oracle/compare-xai-oauth.sh
 ```
 
@@ -84,8 +86,9 @@ rewrite diagnostics.
 The resource-loading comparison covers YAML frontmatter, quoted prompt
 arguments, positional/default/slice substitution, project-over-user collision
 precedence, `.pi` and `.agents` skill discovery, manual-only skills, prompt
-templates, source metadata, context/system/append prompts, trusted versus
-untrusted project resources, and inherited persisted trust decisions.
+templates, source metadata, context/system/append prompts, file-backed system
+and append prompt source paths, trusted versus untrusted project resources, and
+inherited persisted trust decisions.
 
 The package-resources comparison covers user/project settings, local package
 manifests, package filters, enabled/disabled resource state, source metadata,
@@ -128,6 +131,14 @@ selection, message and entry payloads, `expanded`, `outputPad`, terminal width,
 `Box`/`Text` component output, undefined renderers, and thrown renderers after
 ANSI normalization.
 
+The theme-runtime comparison covers built-in and file-backed JSON parsing,
+required tokens, variable references, missing/cyclic reference failures,
+`thinkingMax` fallback, truecolor and 256-color ANSI output, light/dark
+selection, resource precedence, collision diagnostics, and active-theme
+settings. The extension-theme comparison covers named and in-memory
+`ctx.ui.setTheme()` calls, failed-name dark fallback without persistence, and
+immediate rerendering of persistent header/widget/footer components.
+
 The jiti compatibility comparison loads isolated extensions through the
 upstream loader and the Kotlin distribution's vendored jiti 2.7.0 runtime. It
 compares extensionless imports, directory indexes, ESM/CommonJS interoperability,
@@ -152,12 +163,16 @@ The provider stream comparison projects the documented public event transcript:
 event type, index, delta/end content, tool calls, and terminal messages. It does
 not compare `partial` object snapshots because the TypeScript implementation
 queues mutable references whose observed historical state depends on consumer
-timing.
+timing. Terminal message projection includes provider-native `rawStopReason`
+values.
 
 Provider payload and stream comparisons cover OpenAI Chat Completions, OpenAI
 Responses, Azure OpenAI Responses, Anthropic Messages, Google Generative AI,
 Google Vertex AI, Mistral Conversations, Amazon Bedrock ConverseStream, and
 OpenAI Codex Responses over SSE and WebSocket.
+OpenAI Chat payload cases additionally compare Qwen Token Plan
+`enable_thinking`, supported `reasoning_effort` mappings, and unsupported-model
+omission.
 Vertex independently compares SDK
 parameters, public stream events, the collection-scoped request URL, and
 `x-goog-api-key`; Kotlin unit fixtures additionally cover ADC bearer tokens and

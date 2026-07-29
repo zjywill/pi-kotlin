@@ -94,3 +94,16 @@ tasks.register<JavaExec>("extensionCustomUiOracle") {
     mainClass = "works.earendil.pi.codingagent.ExtensionCustomUiOracleKt"
     args(rootProject.file("migration/fixtures/extension-custom-ui.ts").absolutePath)
 }
+
+tasks.register<JavaExec>("themeRuntimeOracle") {
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass = "works.earendil.pi.codingagent.ThemeRuntimeOracleKt"
+}
+
+tasks.register<JavaExec>("extensionThemeOracle") {
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass = "works.earendil.pi.codingagent.ExtensionThemeOracleKt"
+    args(rootProject.file("migration/fixtures/extension-theme.ts").absolutePath)
+}

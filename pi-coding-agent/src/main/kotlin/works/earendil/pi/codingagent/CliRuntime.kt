@@ -102,6 +102,19 @@ class CliRuntime(
         var modelRef: Model? =
             initialContext.model?.let { models.getModel(it.provider, it.modelId) }
                 ?: models.getModels().firstOrNull()
+        val initialThemeRegistries = mutableMapOf<Boolean, ThemeRegistry>()
+
+        fun themeRegistry(trusted: Boolean): ThemeRegistry =
+            promptResourcesRef?.themeRegistry
+                ?: initialThemeRegistries.getOrPut(trusted) {
+                    createThemeRegistry(
+                        cwd = runtimeCwd,
+                        agentDir = agentDir,
+                        projectTrusted = trusted,
+                        themePaths = args.themes,
+                        noThemes = args.noThemes,
+                    )
+                }
 
         fun currentExtensionContext(): JsonObject {
             val state = agentRef?.state
@@ -121,6 +134,7 @@ class CliRuntime(
                 hasPendingMessages = agentRef?.hasQueuedMessages() == true,
                 flagValues = args.unknownFlags,
                 scopedModels = scopedModels,
+                themeRegistry = themeRegistry(projectTrusted),
             )
         }
 
@@ -169,6 +183,31 @@ class CliRuntime(
                                 agentRef?.state?.thinkingLevel = level
                                 sessionManager.appendThinkingLevelChange(level.toProtocolValue())
                             }
+
+                    "set_theme" -> {
+                        val name = action.data.stringValue("name")
+                        val persist =
+                            action.data.stringValue("persist")
+                                ?.toBooleanStrictOrNull()
+                                ?: true
+                        val result = name?.let { promptResourcesRef?.themeRegistry?.setTheme(it, persist) }
+                        if (result?.success != true) {
+                            stderr.println(
+                                "Warning: ${result?.error ?: "Extension requested an unavailable theme"}",
+                            )
+                        }
+                    }
+
+                    "set_theme_instance" -> {
+                        val value = action.data["theme"] as? JsonObject
+                        runCatching {
+                            Theme.fromExtensionJson(requireNotNull(value))
+                        }.onSuccess { theme ->
+                            promptResourcesRef?.themeRegistry?.setThemeInstance(theme)
+                        }.onFailure { error ->
+                            stderr.println("Warning: ${error.message ?: "Invalid in-memory theme"}")
+                        }
+                    }
 
                     "send_message" ->
                         appendExtensionMessage(sessionManager, action.data["message"])
@@ -254,6 +293,7 @@ class CliRuntime(
                                     agentDir = agentDir,
                                     projectTrusted = trusted,
                                 ).scopedModels,
+                            themeRegistry = themeRegistry(trusted),
                         )
                     },
                     onWarning = { stderr.println("Warning: $it") },
@@ -313,6 +353,8 @@ class CliRuntime(
                 noSkills = args.noSkills,
                 promptTemplatePaths = args.promptTemplates,
                 noPromptTemplates = args.noPromptTemplates,
+                themePaths = args.themes,
+                noThemes = args.noThemes,
                 projectTrusted = projectTrusted,
                 resolvedPackageResources = bootstrap.packageResources,
                 onWarning = { stderr.println("Warning: $it") },
@@ -477,6 +519,8 @@ class CliRuntime(
                         noSkills = args.noSkills,
                         promptTemplatePaths = args.promptTemplates,
                         noPromptTemplates = args.noPromptTemplates,
+                        themePaths = args.themes,
+                        noThemes = args.noThemes,
                         projectTrusted = projectTrusted,
                         resolvedPackageResources = bootstrap.packageResources.merge(extensionResources),
                         onWarning = { stderr.println("Warning: $it") },

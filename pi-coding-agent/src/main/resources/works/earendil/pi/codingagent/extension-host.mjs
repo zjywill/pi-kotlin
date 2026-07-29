@@ -152,8 +152,120 @@ export const parseFrontmatter = content => {
 export const withFileMutationQueue = async callback => callback();
 export const convertToLlm = messages => messages;
 export const serializeConversation = messages => JSON.stringify(messages);
-export const getMarkdownTheme = () => ({});
-export const getSettingsListTheme = () => ({});
+const cubeValues = [0, 95, 135, 175, 215, 255];
+const grayValues = Array.from({ length: 24 }, (_, index) => 8 + index * 10);
+const closestIndex = (value, choices) => choices
+	.map((choice, index) => ({ index, distance: Math.abs(value - choice) }))
+	.sort((a, b) => a.distance - b.distance)[0].index;
+const colorDistance = (r1, g1, b1, r2, g2, b2) =>
+	(r1 - r2) ** 2 * 0.299 + (g1 - g2) ** 2 * 0.587 + (b1 - b2) ** 2 * 0.114;
+const rgbTo256 = (red, green, blue) => {
+	const redIndex = closestIndex(red, cubeValues);
+	const greenIndex = closestIndex(green, cubeValues);
+	const blueIndex = closestIndex(blue, cubeValues);
+	const cubeIndex = 16 + 36 * redIndex + 6 * greenIndex + blueIndex;
+	const cubeDistance = colorDistance(
+		red,
+		green,
+		blue,
+		cubeValues[redIndex],
+		cubeValues[greenIndex],
+		cubeValues[blueIndex],
+	);
+	const gray = Math.round(0.299 * red + 0.587 * green + 0.114 * blue);
+	const grayIndex = closestIndex(gray, grayValues);
+	const grayValue = grayValues[grayIndex];
+	const grayDistance = colorDistance(red, green, blue, grayValue, grayValue, grayValue);
+	return Math.max(red, green, blue) - Math.min(red, green, blue) < 10 && grayDistance < cubeDistance
+		? 232 + grayIndex
+		: cubeIndex;
+};
+const colorAnsi = (value, mode, background) => {
+	const prefix = background ? 48 : 38;
+	if (value === "") return "\x1b[" + (background ? 49 : 39) + "m";
+	if (Number.isInteger(value) && value >= 0 && value <= 255) {
+		return "\x1b[" + prefix + ";5;" + value + "m";
+	}
+	if (typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value)) {
+		const red = Number.parseInt(value.slice(1, 3), 16);
+		const green = Number.parseInt(value.slice(3, 5), 16);
+		const blue = Number.parseInt(value.slice(5, 7), 16);
+		return mode === "truecolor"
+			? "\x1b[" + prefix + ";2;" + red + ";" + green + ";" + blue + "m"
+			: "\x1b[" + prefix + ";5;" + rgbTo256(red, green, blue) + "m";
+	}
+	throw new Error("Invalid color value: " + value);
+};
+export class Theme {
+	constructor(fgColors = {}, bgColors = {}, mode = "truecolor", options = {}) {
+		this.name = options.name;
+		this.sourcePath = options.sourcePath;
+		const foreground = { ...fgColors };
+		if (foreground.thinkingMax === undefined) foreground.thinkingMax = foreground.thinkingXhigh;
+		this.__piThemeDescriptor = {
+			name: options.name ?? "<in-memory>",
+			...(options.sourcePath ? { path: options.sourcePath } : {}),
+			colorMode: mode,
+			fgAnsi: Object.fromEntries(
+				Object.entries(foreground).map(([name, value]) => [name, colorAnsi(value, mode, false)]),
+			),
+			bgAnsi: Object.fromEntries(
+				Object.entries(bgColors).map(([name, value]) => [name, colorAnsi(value, mode, true)]),
+			),
+		};
+	}
+	fg(color, text) {
+		return this.getFgAnsi(color) + String(text) + "\x1b[39m";
+	}
+	bg(color, text) {
+		return this.getBgAnsi(color) + String(text) + "\x1b[49m";
+	}
+	bold(text) {
+		return "\x1b[1m" + String(text) + "\x1b[22m";
+	}
+	italic(text) {
+		return "\x1b[3m" + String(text) + "\x1b[23m";
+	}
+	underline(text) {
+		return "\x1b[4m" + String(text) + "\x1b[24m";
+	}
+	strikethrough(text) {
+		return "\x1b[9m" + String(text) + "\x1b[29m";
+	}
+	inverse(text) {
+		return "\x1b[7m" + String(text) + "\x1b[27m";
+	}
+	getFgAnsi(color) {
+		const ansi = this.__piThemeDescriptor.fgAnsi[color];
+		if (ansi === undefined) throw new Error("Unknown theme color: " + color);
+		return ansi;
+	}
+	getBgAnsi(color) {
+		const ansi = this.__piThemeDescriptor.bgAnsi[color];
+		if (ansi === undefined) throw new Error("Unknown theme background color: " + color);
+		return ansi;
+	}
+	getColorMode() {
+		return this.__piThemeDescriptor.colorMode;
+	}
+	getThinkingBorderColor(level) {
+		const colors = {
+			off: "thinkingOff",
+			minimal: "thinkingMinimal",
+			low: "thinkingLow",
+			medium: "thinkingMedium",
+			high: "thinkingHigh",
+			xhigh: "thinkingXhigh",
+			max: "thinkingMax",
+		};
+		return text => this.fg(colors[level] ?? "thinkingOff", text);
+	}
+	getBashModeBorderColor() {
+		return text => this.fg("bashMode", text);
+	}
+}
+export const getMarkdownTheme = () => globalThis.__piMarkdownTheme?.() ?? {};
+export const getSettingsListTheme = () => globalThis.__piSettingsListTheme?.() ?? {};
 const unsupported = name => (..._args) => { throw new Error(name + " is not available in the pi-kotlin extension host"); };
 export const createBashTool = unsupported("createBashTool");
 export const createEditTool = unsupported("createEditTool");
@@ -603,6 +715,8 @@ const state = {
 	activeTools: [],
 	allTools: [],
 	uiWidth: 80,
+	theme: undefined,
+	themes: [],
 	flags: new Map(),
 };
 let extensions = [];
@@ -630,44 +744,94 @@ const persistentUiComponents = {
 };
 let activeCustomComponent;
 
-const rendererTheme = {
-	fg(_color, text) {
-		return String(text);
-	},
-	bg(_color, text) {
-		return String(text);
-	},
+function createRendererTheme(descriptorProvider) {
+	const descriptor = () => descriptorProvider?.() ?? {};
+	const available = () => descriptor().fgAnsi && descriptor().bgAnsi;
+	const foreground = color => descriptor().fgAnsi?.[color];
+	const background = color => descriptor().bgAnsi?.[color];
+	return {
+		get name() {
+			return descriptor().name;
+		},
+		get sourcePath() {
+			return descriptor().path;
+		},
+		fg(color, text) {
+			const ansi = foreground(color);
+			return ansi === undefined ? String(text) : `${ansi}${String(text)}\x1b[39m`;
+		},
+		bg(color, text) {
+			const ansi = background(color);
+			return ansi === undefined ? String(text) : `${ansi}${String(text)}\x1b[49m`;
+		},
 	bold(text) {
-		return String(text);
+			return available() ? `\x1b[1m${String(text)}\x1b[22m` : String(text);
 	},
 	italic(text) {
-		return String(text);
+			return available() ? `\x1b[3m${String(text)}\x1b[23m` : String(text);
 	},
 	underline(text) {
-		return String(text);
+			return available() ? `\x1b[4m${String(text)}\x1b[24m` : String(text);
 	},
 	strikethrough(text) {
-		return String(text);
+			return available() ? `\x1b[9m${String(text)}\x1b[29m` : String(text);
 	},
 	inverse(text) {
-		return String(text);
+			return available() ? `\x1b[7m${String(text)}\x1b[27m` : String(text);
 	},
-	getFgAnsi() {
-		return "";
+		getFgAnsi(color) {
+			return foreground(color) ?? "";
 	},
-	getBgAnsi() {
-		return "";
+		getBgAnsi(color) {
+			return background(color) ?? "";
 	},
 	getColorMode() {
-		return "truecolor";
+			return descriptor().colorMode ?? "truecolor";
 	},
-	getThinkingBorderColor() {
-		return text => String(text);
+		getThinkingBorderColor(level) {
+			const colors = {
+				off: "thinkingOff",
+				minimal: "thinkingMinimal",
+				low: "thinkingLow",
+				medium: "thinkingMedium",
+				high: "thinkingHigh",
+				xhigh: "thinkingXhigh",
+				max: "thinkingMax",
+			};
+			return text => this.fg(colors[level] ?? "thinkingOff", text);
 	},
 	getBashModeBorderColor() {
-		return text => String(text);
-	},
-};
+			return text => this.fg("bashMode", text);
+		},
+	};
+}
+
+const rendererTheme = createRendererTheme(() => state.theme);
+globalThis.__piRendererTheme = rendererTheme;
+globalThis.__piMarkdownTheme = () => ({
+	heading: text => rendererTheme.fg("mdHeading", text),
+	link: text => rendererTheme.fg("mdLink", text),
+	linkUrl: text => rendererTheme.fg("mdLinkUrl", text),
+	code: text => rendererTheme.fg("mdCode", text),
+	codeBlock: text => rendererTheme.fg("mdCodeBlock", text),
+	codeBlockBorder: text => rendererTheme.fg("mdCodeBlockBorder", text),
+	quote: text => rendererTheme.fg("mdQuote", text),
+	quoteBorder: text => rendererTheme.fg("mdQuoteBorder", text),
+	hr: text => rendererTheme.fg("mdHr", text),
+	listBullet: text => rendererTheme.fg("mdListBullet", text),
+	bold: text => rendererTheme.bold(text),
+	italic: text => rendererTheme.italic(text),
+	underline: text => rendererTheme.underline(text),
+	strikethrough: text => rendererTheme.strikethrough(text),
+});
+globalThis.__piSettingsListTheme = () => ({
+	label: (text, selected) => (selected ? rendererTheme.fg("accent", text) : text),
+	value: (text, selected) =>
+		selected ? rendererTheme.fg("accent", text) : rendererTheme.fg("muted", text),
+	description: text => rendererTheme.fg("dim", text),
+	cursor: rendererTheme.fg("accent", "→ "),
+	hint: text => rendererTheme.fg("dim", text),
+});
 
 function normalizedUiWidth() {
 	return Math.max(1, Number.isInteger(state.uiWidth) ? state.uiWidth : 80);
@@ -745,6 +909,12 @@ function persistentUiPayload(record, lines) {
 function emitPersistentUiComponent(record) {
 	if (!activePersistentUiComponent(record)) return;
 	action("ui", persistentUiPayload(record, renderUiComponent(record.component, record.label)));
+}
+
+function rerenderPersistentUiComponents() {
+	for (const record of persistentUiComponents.widgets.values()) emitPersistentUiComponent(record);
+	emitPersistentUiComponent(persistentUiComponents.header);
+	emitPersistentUiComponent(persistentUiComponents.footer);
 }
 
 function createVirtualTui(onRequestRender) {
@@ -1058,6 +1228,8 @@ function updateState(context = {}) {
 		"activeTools",
 		"allTools",
 		"uiWidth",
+		"theme",
+		"themes",
 	]) {
 		if (Object.hasOwn(context, name)) state[name] = context[name];
 	}
@@ -1328,20 +1500,47 @@ function createUI() {
 			}
 		},
 		getAllThemes() {
-			return [];
+			return (state.themes ?? []).map(theme => ({
+				name: theme.name,
+				path: theme.path ?? undefined,
+			}));
 		},
-		getTheme() {
-			return undefined;
+		getTheme(name) {
+			const entry = (state.themes ?? []).find(theme => theme.name === name);
+			return entry ? createRendererTheme(() => entry.theme) : undefined;
 		},
-		setTheme() {
-			return { success: false, error: "Themes are not available in the pi-kotlin extension host" };
+		setTheme(themeOrName) {
+			if (typeof themeOrName !== "string") {
+				const descriptor = themeOrName?.__piThemeDescriptor;
+				if (!descriptor) {
+					return { success: false, error: "Invalid in-memory theme" };
+				}
+				state.theme = descriptor;
+				action("set_theme_instance", { theme: descriptor });
+				rerenderPersistentUiComponents();
+				return { success: true };
+			}
+			const entry = (state.themes ?? []).find(theme => theme.name === themeOrName);
+			if (!entry) {
+				const fallback = (state.themes ?? []).find(theme => theme.name === "dark");
+				if (fallback) {
+					state.theme = fallback.theme;
+					action("set_theme", { name: "dark", persist: false });
+					rerenderPersistentUiComponents();
+				}
+				return { success: false, error: `Theme not found: ${themeOrName}` };
+			}
+			state.theme = entry.theme;
+			action("set_theme", { name: themeOrName });
+			rerenderPersistentUiComponents();
+			return { success: true };
 		},
 		getToolsExpanded() {
 			return false;
 		},
 		setToolsExpanded() {},
 		get theme() {
-			return {};
+			return rendererTheme;
 		},
 	};
 }
@@ -2329,6 +2528,7 @@ function rendererRegistration(kind, rendererId) {
 function invokeRenderer(request) {
 	const registration = rendererRegistration(request.kind, request.rendererId);
 	if (!registration) throw new Error(`Unknown extension ${request.kind} renderer: ${request.rendererId}`);
+	updateState(request.context);
 	const width = Math.max(1, Number.isInteger(request.width) ? request.width : 80);
 	const options = {
 		expanded: request.expanded === true,

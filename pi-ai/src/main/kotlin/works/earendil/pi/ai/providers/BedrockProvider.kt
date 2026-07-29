@@ -258,6 +258,7 @@ internal class BedrockStreamState(
     private val providerIndexes = mutableMapOf<Int, Int>()
     private val toolArguments = mutableMapOf<Int, String>()
     private var stopReason = StopReason.PENDING
+    private var rawStopReason: String? = null
     private var stopError: String? = null
     private var usage = Usage()
 
@@ -295,6 +296,7 @@ internal class BedrockStreamState(
 
             is BedrockStreamEvent.ContentStop -> finishBlock(event.index)
             is BedrockStreamEvent.MessageStop -> {
+                rawStopReason = event.reason
                 val mapped = mapBedrockStopReason(event.reason)
                 stopReason = mapped.first
                 stopError = mapped.second
@@ -410,6 +412,7 @@ internal class BedrockStreamState(
             model = model.id,
             usage = usage,
             stopReason = stopReason,
+            rawStopReason = rawStopReason,
         )
 }
 
@@ -1222,13 +1225,13 @@ private fun sanitizeBedrockSurrogates(value: String): String {
     return output.toString()
 }
 
-private fun mapBedrockStopReason(reason: String?): Pair<StopReason, String?> =
+internal fun mapBedrockStopReason(reason: String?): Pair<StopReason, String?> =
     when (reason) {
         "end_turn", "stop_sequence" -> StopReason.STOP to null
         "max_tokens", "model_context_window_exceeded" -> StopReason.LENGTH to null
         "tool_use" -> StopReason.TOOL_USE to null
         null -> StopReason.ERROR to null
-        else -> StopReason.ERROR to reason
+        else -> StopReason.ERROR to "Provider stopped with: $reason"
     }
 
 private fun formatBedrockError(error: Throwable): String {

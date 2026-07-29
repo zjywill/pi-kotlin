@@ -127,7 +127,16 @@ private fun resourcesJson(
         } else {
             put("systemPrompt", resources.customPrompt)
         }
+        if (resources.systemPromptSourcePath == null) {
+            put("systemPromptSource", JsonNull)
+        } else {
+            put("systemPromptSource", relativePath(root, resources.systemPromptSourcePath))
+        }
         put("appendSystemPrompt", JsonArray(resources.appendPrompts.map(::jsonString)))
+        put(
+            "appendSystemPromptSources",
+            JsonArray(resources.appendPromptSourcePaths.map { jsonString(relativePath(root, it)) }),
+        )
         put(
             "contextFiles",
             buildJsonArray {

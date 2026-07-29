@@ -38,6 +38,7 @@ through the commit recorded in `sync-state.tsv`.
 - `./migration/oracle/compare-extension-renderers.sh`
 - `./migration/oracle/compare-extension-runtime.sh`
 - `./migration/oracle/compare-extension-shortcuts.sh`
+- `./migration/oracle/compare-extension-theme.sh`
 - `./migration/oracle/compare-github-copilot.sh`
 - `./migration/oracle/compare-kimi-coding-oauth.sh`
 - `./migration/oracle/compare-model-catalog-runtime.sh`
@@ -50,6 +51,7 @@ through the commit recorded in `sync-state.tsv`.
 - `./migration/oracle/compare-radius.sh`
 - `./migration/oracle/compare-resource-loading.sh`
 - `./migration/oracle/compare-session-jsonl.sh`
+- `./migration/oracle/compare-theme-runtime.sh`
 - `./migration/oracle/compare-xai-oauth.sh`
 - Installed CLI and server smoke tests for process-level changes
 

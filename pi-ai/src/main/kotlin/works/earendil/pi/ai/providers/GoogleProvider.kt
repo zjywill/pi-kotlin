@@ -98,6 +98,7 @@ class GoogleProvider(
         var currentThinking = false
         var responseId: String? = null
         var stopReason = StopReason.PENDING
+        var rawStopReason: String? = null
         var usage = Usage()
 
         fun snapshot(): AssistantMessage =
@@ -109,6 +110,7 @@ class GoogleProvider(
                 responseId = responseId,
                 usage = usage,
                 stopReason = stopReason,
+                rawStopReason = rawStopReason,
             )
 
         fun finishCurrent() {
@@ -199,12 +201,8 @@ class GoogleProvider(
                 }
             }
             candidate?.string("finishReason")?.let { reason ->
-                stopReason =
-                    when (reason) {
-                        "MAX_TOKENS" -> StopReason.LENGTH
-                        "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII" -> StopReason.ERROR
-                        else -> StopReason.STOP
-                    }
+                rawStopReason = reason
+                stopReason = mapGoogleStopReason(reason)
                 if (blocks.any { it is ToolCall }) {
                     stopReason = StopReason.TOOL_USE
                 }
@@ -227,7 +225,16 @@ class GoogleProvider(
         if (stopReason == StopReason.PENDING) {
             error("Google stream ended without a finish reason")
         } else if (stopReason == StopReason.ERROR) {
-            stream.push(AssistantError(StopReason.ERROR, final.copy(errorMessage = "Google blocked the response")))
+            stream.push(
+                AssistantError(
+                    StopReason.ERROR,
+                    final.copy(
+                        errorMessage =
+                            rawStopReason?.let { "Provider stopped with: $it" }
+                                ?: "An unknown error occurred",
+                    ),
+                ),
+            )
         } else {
             stream.push(AssistantDone(stopReason, final))
         }
@@ -586,5 +593,12 @@ private fun isGemini3Flash(model: Model): Boolean {
 
 private fun isGemma4(model: Model): Boolean =
     Regex("gemma-?4").containsMatchIn(model.id.lowercase())
+
+internal fun mapGoogleStopReason(reason: String): StopReason =
+    when (reason) {
+        "STOP" -> StopReason.STOP
+        "MAX_TOKENS" -> StopReason.LENGTH
+        else -> StopReason.ERROR
+    }
 
 private val toolCounter = AtomicLong()

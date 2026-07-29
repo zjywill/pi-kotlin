@@ -51,7 +51,9 @@ class PromptResourcesTest {
         val prompt = buildCodingSystemPrompt(project, emptyList(), resources)
 
         assertEquals("custom prompt", resources.customPrompt)
+        assertEquals(project.resolve("custom.md"), resources.systemPromptSourcePath)
         assertEquals(listOf("append prompt"), resources.appendPrompts)
+        assertEquals(listOf(project.resolve("append.md")), resources.appendPromptSourcePaths)
         assertTrue(resources.contextFiles.isEmpty())
         assertTrue(prompt.startsWith("custom prompt\n\nappend prompt"))
         assertFalse(prompt.contains("<project_context>"))
@@ -67,14 +69,33 @@ class PromptResourcesTest {
         Files.writeString(agentDir.resolve("SYSTEM.md"), "global system")
         Files.writeString(project.resolve(".pi").resolve("SYSTEM.md"), "project system")
 
-        assertEquals(
-            "global system",
-            loadPromptResources(project, agentDir, projectTrusted = false).customPrompt,
-        )
-        assertEquals(
-            "project system",
-            loadPromptResources(project, agentDir, projectTrusted = true).customPrompt,
-        )
+        val untrusted = loadPromptResources(project, agentDir, projectTrusted = false)
+        val trusted = loadPromptResources(project, agentDir, projectTrusted = true)
+
+        assertEquals("global system", untrusted.customPrompt)
+        assertEquals(agentDir.resolve("SYSTEM.md"), untrusted.systemPromptSourcePath)
+        assertEquals("project system", trusted.customPrompt)
+        assertEquals(project.resolve(".pi").resolve("SYSTEM.md"), trusted.systemPromptSourcePath)
+    }
+
+    @Test
+    fun `literal prompt overrides do not report file sources`() {
+        val root = Files.createTempDirectory("pi-kotlin-literal-prompt-sources")
+        val agentDir = Files.createDirectories(root.resolve("agent"))
+        val project = Files.createDirectories(root.resolve("project"))
+
+        val resources =
+            loadPromptResources(
+                cwd = project,
+                agentDir = agentDir,
+                systemPromptSource = "literal system",
+                appendPromptSources = listOf("literal append"),
+            )
+
+        assertEquals("literal system", resources.customPrompt)
+        assertEquals(null, resources.systemPromptSourcePath)
+        assertEquals(listOf("literal append"), resources.appendPrompts)
+        assertTrue(resources.appendPromptSourcePaths.isEmpty())
     }
 
     @Test
