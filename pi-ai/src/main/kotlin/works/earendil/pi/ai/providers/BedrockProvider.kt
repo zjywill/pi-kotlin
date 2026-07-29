@@ -257,7 +257,7 @@ internal class BedrockStreamState(
     private val blocks = mutableListOf<PiContentBlock>()
     private val providerIndexes = mutableMapOf<Int, Int>()
     private val toolArguments = mutableMapOf<Int, String>()
-    private var stopReason = StopReason.STOP
+    private var stopReason = StopReason.PENDING
     private var stopError: String? = null
     private var usage = Usage()
 
@@ -314,6 +314,9 @@ internal class BedrockStreamState(
     }
 
     fun finish() {
+        check(stopReason != StopReason.PENDING) {
+            "Bedrock stream ended without a stop reason"
+        }
         val final = snapshot()
         if (stopReason == StopReason.ERROR || stopReason == StopReason.ABORTED) {
             error(stopError ?: "An unknown error occurred")
@@ -507,7 +510,10 @@ internal fun resolveBedrockClientConfiguration(
 
     val configuredRegion = options.region?.takeIf(String::isNotBlank) ?: env("AWS_REGION") ?: env("AWS_DEFAULT_REGION")
     val ambientProfile = environment("AWS_PROFILE")?.takeIf(String::isNotBlank)
-    val profile = options.profile?.takeIf(String::isNotBlank) ?: env("AWS_PROFILE")
+    val optionsProfile =
+        options.profile?.takeIf(String::isNotBlank)
+            ?: options.env["AWS_PROFILE"]?.takeIf(String::isNotBlank)
+    val profile = optionsProfile ?: ambientProfile
     val endpointRegion = standardBedrockEndpointRegion(model.baseUrl)
     val explicitEndpoint = endpointRegion == null || (configuredRegion == null && ambientProfile == null)
     val arnRegion =
@@ -531,6 +537,7 @@ internal fun resolveBedrockClientConfiguration(
         when {
             skipAuth -> BedrockAuthMode.SKIP
             bearer != null -> BedrockAuthMode.BEARER
+            optionsProfile != null -> BedrockAuthMode.PROFILE
             accessKeyId != null && secretAccessKey != null -> BedrockAuthMode.ACCESS_KEY
             profile != null -> BedrockAuthMode.PROFILE
             else -> BedrockAuthMode.DEFAULT

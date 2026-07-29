@@ -449,6 +449,82 @@ class BedrockProviderTest {
     }
 
     @Test
+    fun `explicit and scoped profiles override ambient access keys`() {
+        val model = bedrockModel("model")
+        val ambientKeys =
+            mapOf(
+                "AWS_ACCESS_KEY_ID" to "ambient-access",
+                "AWS_SECRET_ACCESS_KEY" to "ambient-secret",
+            )
+
+        val explicit =
+            resolveBedrockClientConfiguration(
+                model,
+                StreamOptions(profile = "explicit-profile"),
+                ambientKeys::get,
+            )
+        assertEquals(BedrockAuthMode.PROFILE, explicit.authMode)
+        assertEquals("explicit-profile", explicit.profile)
+        assertNull(explicit.accessKeyId)
+
+        val scoped =
+            resolveBedrockClientConfiguration(
+                model,
+                StreamOptions(env = mapOf("AWS_PROFILE" to "scoped-profile")),
+                ambientKeys::get,
+            )
+        assertEquals(BedrockAuthMode.PROFILE, scoped.authMode)
+        assertEquals("scoped-profile", scoped.profile)
+        assertNull(scoped.accessKeyId)
+    }
+
+    @Test
+    fun `stream state rejects missing Bedrock stop reason`() {
+        val state =
+            BedrockStreamState(
+                bedrockModel("model"),
+                works.earendil.pi.ai.createAssistantMessageEventStream(),
+            )
+        state.handle(BedrockStreamEvent.MessageStart("assistant"))
+
+        val error =
+            kotlin.test.assertFailsWith<IllegalStateException> {
+                state.finish()
+            }
+
+        assertEquals("Bedrock stream ended without a stop reason", error.message)
+    }
+
+    @Test
+    fun `ambient access keys remain preferred with no profile or only ambient profile`() {
+        val model = bedrockModel("model")
+        val ambientKeys =
+            mapOf(
+                "AWS_ACCESS_KEY_ID" to "ambient-access",
+                "AWS_SECRET_ACCESS_KEY" to "ambient-secret",
+            )
+
+        val withoutProfile =
+            resolveBedrockClientConfiguration(
+                model,
+                StreamOptions(),
+                ambientKeys::get,
+            )
+        assertEquals(BedrockAuthMode.ACCESS_KEY, withoutProfile.authMode)
+        assertEquals("ambient-access", withoutProfile.accessKeyId)
+
+        val withAmbientProfile =
+            resolveBedrockClientConfiguration(
+                model,
+                StreamOptions(),
+                (ambientKeys + ("AWS_PROFILE" to "ambient-profile"))::get,
+            )
+        assertEquals(BedrockAuthMode.ACCESS_KEY, withAmbientProfile.authMode)
+        assertEquals("ambient-profile", withAmbientProfile.profile)
+        assertEquals("ambient-access", withAmbientProfile.accessKeyId)
+    }
+
+    @Test
     fun `filters reserved custom headers case insensitively`() {
         val headers =
             bedrockCustomHeaders(

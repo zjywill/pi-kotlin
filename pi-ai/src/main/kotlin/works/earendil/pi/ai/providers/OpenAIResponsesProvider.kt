@@ -136,6 +136,7 @@ class OpenAIResponsesProvider(
                 stream = stream,
                 grammarToolInputProperties = grammarToolInputProperties,
                 usageCostMultiplier = request.usageCostMultiplier,
+                pendingStopReasonMessage = request.pendingStopReasonMessage,
             )
         val bodyJson = providerJson.encodeToString(JsonObject.serializer(), body)
         if (request.eventStream != null) {
@@ -159,6 +160,7 @@ class OpenAIResponsesProvider(
                 options.timeoutMs,
                 options.maxRetries,
                 options.maxRetryDelayMs,
+                fetch = options.fetch,
                 shouldStop = { request.stopAfterTerminal && state.sawTerminal },
             ) { sse ->
                 if (sse.data.isBlank() || sse.data == "[DONE]") {
@@ -376,13 +378,14 @@ internal class OpenAIResponsesEventState(
     private val stream: AssistantMessageEventStream,
     private val grammarToolInputProperties: Map<String, String>,
     private val usageCostMultiplier: (JsonObject) -> Double = { 1.0 },
+    private val pendingStopReasonMessage: String = "OpenAI Responses stream ended without a stop reason",
 ) {
     private val blocks = mutableListOf<works.earendil.pi.ai.ContentBlock>()
     private val slots = mutableMapOf<Int, Slot>()
     private val reasoningBlocksById = mutableMapOf<String, Int>()
     private var responseId: String? = null
     private var usage = Usage()
-    private var stopReason = StopReason.STOP
+    private var stopReason = StopReason.PENDING
     private var started = false
 
     var sawTerminal: Boolean = false
@@ -404,6 +407,7 @@ internal class OpenAIResponsesEventState(
         item: JsonObject,
     ): Slot? {
         slots[outputIndex]?.let { return it }
+        applyMessagePhaseStopReason(item)
         val contentIndex = blocks.size
         val slot =
             when (item.string("type")) {
@@ -578,6 +582,7 @@ internal class OpenAIResponsesEventState(
             "response.output_item.done" -> {
                 val outputIndex = event.int("output_index") ?: return
                 val item = event.obj("item") ?: return
+                applyMessagePhaseStopReason(item)
                 when (val slot = slots[outputIndex] ?: createSlot(outputIndex, item)) {
                     is Slot.Text -> {
                         val text =
@@ -769,6 +774,7 @@ internal class OpenAIResponsesEventState(
 
     fun finish() {
         check(sawTerminal) { "OpenAI Responses stream ended before a terminal response event" }
+        check(stopReason != StopReason.PENDING) { pendingStopReasonMessage }
         val final = snapshot()
         if (stopReason == StopReason.ERROR) {
             stream.push(
@@ -779,6 +785,12 @@ internal class OpenAIResponsesEventState(
             )
         } else {
             stream.push(AssistantDone(stopReason, final))
+        }
+    }
+
+    private fun applyMessagePhaseStopReason(item: JsonObject) {
+        if (item.string("type") == "message" && item.string("phase") == "final_answer") {
+            stopReason = StopReason.STOP
         }
     }
 
@@ -821,6 +833,7 @@ internal data class OpenAIResponsesHttpRequest(
     val encodeBody: ((String) -> ByteArray)? = null,
     val usageCostMultiplier: (JsonObject) -> Double = { 1.0 },
     val eventStream: (suspend (JsonObject, (JsonObject) -> Unit) -> Unit)? = null,
+    val pendingStopReasonMessage: String = "OpenAI Responses stream ended without a stop reason",
 )
 
 internal fun buildOpenAIResponsesRequestBody(

@@ -16,6 +16,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import works.earendil.pi.ai.ProviderHttpRequest
+import works.earendil.pi.ai.ProviderHttpTransport
+import works.earendil.pi.ai.ProviderHttpTransportResponse
 
 data class SseEvent(
     val event: String?,
@@ -43,49 +46,53 @@ internal suspend fun postJson(
     timeoutMs: Long?,
     maxRetries: Int? = null,
     maxRetryDelayMs: Long? = null,
+    fetch: ProviderHttpTransport? = null,
 ): ProviderHttpResponse =
     withContext(Dispatchers.IO) {
-        val requestHeaders =
-            linkedMapOf(
-                "accept" to "application/json",
-                "content-type" to "application/json",
-            )
-        headers.forEach { (name, value) ->
-            requestHeaders.keys
-                .firstOrNull { it.equals(name, ignoreCase = true) }
-                ?.let(requestHeaders::remove)
-            requestHeaders[name] = value
-        }
-        val builder =
-            HttpRequest
-                .newBuilder(URI.create(url))
-                .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
-        timeoutMs?.let { builder.timeout(Duration.ofMillis(it)) }
-        requestHeaders.forEach(builder::header)
-        val request = builder.build()
         val response =
             retryProviderRequest(maxRetries, maxRetryDelayMs) {
                 val candidate =
-                    client.send(
-                        request,
-                        HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8),
+                    executeProviderHttpRequest(
+                        client = client,
+                        fetch = fetch,
+                        request =
+                            ProviderHttpRequest(
+                                method = "POST",
+                                url = url,
+                                headers =
+                                    providerRequestHeaders(
+                                        defaults =
+                                            mapOf(
+                                                "accept" to "application/json",
+                                                "content-type" to "application/json",
+                                            ),
+                                        overrides = headers,
+                                    ),
+                                body = body.toByteArray(StandardCharsets.UTF_8),
+                                timeoutMs = timeoutMs,
+                            ),
                     )
-                if (candidate.statusCode() !in 200..299) {
-                    val errorBody = candidate.body()
+                if (candidate.status !in 200..299) {
+                    val errorBody =
+                        candidate.use {
+                            it.body.readAllBytes().toString(StandardCharsets.UTF_8)
+                        }
                     throw ProviderHttpException(
-                        status = candidate.statusCode(),
-                        headers = candidate.headers().map(),
-                        message = "Provider returned HTTP ${candidate.statusCode()}: ${errorBody.take(4000)}",
+                        status = candidate.status,
+                        headers = candidate.headers,
+                        message = "Provider returned HTTP ${candidate.status}: ${errorBody.take(4000)}",
                         body = errorBody,
                     )
                 }
                 candidate
             }
-        ProviderHttpResponse(
-            status = response.statusCode(),
-            headers = response.headers().map(),
-            body = response.body(),
-        )
+        response.use {
+            ProviderHttpResponse(
+                status = it.status,
+                headers = it.headers,
+                body = it.body.readAllBytes().toString(StandardCharsets.UTF_8),
+            )
+        }
     }
 
 internal suspend fun postSse(
@@ -96,6 +103,7 @@ internal suspend fun postSse(
     timeoutMs: Long?,
     maxRetries: Int? = null,
     maxRetryDelayMs: Long? = null,
+    fetch: ProviderHttpTransport? = null,
     onEvent: (SseEvent) -> Unit,
 ): Map<String, List<String>> =
     postSse(
@@ -106,6 +114,7 @@ internal suspend fun postSse(
         timeoutMs = timeoutMs,
         maxRetries = maxRetries,
         maxRetryDelayMs = maxRetryDelayMs,
+        fetch = fetch,
         onEvent = onEvent,
     )
 
@@ -117,77 +126,109 @@ internal suspend fun postSse(
     timeoutMs: Long?,
     maxRetries: Int? = null,
     maxRetryDelayMs: Long? = null,
+    fetch: ProviderHttpTransport? = null,
     shouldStop: () -> Boolean = { false },
     onEvent: (SseEvent) -> Unit,
 ): Map<String, List<String>> =
     withContext(Dispatchers.IO) {
-        val requestHeaders =
-            linkedMapOf(
-                "accept" to "text/event-stream",
-                "content-type" to "application/json",
-            )
-        headers.forEach { (name, value) ->
-            requestHeaders.keys
-                .firstOrNull { it.equals(name, ignoreCase = true) }
-                ?.let(requestHeaders::remove)
-            requestHeaders[name] = value
-        }
-        val builder =
-            HttpRequest
-                .newBuilder(URI.create(url))
-                .POST(HttpRequest.BodyPublishers.ofByteArray(body))
-        timeoutMs?.let { builder.timeout(Duration.ofMillis(it)) }
-        requestHeaders.forEach(builder::header)
-        val request = builder.build()
         val response =
             retryProviderRequest(maxRetries, maxRetryDelayMs) {
                 val candidate =
-                    client.send(
-                        request,
-                        HttpResponse.BodyHandlers.ofInputStream(),
+                    executeProviderHttpRequest(
+                        client = client,
+                        fetch = fetch,
+                        request =
+                            ProviderHttpRequest(
+                                method = "POST",
+                                url = url,
+                                headers =
+                                    providerRequestHeaders(
+                                        defaults =
+                                            mapOf(
+                                                "accept" to "text/event-stream",
+                                                "content-type" to "application/json",
+                                            ),
+                                        overrides = headers,
+                                    ),
+                                body = body,
+                                timeoutMs = timeoutMs,
+                            ),
                     )
-                if (candidate.statusCode() !in 200..299) {
-                    val errorBody = candidate.body().readBytes().toString(StandardCharsets.UTF_8)
+                if (candidate.status !in 200..299) {
+                    val errorBody =
+                        candidate.use {
+                            it.body.readAllBytes().toString(StandardCharsets.UTF_8)
+                        }
                     throw ProviderHttpException(
-                        status = candidate.statusCode(),
-                        headers = candidate.headers().map(),
-                        message = "Provider returned HTTP ${candidate.statusCode()}: ${errorBody.take(4000)}",
+                        status = candidate.status,
+                        headers = candidate.headers,
+                        message = "Provider returned HTTP ${candidate.status}: ${errorBody.take(4000)}",
                         body = errorBody,
                     )
                 }
                 candidate
             }
 
-        BufferedReader(InputStreamReader(response.body(), StandardCharsets.UTF_8)).use { reader ->
-            var eventName: String? = null
-            val data = mutableListOf<String>()
+        response.use {
+            BufferedReader(InputStreamReader(it.body, StandardCharsets.UTF_8)).use { reader ->
+                var eventName: String? = null
+                val data = mutableListOf<String>()
 
-            fun flush() {
-                if (eventName != null || data.isNotEmpty()) {
-                    onEvent(SseEvent(eventName, data.joinToString("\n")))
-                }
-                eventName = null
-                data.clear()
-            }
-
-            while (true) {
-                val line = reader.readLine() ?: break
-                when {
-                    line.isEmpty() -> {
-                        flush()
-                        if (shouldStop()) break
+                fun flush() {
+                    if (eventName != null || data.isNotEmpty()) {
+                        onEvent(SseEvent(eventName, data.joinToString("\n")))
                     }
-                    line.startsWith(":") -> Unit
-                    line.startsWith("event:") -> eventName = line.removePrefix("event:").trimStart()
-                    line.startsWith("data:") -> data += line.removePrefix("data:").trimStart()
+                    eventName = null
+                    data.clear()
+                }
+
+                while (true) {
+                    val line = reader.readLine() ?: break
+                    when {
+                        line.isEmpty() -> {
+                            flush()
+                            if (shouldStop()) break
+                        }
+                        line.startsWith(":") -> Unit
+                        line.startsWith("event:") -> eventName = line.removePrefix("event:").trimStart()
+                        line.startsWith("data:") -> data += line.removePrefix("data:").trimStart()
+                    }
+                }
+                if (!shouldStop()) {
+                    flush()
                 }
             }
-            if (!shouldStop()) {
-                flush()
-            }
+            it.headers
         }
-        response.headers().map()
     }
+
+internal suspend fun executeProviderHttpRequest(
+    client: HttpClient,
+    fetch: ProviderHttpTransport?,
+    request: ProviderHttpRequest,
+): ProviderHttpTransportResponse =
+    fetch?.fetch(request)
+        ?: withContext(Dispatchers.IO) {
+            val builder =
+                HttpRequest
+                    .newBuilder(URI.create(request.url))
+                    .method(
+                        request.method,
+                        HttpRequest.BodyPublishers.ofByteArray(request.body),
+                    )
+            request.timeoutMs?.let { builder.timeout(Duration.ofMillis(it)) }
+            request.headers.forEach(builder::header)
+            val response =
+                client.send(
+                    builder.build(),
+                    HttpResponse.BodyHandlers.ofInputStream(),
+                )
+            ProviderHttpTransportResponse(
+                status = response.statusCode(),
+                headers = response.headers().map(),
+                body = response.body(),
+            )
+        }
 
 internal suspend fun <T> retryProviderRequest(
     maxRetries: Int?,
@@ -259,5 +300,19 @@ private fun retryBackoffDelayMs(retryIndex: Int): Long {
     val exponential = (500L shl retryIndex.coerceAtMost(4)).coerceAtMost(8_000)
     return (exponential * ThreadLocalRandom.current().nextDouble(0.75, 1.0)).toLong()
 }
+
+private fun providerRequestHeaders(
+    defaults: Map<String, String>,
+    overrides: Map<String, String>,
+): Map<String, String> =
+    linkedMapOf<String, String>().apply {
+        putAll(defaults)
+        overrides.forEach { (name, value) ->
+            keys
+                .firstOrNull { it.equals(name, ignoreCase = true) }
+                ?.let(::remove)
+            put(name, value)
+        }
+    }
 
 private const val DEFAULT_MAX_RETRY_DELAY_MS = 60_000L

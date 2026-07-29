@@ -125,6 +125,15 @@ class FauxProvider(
                 usage = estimateUsage(response, context, options),
             )
         emitContentEvents(stream, finalMessage)
+        if (finalMessage.stopReason == StopReason.PENDING) {
+            val error =
+                finalMessage.copy(
+                    stopReason = StopReason.ERROR,
+                    errorMessage = "Faux response ended without a stop reason",
+                )
+            stream.push(AssistantError(StopReason.ERROR, error))
+            return stream
+        }
         val terminal =
             if (finalMessage.stopReason == StopReason.ERROR || finalMessage.stopReason == StopReason.ABORTED) {
                 AssistantError(finalMessage.stopReason, finalMessage)
@@ -139,7 +148,11 @@ class FauxProvider(
         stream: AssistantMessageEventStream,
         finalMessage: AssistantMessage,
     ) {
-        var partial = finalMessage.copy(content = emptyList())
+        var partial =
+            finalMessage.copy(
+                content = emptyList(),
+                stopReason = StopReason.PENDING,
+            )
         stream.push(AssistantStart(partial))
         for ((index, block) in finalMessage.content.withIndex()) {
             partial = partial.copy(content = partial.content + emptyVersion(block))

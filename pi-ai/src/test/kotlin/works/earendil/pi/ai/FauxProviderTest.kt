@@ -31,6 +31,7 @@ class FauxProviderTest {
             assertEquals("faux-1", response.model)
             assertTrue(response.usage.input > 0)
             assertTrue(response.usage.output > 0)
+            assertEquals(StopReason.PENDING, (events.first() as AssistantStart).partial.stopReason)
             assertTrue(events.last() is AssistantDone)
             assertEquals(1, provider.state.callCount)
         }
@@ -112,5 +113,28 @@ class FauxProviderTest {
             assertTrue(events.single() is AssistantError)
             assertEquals(StopReason.ERROR, response.stopReason)
             assertEquals("No more faux responses queued", response.errorMessage)
+        }
+
+    @Test
+    fun `queued response without a terminal stop reason fails`() =
+        runTest {
+            val provider = FauxProvider()
+            val model = requireNotNull(provider.getModel())
+            provider.setResponses(
+                listOf(
+                    FauxResponseStep.Message(
+                        fauxAssistantMessage("partial", StopReason.PENDING),
+                    ),
+                ),
+            )
+
+            val stream = provider.stream(model, Context())
+            val events = stream.events.toList()
+            val response = stream.result()
+
+            assertTrue(events.none { it is AssistantDone })
+            assertTrue(events.last() is AssistantError)
+            assertEquals(StopReason.ERROR, response.stopReason)
+            assertEquals("Faux response ended without a stop reason", response.errorMessage)
         }
 }

@@ -33,8 +33,10 @@ translation or to a later upstream sync.
 - Java 21 runtime.
 - Kotlin coroutines model asynchronous streams and parallel tool execution.
 - Kotlin serialization owns JSON and JSONL contracts.
-- JVM `HttpClient` is the default provider transport; provider SDKs are added
-  only where protocol complexity requires them.
+- JVM `HttpClient` is the default provider transport; `StreamOptions.fetch` and
+  `ImagesOptions.fetch` provide per-request HTTP injection for supported
+  adapters, while WebSockets and SDK transports remain independent. Provider
+  SDKs are added only where protocol complexity requires them.
 - Node/Bun distribution scripts become Gradle application distributions.
 - TypeBox schemas become JSON Schema values with a compatibility validator.
 
@@ -89,10 +91,12 @@ features outside that slice remain migration work.
 
 ## Verification snapshot
 
-Verified on July 27, 2026 against source commit
-`cee5ff7520d8828bed9955ef00419e995d1f91e0`:
+Verified on July 29, 2026 against source commit
+`027a5847901b5dde30270abaa1041046cd2b4b55`. The synchronization manifest
+remains at `cee5ff7520d8828bed9955ef00419e995d1f91e0` until the complete upstream
+range is classified:
 
-- `./gradlew clean test installDist`: passed, 282 tests, 0 failures, 0 errors,
+- `./gradlew clean test installDist`: passed, 321 tests, 0 failures, 0 errors,
   and 0 skipped.
 - `./migration/oracle/compare-cli-help.sh`: passed with byte-for-byte CLI help
   parity.
@@ -128,7 +132,8 @@ Verified on July 27, 2026 against source commit
   enterprise-domain device OAuth, GitHub and Copilot token requests, all-model
   policy enablement, account model filtering, credential-specific
   `proxy-ep` base URL derivation, 10 Anthropic/7 Chat Completions/12 Responses
-  model counts, and user/agent/vision dynamic headers.
+  model counts, Claude Opus 5 adaptive-thinking metadata with the `minimal`
+  override and 1M context, and user/agent/vision dynamic headers.
 - `./migration/oracle/compare-kimi-coding-oauth.sh`: passed with independent
   device authorization, wait-before-first-poll, pending and server-directed
   slow-down timing, exponential refresh retry, unauthorized refresh
@@ -170,9 +175,10 @@ Verified on July 27, 2026 against source commit
   Codex reasoning, service tiers, verbosity, tool choice, and cache affinity.
 - `./migration/oracle/compare-provider-stream-events.sh`: passed with normalized
   public transcript parity for event ordering, text/thinking/tool deltas and
-  endings, terminal messages, usage, stop reasons, and replay signatures across
-  the same provider protocols, including Vertex request-path/API-key parity,
-  Bedrock SDK client/final-request parity, plus independent Cloudflare
+  endings, `pending` partial stop reasons, terminal-message validation, usage,
+  final stop reasons, and replay signatures across the same provider protocols,
+  including Vertex request-path/API-key parity, Bedrock SDK
+  client/final-request parity, plus independent Cloudflare
   auth-resolution and final-request parity across Workers AI and all three AI
   Gateway delegates, Codex zstd/auth/session/final-request parity, and Codex
   WebSocket handshake/`response.create` frame parity.
@@ -184,6 +190,14 @@ Verified on July 27, 2026 against source commit
   `x-affinity`, prompt cache keys, prompt-mode versus reasoning-effort
   selection, thinking/text/tool streaming, cached-token usage, cross-provider
   tool-call ID normalization, and synthetic missing tool results.
+- Provider transport fixture tests cover independent per-request injection for
+  Anthropic, OpenAI Chat/Responses, Azure Responses, Mistral, Codex SSE, Pi
+  Messages, and OpenRouter Images; streaming response bodies and callbacks are
+  retained, while Google and Google Vertex reject unsupported custom
+  transports instead of silently bypassing them.
+- OpenAI Chat compatibility tests cover generated and custom Z.AI models,
+  including provider and `api.z.ai`/`open.bigmodel.cn` URL fallback detection,
+  and verify `max_tokens` is sent without `max_completion_tokens`.
 - Cloudflare fixture tests cover scoped credential/environment precedence,
   required account and gateway configuration, request-time URL placeholder
   resolution, Workers AI Bearer authentication, AI Gateway
@@ -197,7 +211,9 @@ Verified on July 27, 2026 against source commit
   thinking levels and budgets, stream events, response IDs, usage, and tool
   calls.
 - Amazon Bedrock fixture tests cover Bearer tokens, standard AWS credential and
-  profile selection, scoped access keys, skip-auth proxy credentials,
+  profile selection, explicit/scoped profile precedence over ambient access
+  keys, ambient-key precedence when only an ambient profile exists, scoped
+  access keys, skip-auth proxy credentials,
   ARN/region/endpoint precedence, reserved signed-header filtering, message and
   image conversion, prompt cache points, adaptive and fixed Claude thinking,
   GovCloud payloads, reasoning/text/tool EventStream state, usage, stop reasons,

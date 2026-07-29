@@ -123,6 +123,7 @@ internal suspend fun generateOpenRouterImages(
                 timeoutMs = options.timeoutMs,
                 maxRetries = options.maxRetries,
                 maxRetryDelayMs = options.maxRetryDelayMs,
+                fetch = options.fetch,
             )
         options.onResponse?.invoke(
             ProviderResponse(

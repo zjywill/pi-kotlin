@@ -88,7 +88,7 @@ class OpenAIChatProvider(
 
         val blocks = mutableListOf<works.earendil.pi.ai.ContentBlock>()
         var usage = Usage()
-        var stopReason = StopReason.STOP
+        var stopReason = StopReason.PENDING
         var textIndex: Int? = null
         var thinkingIndex: Int? = null
         val tools = linkedMapOf<Int, StreamingTool>()
@@ -122,6 +122,7 @@ class OpenAIChatProvider(
             timeoutMs = options.timeoutMs,
             maxRetries = options.maxRetries,
             maxRetryDelayMs = options.maxRetryDelayMs,
+            fetch = options.fetch,
         ) { event ->
             if (event.data == "[DONE]" || event.data.isBlank()) {
                 return@postSse
@@ -269,7 +270,9 @@ class OpenAIChatProvider(
             stream.push(ToolCallEnd(tool.contentIndex, call, snapshot()))
         }
         val final = snapshot()
-        if (stopReason == StopReason.ERROR) {
+        if (stopReason == StopReason.PENDING) {
+            error("Stream ended without finish_reason")
+        } else if (stopReason == StopReason.ERROR) {
             stream.push(AssistantError(StopReason.ERROR, final.copy(errorMessage = "Content filtered")))
         } else {
             stream.push(AssistantDone(stopReason, final))
@@ -478,7 +481,8 @@ private fun openAIChatCompat(model: Model): OpenAIChatCompat {
             isCloudflareGateway ||
             isTogether ||
             isNvidia ||
-            isAntLing
+            isAntLing ||
+            isZai
     val detected =
         OpenAIChatCompat(
             supportsStore = !isNonStandard,

@@ -138,6 +138,7 @@ class OpenAICodexProvider private constructor(
                         ),
                     )
                 },
+                pendingStopReasonMessage = "Codex stream ended without a stop reason",
                 eventStream =
                     if (options.transport == Transport.SSE) {
                         null
@@ -467,6 +468,7 @@ private suspend fun streamOpenAICodexSse(
         timeoutMs = options.timeoutMs,
         maxRetries = options.maxRetries,
         maxRetryDelayMs = options.maxRetryDelayMs,
+        fetch = options.fetch,
         shouldStop = { sawTerminal },
     ) { sse ->
         if (sse.data.isBlank() || sse.data == "[DONE]") {

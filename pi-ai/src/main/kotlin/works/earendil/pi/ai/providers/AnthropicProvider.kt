@@ -145,7 +145,7 @@ class AnthropicProvider(
         val providerIndexes = mutableMapOf<Int, Int>()
         val toolArguments = mutableMapOf<Int, String>()
         var responseId: String? = null
-        var stopReason = StopReason.STOP
+        var stopReason = StopReason.PENDING
         var usage = Usage()
 
         fun snapshot(): AssistantMessage =
@@ -174,6 +174,7 @@ class AnthropicProvider(
             timeoutMs = options.timeoutMs,
             maxRetries = options.maxRetries,
             maxRetryDelayMs = options.maxRetryDelayMs,
+            fetch = options.fetch,
         ) { sse ->
             if (sse.data.isBlank()) {
                 return@postSse
@@ -334,7 +335,9 @@ class AnthropicProvider(
             }
         }
         val final = snapshot()
-        if (stopReason == StopReason.ERROR) {
+        if (stopReason == StopReason.PENDING) {
+            error("Anthropic stream ended without a stop reason")
+        } else if (stopReason == StopReason.ERROR) {
             stream.push(AssistantError(StopReason.ERROR, final.copy(errorMessage = "Anthropic refused the request")))
         } else {
             stream.push(AssistantDone(stopReason, final))

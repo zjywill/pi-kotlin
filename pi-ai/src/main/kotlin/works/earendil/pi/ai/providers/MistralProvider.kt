@@ -150,7 +150,7 @@ class MistralProvider(
         val toolArguments = mutableMapOf<String, String>()
         var responseId: String? = null
         var usage = Usage()
-        var stopReason = StopReason.STOP
+        var stopReason = StopReason.PENDING
 
         fun snapshot(): AssistantMessage =
             AssistantMessage(
@@ -229,6 +229,7 @@ class MistralProvider(
             timeoutMs = options.timeoutMs,
             maxRetries = options.maxRetries,
             maxRetryDelayMs = options.maxRetryDelayMs,
+            fetch = options.fetch,
         ) { sse ->
             if (sse.data.isBlank() || sse.data == "[DONE]") {
                 return@postSse
@@ -326,7 +327,9 @@ class MistralProvider(
             stream.push(ToolCallEnd(contentIndex, final, snapshot()))
         }
         val final = snapshot()
-        if (stopReason == StopReason.ERROR) {
+        if (stopReason == StopReason.PENDING) {
+            error("Mistral stream ended without a finish reason")
+        } else if (stopReason == StopReason.ERROR) {
             stream.push(AssistantError(StopReason.ERROR, final.copy(errorMessage = "Mistral response failed")))
         } else {
             stream.push(AssistantDone(stopReason, final))

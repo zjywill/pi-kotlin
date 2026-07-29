@@ -206,6 +206,9 @@ object MessageContentSerializer : KSerializer<MessageContent> {
 
 @Serializable
 enum class StopReason {
+    @SerialName("pending")
+    PENDING,
+
     @SerialName("stop")
     STOP,
 
@@ -402,6 +405,8 @@ data class StreamOptions(
     val temperature: Double? = null,
     val maxTokens: Int? = null,
     val apiKey: String? = null,
+    /** Optional transport for this request. Adapters that cannot inject it may reject it. */
+    val fetch: ProviderHttpTransport? = null,
     val transport: Transport = Transport.AUTO,
     val cacheRetention: CacheRetention? = null,
     val sessionId: String? = null,

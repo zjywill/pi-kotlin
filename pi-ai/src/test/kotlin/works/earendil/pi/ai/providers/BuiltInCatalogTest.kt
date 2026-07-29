@@ -22,6 +22,10 @@ class BuiltInCatalogTest {
         val catalog = builtInCatalog()
         val openAI = catalog.modelsByProvider.getValue("openai")
         val sol = openAI.single { it.id == "gpt-5.6-sol" }
+        val copilotOpus5 =
+            catalog.modelsByProvider
+                .getValue("github-copilot")
+                .single { it.id == "claude-opus-5" }
 
         assertEquals(3, catalog.schemaVersion)
         Instant.parse(assertNotNull(catalog.generatedAt))
@@ -36,6 +40,20 @@ class BuiltInCatalogTest {
         assertEquals(128_000, sol.maxTokens)
         assertEquals(5.0, sol.cost.input)
         assertEquals("max", sol.thinkingLevelMap[works.earendil.pi.ai.ModelThinkingLevel.MAX])
+        assertEquals("anthropic-messages", copilotOpus5.api)
+        assertEquals(1_000_000, copilotOpus5.contextWindow)
+        assertEquals(
+            "low",
+            copilotOpus5.thinkingLevelMap[works.earendil.pi.ai.ModelThinkingLevel.MINIMAL],
+        )
+        assertEquals(
+            "xhigh",
+            copilotOpus5.thinkingLevelMap[works.earendil.pi.ai.ModelThinkingLevel.XHIGH],
+        )
+        assertEquals(
+            "max",
+            copilotOpus5.thinkingLevelMap[works.earendil.pi.ai.ModelThinkingLevel.MAX],
+        )
         assertTrue(catalog.unsupportedApis.isEmpty())
     }
 

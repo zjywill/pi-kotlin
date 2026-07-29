@@ -790,6 +790,7 @@ private fun radiusResultProjection(message: AssistantMessage): JsonObject =
 
 private fun StopReason.radiusValue(): String =
     when (this) {
+        StopReason.PENDING -> "pending"
         StopReason.STOP -> "stop"
         StopReason.LENGTH -> "length"
         StopReason.TOOL_USE -> "toolUse"

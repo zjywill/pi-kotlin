@@ -105,13 +105,16 @@ class GoogleVertexProvider(
         options: StreamOptions,
         stream: AssistantMessageEventStream,
     ) {
+        require(options.fetch == null) {
+            "Custom fetch is not supported by the Google Vertex adapter"
+        }
         val request = resolveGoogleVertexRequest(model, options, environment, accessTokenProvider)
         val body = buildGoogleVertexRequestBody(model, context, options)
         val blocks = mutableListOf<works.earendil.pi.ai.ContentBlock>()
         var currentIndex: Int? = null
         var currentThinking = false
         var responseId: String? = null
-        var stopReason = StopReason.STOP
+        var stopReason = StopReason.PENDING
         var usage = Usage()
 
         fun snapshot(): AssistantMessage =
@@ -235,7 +238,9 @@ class GoogleVertexProvider(
         }
         finishCurrent()
         val final = snapshot()
-        if (stopReason == StopReason.ERROR) {
+        if (stopReason == StopReason.PENDING) {
+            error("Google Vertex stream ended without a finish reason")
+        } else if (stopReason == StopReason.ERROR) {
             stream.push(AssistantError(StopReason.ERROR, final.copy(errorMessage = "Google blocked the response")))
         } else {
             stream.push(AssistantDone(stopReason, final))

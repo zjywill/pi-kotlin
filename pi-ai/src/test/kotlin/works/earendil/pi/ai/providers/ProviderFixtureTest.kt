@@ -96,6 +96,49 @@ class ProviderFixtureTest {
         }
 
     @Test
+    fun `openai chat provider rejects streams without a finish reason`() =
+        runTest {
+            val fixture =
+                fixtureServer(
+                    """
+                    data: {"choices":[{"delta":{"content":"partial"}}]}
+
+                    data: [DONE]
+
+                    """.trimIndent(),
+                )
+            try {
+                val model =
+                    model(
+                        id = "fixture",
+                        api = "openai-completions",
+                        provider = "fixture",
+                        baseUrl = fixture.baseUrl,
+                    )
+                val provider =
+                    OpenAIChatProvider(
+                        "fixture",
+                        "Fixture",
+                        fixture.baseUrl,
+                        listOf(model),
+                        listOf("UNUSED"),
+                    )
+
+                val result =
+                    provider.stream(
+                        model,
+                        Context(messages = mutableListOf(UserMessage("hi"))),
+                        StreamOptions(apiKey = "test"),
+                    ).result()
+
+                assertEquals(StopReason.ERROR, result.stopReason)
+                assertEquals("Stream ended without finish_reason", result.errorMessage)
+            } finally {
+                fixture.close()
+            }
+        }
+
+    @Test
     fun `anthropic provider streams text and tool input`() =
         runTest {
             val fixture =

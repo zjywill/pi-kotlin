@@ -6,6 +6,7 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class EventStreamTest {
@@ -23,4 +24,16 @@ class EventStreamTest {
             assertEquals(message, stream.result())
             assertEquals(2, events.await().size)
         }
+
+    @Test
+    fun `pending stop reason cannot be emitted as a terminal event`() {
+        val pending = fauxAssistantMessage("partial", StopReason.PENDING)
+
+        assertFailsWith<IllegalArgumentException> {
+            AssistantDone(StopReason.PENDING, pending)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            AssistantError(StopReason.PENDING, pending)
+        }
+    }
 }

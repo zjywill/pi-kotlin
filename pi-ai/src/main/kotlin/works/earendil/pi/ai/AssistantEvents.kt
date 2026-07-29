@@ -94,6 +94,12 @@ data class AssistantDone(
     val reason: StopReason,
     val message: AssistantMessage,
 ) : AssistantMessageEvent {
+    init {
+        require(reason == StopReason.STOP || reason == StopReason.LENGTH || reason == StopReason.TOOL_USE) {
+            "Assistant done event requires a successful terminal stop reason"
+        }
+    }
+
     override val finalMessage: AssistantMessage = message
 }
 
@@ -103,5 +109,11 @@ data class AssistantError(
     val reason: StopReason,
     val error: AssistantMessage,
 ) : AssistantMessageEvent {
+    init {
+        require(reason == StopReason.ERROR || reason == StopReason.ABORTED) {
+            "Assistant error event requires an error or aborted stop reason"
+        }
+    }
+
     override val finalMessage: AssistantMessage = error
 }

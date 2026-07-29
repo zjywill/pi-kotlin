@@ -49,6 +49,8 @@ data class ImagesModel(
 
 data class ImagesOptions(
     val apiKey: String? = null,
+    /** Optional transport for this image request. */
+    val fetch: ProviderHttpTransport? = null,
     val env: Map<String, String> = emptyMap(),
     val headers: Map<String, String?> = emptyMap(),
     val timeoutMs: Long? = null,

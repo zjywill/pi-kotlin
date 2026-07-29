@@ -21,8 +21,16 @@ Last reviewed: July 29, 2026
 ## Completed
 
 - [x] AI message and stream contracts
+  - [x] Serialized `pending` stop reason for partial assistant messages
+  - [x] Provider-specific errors when a stream ends without a terminal reason
+  - [x] OpenAI Responses `final_answer` provisional stop and incomplete override
 - [x] Built-in model catalog and remote catalog refresh
 - [x] Provider protocols and OAuth flows covered by the migration oracles
+  - [x] GitHub Copilot Claude Opus 5 minimal-thinking metadata
+  - [x] Configured Bedrock profile precedence over ambient AWS keys
+  - [x] Z.AI `max_tokens` catalog metadata and runtime fallback
+  - [x] Per-request HTTP transport injection for supported adapters
+  - [x] Explicit custom-transport rejection for Google and Google Vertex
   - [x] Refresh OAuth credentials with less than five minutes remaining
   - [x] Enforce caller-provided minimum OAuth validity after refresh
   - [x] OpenRouter loopback and manual redirect URL login
@@ -48,13 +56,13 @@ Last reviewed: July 29, 2026
   - [x] Request-bound dynamic tool, command, flag, and provider refresh
   - [x] Fire-and-forget extension UI notifications and status actions
 
-The latest implementation stage synchronized upstream credential printing,
-OAuth minimum-validity refresh behavior, and OpenRouter manual redirect login.
-`./gradlew clean test installDist` and 16 deterministic migration oracles pass.
-The GitHub Copilot oracle is currently blocked before comparison by a
-`models.dev` connection timeout while hydrating the TypeScript source archive.
-Both migration audits currently stop at source drift because the new upstream
-range has not yet been fully reviewed and entered in the synchronization
+The latest implementation stage synchronized pending stream stop reasons,
+GitHub Copilot Claude Opus 5 metadata, Bedrock profile precedence, Z.AI
+`max_tokens`, and per-request HTTP transport injection. `./gradlew clean test
+installDist` passes with 321 tests and zero failures, errors, or skips. All 17
+cross-language migration oracles pass, including the GitHub Copilot catalog
+oracle. Both migration audits still stop at source drift because the full
+upstream range has not yet been classified and entered in the synchronization
 manifests.
 
 ## Remaining
@@ -65,11 +73,11 @@ manifests.
       `cee5ff7520d8828bed9955ef00419e995d1f91e0..027a5847901b5dde30270abaa1041046cd2b4b55`
 - [x] OAuth five-minute refresh window and credential print commands
 - [x] OpenRouter manual redirect URL fallback
-- [ ] Pending stop reason while streaming
-- [ ] GitHub Copilot Claude Opus 5 metadata overrides
-- [ ] Configured Bedrock profile precedence over ambient AWS keys
-- [ ] Z.AI `max_tokens` request field
-- [ ] Per-request fetch injection
+- [x] Pending stop reason while streaming
+- [x] GitHub Copilot Claude Opus 5 metadata overrides
+- [x] Configured Bedrock profile precedence over ambient AWS keys
+- [x] Z.AI `max_tokens` request field
+- [x] Per-request fetch injection
 - [ ] Extension `ctx.scopedModels` in base and TUI contexts
 - [ ] Preserve resource metadata after extension reload
 - [ ] Route RPC bash through `user_bash`
@@ -145,20 +153,21 @@ manifests.
 ## Next stage
 
 Finish the upstream synchronization range before returning to bidirectional
-extension dialogs. The next coherent implementation slice is the AI-provider
-batch: pending stream stop reasons, GitHub Copilot Claude Opus 5 metadata,
-Bedrock profile precedence, Z.AI `max_tokens`, and per-request fetch injection.
+extension dialogs. The next coherent implementation slice is the coding-agent
+synchronization batch: extension `ctx.scopedModels`, TUI scoped-model context,
+resource metadata preservation, RPC `user_bash` routing, concurrent bash
+cancellation, failed git-install cleanup, and session replacement subscription
+repair.
 
 Required evidence for that stage:
 
-- [ ] Focused tests for pending-to-terminal stream state transitions
-- [ ] Provider payload coverage for Bedrock and Z.AI changes
-- [ ] Per-request transport injection tests across supported HTTP providers
-- [ ] GitHub Copilot metadata assertion for Claude Opus 5
+- [ ] Focused tests for base and TUI `ctx.scopedModels`
+- [ ] Resource reload tests that retain source metadata
+- [ ] RPC and concurrent bash cancellation tests
+- [ ] Failed git-install cleanup test
+- [ ] Session replacement subscription regression test
 - [ ] `./gradlew clean test installDist`
 - [ ] All deterministic migration oracles
-- [ ] GitHub Copilot oracle after `models.dev` hydration is available or made
-      deterministic without weakening its catalog comparison
 - [ ] `./migration/audit-migration.sh sync`
 - [ ] `./migration/audit-migration.sh full` with the remaining partial areas
       reported exactly

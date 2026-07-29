@@ -44,6 +44,7 @@ class AzureOpenAIResponsesProvider(
                 modelId = resolveAzureDeploymentName(model, options),
                 headers = mapOf("api-key" to apiKey),
                 promptCacheWhenDisabled = true,
+                pendingStopReasonMessage = "Azure OpenAI Responses stream ended without a stop reason",
             )
         }
 }

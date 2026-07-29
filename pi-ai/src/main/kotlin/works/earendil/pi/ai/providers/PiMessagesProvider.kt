@@ -1,12 +1,8 @@
 package works.earendil.pi.ai.providers
 
 import java.io.BufferedReader
-import java.io.InputStream
 import java.io.InputStreamReader
-import java.net.URI
 import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
 import java.nio.charset.StandardCharsets
 import java.time.Duration
 import kotlinx.coroutines.Dispatchers
@@ -38,6 +34,7 @@ import works.earendil.pi.ai.DiagnosticErrorInfo
 import works.earendil.pi.ai.Message
 import works.earendil.pi.ai.Model
 import works.earendil.pi.ai.Provider
+import works.earendil.pi.ai.ProviderHttpRequest
 import works.earendil.pi.ai.ProviderResponse
 import works.earendil.pi.ai.StopReason
 import works.earendil.pi.ai.StreamOptions
@@ -57,6 +54,7 @@ import works.earendil.pi.ai.ToolCallStart
 import works.earendil.pi.ai.ToolDefinition
 import works.earendil.pi.ai.Usage
 import works.earendil.pi.ai.createAssistantMessageEventStream
+import works.earendil.pi.ai.http.executeProviderHttpRequest
 
 class PiMessagesProvider(
     override val id: String,
@@ -187,66 +185,71 @@ private suspend fun executePiMessages(
             model = model.headers,
             override = options.headers,
         )
-    val requestBuilder =
-        HttpRequest
-            .newBuilder(URI.create(url))
-            .POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
-    options.timeoutMs?.let { requestBuilder.timeout(Duration.ofMillis(it)) }
-    headers.forEach(requestBuilder::header)
     val response =
+        executeProviderHttpRequest(
+            client = client,
+            fetch = options.fetch,
+            request =
+                ProviderHttpRequest(
+                    method = "POST",
+                    url = url,
+                    headers = headers,
+                    body = requestBody.toByteArray(StandardCharsets.UTF_8),
+                    timeoutMs = options.timeoutMs,
+                ),
+        )
+    response.use {
+        options.onResponse?.invoke(
+            ProviderResponse(
+                status = it.status,
+                headers =
+                    it.headers.mapValues { (_, values) ->
+                        values.joinToString(", ")
+                    },
+            ),
+            model,
+        )
+        if (it.status !in 200..299) {
+            val body = it.body.readAllBytes().toString(StandardCharsets.UTF_8)
+            throw piMessagesResponseError(model, url, it.status, body)
+        }
+
+        val converter = PiMessagesEventConverter(model)
+        var terminal = false
         withContext(Dispatchers.IO) {
-            client.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofInputStream())
-        }
-    options.onResponse?.invoke(
-        ProviderResponse(
-            status = response.statusCode(),
-            headers =
-                response.headers().map().mapValues { (_, values) ->
-                    values.joinToString(", ")
-                },
-        ),
-        model,
-    )
-    if (response.statusCode() !in 200..299) {
-        val body = response.body().use(InputStream::readAllBytes).toString(StandardCharsets.UTF_8)
-        throw piMessagesResponseError(model, url, response.statusCode(), body)
-    }
+            BufferedReader(InputStreamReader(it.body, StandardCharsets.UTF_8)).use { reader ->
+                val lines = mutableListOf<String>()
 
-    val converter = PiMessagesEventConverter(model)
-    var terminal = false
-    withContext(Dispatchers.IO) {
-        BufferedReader(InputStreamReader(response.body(), StandardCharsets.UTF_8)).use { reader ->
-            val lines = mutableListOf<String>()
-
-            fun flush() {
-                val data =
-                    lines
-                        .firstOrNull { it.startsWith("data:") }
-                        ?.removePrefix("data:")
-                        ?.trim()
-                lines.clear()
-                if (data.isNullOrEmpty() || data == "[DONE]" || terminal) {
-                    return
+                fun flush() {
+                    val data =
+                        lines
+                            .firstOrNull { line -> line.startsWith("data:") }
+                            ?.removePrefix("data:")
+                            ?.trim()
+                    lines.clear()
+                    if (data.isNullOrEmpty() || data == "[DONE]" || terminal) {
+                        return
+                    }
+                    val event = converter.convert(piMessagesJson.parseToJsonElement(data).jsonObject)
+                    stream.push(event)
+                    terminal = event is AssistantDone || event is AssistantError
                 }
-                val event = converter.convert(piMessagesJson.parseToJsonElement(data).jsonObject)
-                stream.push(event)
-                terminal = event is AssistantDone || event is AssistantError
-            }
 
-            while (!terminal) {
-                val line = reader.readLine() ?: break
-                if (line.isEmpty()) {
+                while (!terminal) {
+                    val line = reader.readLine() ?: break
+                    if (line.isEmpty()) {
+                        flush()
+                    } else {
+                        lines += line
+                    }
+                }
+                if (!terminal && lines.isNotEmpty()) {
                     flush()
-                } else {
-                    lines += line
                 }
             }
-            if (!terminal && lines.isNotEmpty()) {
-                flush()
-            }
         }
+        check(terminal) { "${model.provider} stream ended without a terminal event" }
     }
-    check(terminal) { "${model.provider} stream ended without a terminal event" }
 }
 
 private class PiMessagesEventConverter(
@@ -256,7 +259,7 @@ private class PiMessagesEventConverter(
     private val blocks = mutableListOf<ContentBlock>()
     private val toolJson = mutableMapOf<Int, String>()
     private var usage = Usage()
-    private var stopReason = StopReason.STOP
+    private var stopReason = StopReason.PENDING
     private var responseId: String? = null
     private var errorMessage: String? = null
     private var diagnostics: List<AssistantMessageDiagnostic>? = null

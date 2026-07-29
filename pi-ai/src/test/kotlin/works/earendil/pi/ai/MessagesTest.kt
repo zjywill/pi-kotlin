@@ -1,6 +1,7 @@
 package works.earendil.pi.ai
 
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -18,5 +19,13 @@ class MessagesTest {
         assertEquals("first\nsecond", contentText(content))
         assertEquals("firstsecond", contentText(content, ""))
         assertEquals("hello", contentText("hello"))
+    }
+
+    @Test
+    fun `pending stop reason uses the upstream wire value`() {
+        assertEquals(
+            "\"pending\"",
+            Json.encodeToString(StopReason.serializer(), StopReason.PENDING),
+        )
     }
 }
