@@ -1155,25 +1155,45 @@ internal class ExtensionHost private constructor(
         }
 
         private fun extractHostScript(agentDir: Path): Path {
-            val bytes =
-                checkNotNull(
-                    ExtensionHost::class.java.getResourceAsStream(
-                        "/works/earendil/pi/codingagent/extension-host.mjs",
-                    ),
-                ) {
-                    "Bundled extension host is missing"
-                }.use { it.readAllBytes() }
+            val resourceRoot = "/works/earendil/pi/codingagent"
+            val resources =
+                listOf(
+                    "extension-host.mjs",
+                    "jiti/LICENSE",
+                    "jiti/package.json",
+                    "jiti/lib/jiti-static.mjs",
+                    "jiti/dist/jiti.cjs",
+                    "jiti/dist/babel.cjs",
+                ).associateWith { relativePath ->
+                    checkNotNull(
+                        ExtensionHost::class.java.getResourceAsStream("$resourceRoot/$relativePath"),
+                    ) {
+                        "Bundled extension host resource is missing: $relativePath"
+                    }.use { it.readAllBytes() }
+                }
+            val digest = MessageDigest.getInstance("SHA-256")
+            resources.toSortedMap().forEach { (relativePath, bytes) ->
+                digest.update(relativePath.toByteArray(StandardCharsets.UTF_8))
+                digest.update(0)
+                digest.update(bytes)
+            }
             val hash =
-                MessageDigest
-                    .getInstance("SHA-256")
-                    .digest(bytes)
+                digest
+                    .digest()
                     .joinToString("") { "%02x".format(it) }
                     .take(16)
-            val directory = agentDir.resolve("tmp").resolve("extension-host")
-            Files.createDirectories(directory)
-            val target = directory.resolve("extension-host-$hash.mjs")
-            if (!Files.exists(target) || !Files.readAllBytes(target).contentEquals(bytes)) {
-                val temporary = Files.createTempFile(directory, "extension-host-", ".tmp")
+            val directory =
+                agentDir
+                    .resolve("tmp")
+                    .resolve("extension-host")
+                    .resolve(hash)
+            resources.forEach { (relativePath, bytes) ->
+                val target = directory.resolve(relativePath)
+                Files.createDirectories(target.parent)
+                if (Files.exists(target) && Files.readAllBytes(target).contentEquals(bytes)) {
+                    return@forEach
+                }
+                val temporary = Files.createTempFile(target.parent, target.fileName.toString(), ".tmp")
                 Files.write(temporary, bytes)
                 try {
                     Files.move(
@@ -1186,7 +1206,7 @@ internal class ExtensionHost private constructor(
                     Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING)
                 }
             }
-            return target
+            return directory.resolve("extension-host.mjs")
         }
     }
 }

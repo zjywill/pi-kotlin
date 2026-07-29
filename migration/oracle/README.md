@@ -21,6 +21,7 @@ Run the available comparisons from the Kotlin repository:
 ./migration/oracle/compare-anthropic-oauth.sh
 ./migration/oracle/compare-cli-help.sh
 ./migration/oracle/compare-coding-message-projection.sh
+./migration/oracle/compare-extension-jiti-compat.sh
 ./migration/oracle/compare-extension-runtime.sh
 ./migration/oracle/compare-github-copilot.sh
 ./migration/oracle/compare-kimi-coding-oauth.sh
@@ -111,6 +112,14 @@ credential fields, native auth `env`/`fileExists` correlation, model-store
 `read`/`write`/`delete`, immediate and background active-tool refresh,
 background provider discovery, host lifecycle cleanup, and invalid
 re-registration rollback.
+
+The jiti compatibility comparison loads isolated extensions through the
+upstream loader and the Kotlin distribution's vendored jiti 2.7.0 runtime. It
+compares extensionless imports, directory indexes, ESM/CommonJS interoperability,
+explicit `require()`, `.mts`/`.cts`/`.tsx`, imported TypeScript dependencies,
+extension-owned bare packages, and pi/TypeBox virtual modules. It also records
+the shared upstream boundary that JSX is disabled unless jiti's `jsx` option is
+explicitly enabled.
 
 The model catalog runtime comparison covers bundled-versus-remote timestamp
 selection, a newer persisted overlay restored without network access, and

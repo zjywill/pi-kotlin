@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { registerHooks, stripTypeScriptTypes } from "node:module";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { registerHooks } from "node:module";
 import readline from "node:readline";
+import { createJiti } from "./jiti/lib/jiti-static.mjs";
 
 const protocolWrite = process.stdout.write.bind(process.stdout);
 const log = (...values) => process.stderr.write(`${values.map(formatLogValue).join(" ")}\n`);
@@ -263,15 +262,6 @@ const aliases = new Map([
 	["@mariozechner/pi-agent-core", "virtual:empty"],
 ]);
 
-function transformTypeScript(source) {
-	try {
-		return stripTypeScriptTypes(source, { mode: "transform", sourceMap: false });
-	} catch (error) {
-		if (error?.code !== "ERR_INVALID_ARG_VALUE") throw error;
-		return stripTypeScriptTypes(source, { mode: "strip", sourceMap: false });
-	}
-}
-
 registerHooks({
 	resolve(specifier, context, nextResolve) {
 		const alias = aliases.get(specifier);
@@ -283,17 +273,18 @@ registerHooks({
 		if (source !== undefined) {
 			return { format: "module", source, shortCircuit: true };
 		}
-		if (url.startsWith("file:") && fileURLToPath(url).endsWith(".ts")) {
-			const typescript = readFileSync(fileURLToPath(url), "utf8");
-			return {
-				format: "module",
-				source: transformTypeScript(typescript),
-				shortCircuit: true,
-			};
-		}
 		return nextLoad(url, context);
 	},
 });
+
+const virtualModuleNamespaces = new Map(
+	await Promise.all(
+		[...new Set(aliases.values())].map(async specifier => [specifier, await import(specifier)]),
+	),
+);
+const jitiVirtualModules = Object.fromEntries(
+	[...aliases].map(([specifier, target]) => [specifier, virtualModuleNamespaces.get(target)]),
+);
 
 const state = {
 	cwd: process.cwd(),
@@ -964,10 +955,12 @@ async function loadExtensionPaths(paths) {
 		attemptedPaths.add(extensionPath);
 		const index = extensions.length;
 		try {
-			const url = pathToFileURL(extensionPath);
-			url.searchParams.set("pi-kotlin-load", `${Date.now()}-${index}`);
-			const module = await import(url.href);
-			const factory = module.default;
+			const jiti = createJiti(import.meta.url, {
+				moduleCache: false,
+				virtualModules: jitiVirtualModules,
+				tryNative: false,
+			});
+			const factory = await jiti.import(extensionPath, { default: true });
 			if (typeof factory !== "function") {
 				throw new Error(`Extension does not export a default factory function: ${extensionPath}`);
 			}

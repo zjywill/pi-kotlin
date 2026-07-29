@@ -30,6 +30,10 @@ dependencies {
     testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.13.4")
 }
 
+tasks.test {
+    systemProperty("pi.project.root", rootProject.projectDir.absolutePath)
+}
+
 tasks.register<JavaExec>("sessionJsonlOracle") {
     dependsOn(tasks.testClasses)
     classpath = sourceSets["test"].runtimeClasspath
@@ -61,4 +65,11 @@ tasks.register<JavaExec>("extensionRuntimeOracle") {
     classpath = sourceSets["test"].runtimeClasspath
     mainClass = "works.earendil.pi.codingagent.ExtensionRuntimeOracleKt"
     args(rootProject.file("migration/fixtures/extension-runtime/basic.ts").absolutePath)
+}
+
+tasks.register<JavaExec>("extensionJitiCompatibilityOracle") {
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass = "works.earendil.pi.codingagent.ExtensionJitiCompatibilityOracleKt"
+    args(rootProject.file("migration/fixtures/extension-jiti-compat").absolutePath)
 }

@@ -65,6 +65,7 @@ Last reviewed: July 29, 2026
         request-scoped `ctx.env()` and `ctx.fileExists()`
   - [x] Function-valued `refreshModels(context.store)` with provider-scoped
         `read`, `write`, and `delete`
+  - [x] Official jiti 2.7 TypeScript transpilation and module loading
   - [x] Unsolicited background registration updates after the originating
         extension invocation has returned
   - [x] Provider cancellation and extension-host lifecycle cleanup
@@ -78,17 +79,19 @@ Last reviewed: July 29, 2026
   - [x] Accept nullable array schemas with `items`
   - [x] Classify the AgentHarness v2 design document as documentation-only
 
-The latest implementation stage carries extension registrations across the
-out-of-process boundary even when they occur after the originating command has
-returned. The Node host queues out-of-band actions and registration versions;
-the Kotlin host receives them through a dedicated stdout reader, applies
-provider mutations in order, and refreshes tool, command, and flag metadata. A
-shared fixture schedules tool, command, flag, and provider registration from
-`setTimeout`, then invokes the new tool and command on both runtimes.
-`./gradlew clean test installDist` passes with 353 tests, all 17 deterministic
-migration oracles pass, and the installed CLI/server distributions expose the
-background command and provider. The sync audit reaches `4f0437e2`; the full
-audit remains nonzero on the seven partial areas listed below.
+The latest implementation stage replaces the Node type-stripping loader with
+the official jiti 2.7.0 static runtime, bundled with its MIT license in the JVM
+distribution. Extensions load through `jiti.import(..., { default: true })`
+with `moduleCache: false`; pi and TypeBox namespaces remain available through
+jiti `virtualModules`. An independent matrix covers extensionless imports,
+directory indexes, ESM/CommonJS interop, `require()`, `.mts`/`.cts`/`.tsx`,
+local TypeScript dependencies, extension-owned bare packages, and virtual
+imports. JSX remains disabled exactly as in the upstream loader's default
+configuration. `./gradlew clean test installDist` passes with 355 tests, all 18
+deterministic migration oracles pass, and installed CLI/server distributions
+discover all eight supported fixture commands. The sync audit reaches
+`4f0437e2`; the full audit remains nonzero on the seven partial areas listed
+below.
 
 ## Remaining
 
@@ -150,7 +153,7 @@ audit remains nonzero on the seven partial areas listed below.
   - [x] Compare awaited results with the TypeScript extension runtime
 - [ ] Interrupt a blocking TUI dialog when its extension timeout or
       `AbortSignal` fires
-- [ ] jiti-complete TypeScript transpilation and module-loading compatibility
+- [x] jiti-complete TypeScript transpilation and module-loading compatibility
 - [x] Direct registration of a complete native `Provider`
 - [x] Native provider API-key `login`, `check`, and `resolve` callbacks
 - [x] Function-valued `refreshModels(context.store)`
@@ -189,29 +192,30 @@ audit remains nonzero on the seven partial areas listed below.
 
 ## Next stage
 
-Close the remaining extension-host loading gap: jiti-complete TypeScript
-transpilation and import compatibility. Keep blocking TUI interruption,
-shortcuts/renderers/custom UI, and the other six global partial areas as
-separately audited slices.
+Interrupt a blocking TUI extension dialog when its timeout or `AbortSignal`
+fires. Keep shortcuts/renderers/custom UI and the other six global partial
+areas as separately audited slices.
 
-Evidence for the completed background registration stage:
+Evidence for the completed jiti compatibility stage:
 
-- [x] Tool, command, flag, and provider registration after the scheduling
-      command response has completed
-- [x] Ordered background provider action delivery before registration refresh
-- [x] Invocation of the asynchronously registered tool and command
-- [x] RPC discovery of the asynchronously registered command and provider
-- [x] New tool activation and system-prompt refresh before the next prompt
-- [x] Updated extension-runtime TypeScript/Kotlin oracle
-- [x] Three repeated race-focused background test runs
-- [x] `pi-coding-agent` with 130 tests and no failures, errors, or skips
-- [x] `./gradlew clean test installDist` with 353 tests and no failures,
+- [x] Vendored official jiti 2.7.0 static runtime and MIT license
+- [x] `jiti.import(..., { default: true })` with `moduleCache: false`
+- [x] pi and TypeBox namespace injection through jiti `virtualModules`
+- [x] Extensionless local imports and directory/index resolution
+- [x] ESM/CommonJS default and named export interop plus explicit `require()`
+- [x] `.mts`, `.cts`, `.tsx`, and imported TypeScript dependency loading
+- [x] Extension-owned bare package resolution from local `node_modules`
+- [x] Upstream-compatible JSX-disabled boundary
+- [x] Independent TypeScript/Kotlin jiti compatibility oracle
+- [x] Shared-dependency reload regression proving the module cache is disabled
+- [x] Existing extension-runtime oracle remains unchanged
+- [x] `pi-coding-agent` with 132 tests and no failures, errors, or skips
+- [x] `./gradlew clean test installDist` with 355 tests and no failures,
       errors, or skips
-- [x] All 17 deterministic migration oracles
-- [x] Installed `pi` discovers `background-command` and
-      `background-provider/background-model` after `/schedule-background`
-- [x] Installed `pi-server` spawn, background registration discovery, command
-      invocation, status, stop, and removed-instance read-back
+- [x] All 18 deterministic migration oracles
+- [x] Installed `pi --mode rpc` discovers all eight supported fixture commands
+- [x] Installed `pi-server` spawn, eight-command discovery, status, stop, and
+      removed-instance read-back
 - [x] `./migration/audit-migration.sh sync` through `4f0437e2`
 - [x] `./migration/audit-migration.sh full` confirms exactly seven remaining
       partial areas
