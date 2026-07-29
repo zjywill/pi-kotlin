@@ -1477,10 +1477,9 @@ internal fun resolveExtensionSources(
                     sourceInfo =
                         ResourceSourceInfo(
                             path = normalized,
-                            source = "local",
+                            source = "cli",
                             scope = "temporary",
                             origin = "top-level",
-                            baseDir = normalized.parent,
                         ),
                 ),
             )

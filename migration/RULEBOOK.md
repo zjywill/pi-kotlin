@@ -53,6 +53,7 @@ through the commit recorded in `sync-state.tsv`.
 - `./migration/oracle/compare-provider-stream-events.sh`
 - `./migration/oracle/compare-radius.sh`
 - `./migration/oracle/compare-resource-loading.sh`
+- `./migration/oracle/compare-rpc-runtime.sh`
 - `./migration/oracle/compare-server-recovery.sh`
 - `./migration/oracle/compare-session-jsonl.sh`
 - `./migration/oracle/compare-theme-runtime.sh`

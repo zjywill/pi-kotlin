@@ -152,6 +152,11 @@ internal class ExtensionProviderRegistry(
         configurations.keys.toList().forEach(::unregister)
         baseProviders.clear()
     }
+
+    fun abortActiveOperations() {
+        val operations = activeOperations.toMap()
+        operations.forEach { (id, host) -> host.abortProviderOperation(id) }
+    }
 }
 
 private fun validateIncomingProvider(

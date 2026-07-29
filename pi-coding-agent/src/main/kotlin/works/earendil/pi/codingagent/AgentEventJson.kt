@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import works.earendil.pi.agent.AgentEvent
 import works.earendil.pi.agent.AgentToolResult
@@ -21,7 +22,35 @@ internal val protocolJson =
         encodeDefaults = false
     }
 
-internal fun encodeAgentEvent(event: AgentEvent): JsonObject =
+internal val rpcPayloadJson =
+    Json(protocolJson) {
+        encodeDefaults = true
+    }
+
+internal fun encodeRpcMessage(message: Message) =
+    rpcPayloadJson.encodeToJsonElement(Message.serializer(), message)
+
+private fun encodeRpcAssistantEvent(event: AssistantMessageEvent): JsonObject {
+    val encoded =
+        rpcPayloadJson
+            .encodeToJsonElement(AssistantMessageEvent.serializer(), event)
+            .jsonObject
+    val partial = encoded["partial"] as? JsonObject ?: return encoded
+    return JsonObject(
+        encoded +
+            (
+                "partial" to
+                    JsonObject(
+                        mapOf("role" to JsonPrimitive("assistant")) + partial,
+                    )
+            ),
+    )
+}
+
+internal fun encodeAgentEvent(
+    event: AgentEvent,
+    willRetry: Boolean = false,
+): JsonObject =
     buildJsonObject {
         when (event) {
             AgentEvent.AgentStart -> put("type", "agent_start")
@@ -29,20 +58,20 @@ internal fun encodeAgentEvent(event: AgentEvent): JsonObject =
                 put("type", "agent_end")
                 put(
                     "messages",
-                    JsonArray(event.messages.map { protocolJson.encodeToJsonElement(Message.serializer(), it) }),
+                    JsonArray(event.messages.map(::encodeRpcMessage)),
                 )
-                put("willRetry", false)
+                put("willRetry", willRetry)
             }
 
             AgentEvent.TurnStart -> put("type", "turn_start")
             is AgentEvent.TurnEnd -> {
                 put("type", "turn_end")
-                put("message", protocolJson.encodeToJsonElement(Message.serializer(), event.message))
+                put("message", encodeRpcMessage(event.message))
                 put(
                     "toolResults",
                     JsonArray(
                         event.toolResults.map {
-                            protocolJson.encodeToJsonElement(ToolResultMessage.serializer(), it)
+                            rpcPayloadJson.encodeToJsonElement(ToolResultMessage.serializer(), it)
                         },
                     ),
                 )
@@ -50,24 +79,21 @@ internal fun encodeAgentEvent(event: AgentEvent): JsonObject =
 
             is AgentEvent.MessageStart -> {
                 put("type", "message_start")
-                put("message", protocolJson.encodeToJsonElement(Message.serializer(), event.message))
+                put("message", encodeRpcMessage(event.message))
             }
 
             is AgentEvent.MessageUpdate -> {
                 put("type", "message_update")
-                put("message", protocolJson.encodeToJsonElement(Message.serializer(), event.message))
+                put("message", encodeRpcMessage(event.message))
                 put(
                     "assistantMessageEvent",
-                    protocolJson.encodeToJsonElement(
-                        AssistantMessageEvent.serializer(),
-                        event.assistantMessageEvent,
-                    ),
+                    encodeRpcAssistantEvent(event.assistantMessageEvent),
                 )
             }
 
             is AgentEvent.MessageEnd -> {
                 put("type", "message_end")
-                put("message", protocolJson.encodeToJsonElement(Message.serializer(), event.message))
+                put("message", encodeRpcMessage(event.message))
             }
 
             is AgentEvent.ToolExecutionStart -> {

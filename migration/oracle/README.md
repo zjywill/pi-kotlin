@@ -41,6 +41,7 @@ Run the available comparisons from the Kotlin repository:
 ./migration/oracle/compare-provider-stream-events.sh
 ./migration/oracle/compare-radius.sh
 ./migration/oracle/compare-resource-loading.sh
+./migration/oracle/compare-rpc-runtime.sh
 ./migration/oracle/compare-server-recovery.sh
 ./migration/oracle/compare-session-jsonl.sh
 ./migration/oracle/compare-theme-runtime.sh
@@ -173,6 +174,16 @@ with metadata preservation and refreshed last-seen timestamps. Kotlin server
 tests additionally cover child-process request correlation, pending rejection,
 unexpected-exit error persistence, JSONL event/UI routing, and socket lifecycle
 behavior.
+
+The RPC runtime comparison launches the installed TypeScript and Kotlin CLIs
+with the same direct native provider fixture, isolated settings, and identical
+JSONL command sequence. It compares parse and command errors, startup/model/
+thinking/settings state, prompt and queued-message lifecycle, abort and retry
+terminal events, local bash and cancellation, extension fire-and-forget UI and
+awaited dialogs, manual compaction, message/stat/entry/tree queries, fork/clone/
+switch/new-session behavior, and HTML export. Its normalizer is limited to
+random IDs, timestamps, temporary paths, long fixture input, and bash chunk
+boundaries; protocol fields and event ordering remain part of the comparison.
 
 The GitHub Copilot comparison covers enterprise-domain device OAuth, the
 GitHub-to-Copilot token exchange, policy enablement for every known model,

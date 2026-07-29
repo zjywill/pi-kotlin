@@ -88,14 +88,14 @@ features outside that slice remain migration work.
 | Compaction | Functional slice | Token estimation, safe cut points, split turns, tool-result truncation, standalone summaries, events, persistence, and reload tests |
 | HTML export | Complete | Exact upstream standalone HTML/CSS/JavaScript, vendored Markdown and syntax-highlighting runtimes, recursive theme variables and export colors, session tree/branch/label/filter/statistics views, extension and built-in tool renderers, strict escaping, safe links, whitespace, and validated image data have byte-for-byte and browser-runtime parity evidence |
 | SQLite storage | Functional slice | Schema migration, session CRUD, ordering, filtering, stats, and codec tests |
-| Server/RPC | Functional slice | Each instance runs an independent `pi --mode rpc` child process with correlated requests, event fan-out, extension UI response routing, stderr/exit propagation, pending-request rejection, persisted error state, and restart recovery. Unix socket request/response, streaming events, persistence, piped EOF half-close, user bash persistence, concurrent local/extension bash cancellation, and stale Agent subscription ownership are covered; complete command/event parity remains |
+| Server/RPC | Complete | Each instance runs an independent `pi --mode rpc` child process with correlated requests, event fan-out, extension UI response routing, stderr/exit propagation, pending-request rejection, persisted error state, and restart recovery. An independent installed TypeScript/Kotlin native-provider grader covers the complete RPC command surface and public event ordering, including settings, prompts/queues, abort/retry, bash, extension UI/dialogs, compaction, queries, session branching, and export. Unix socket request/response, streaming events, persistence, piped EOF half-close, concurrent local/extension bash cancellation, and stale Agent subscription ownership are also covered |
 
 ## Verification snapshot
 
 Verified on July 29, 2026 against source commit
 `d7b02636a0c7e8e615d0cff70679d18d2ff59573`:
 
-- `./gradlew clean test installDist`: passed, 380 tests, 0 failures, 0 errors,
+- `./gradlew clean test installDist`: passed, 384 tests, 0 failures, 0 errors,
   and 0 skipped.
 - `./migration/oracle/compare-cli-help.sh`: passed with byte-for-byte CLI help
   parity.
@@ -154,9 +154,15 @@ Verified on July 29, 2026 against source commit
 - `./migration/oracle/compare-server-recovery.sh`: passed for restart recovery
   of persisted `starting`, `online`, `stopping`, `stopped`, and `error`
   instances, including metadata preservation and refreshed `lastSeenAt`.
+- `./migration/oracle/compare-rpc-runtime.sh`: passed with zero normalized diff
+  for the installed TypeScript and Kotlin CLIs using the same native provider
+  and JSONL command sequence. Coverage includes errors, state/settings,
+  model/thinking, prompts/queues, abort/retry terminal lifecycle, bash,
+  extension UI/dialogs, compaction, message/stat/entry/tree queries,
+  fork/clone/switch/new-session, and HTML export.
 - Provider payload/stream parity passed with Qwen Token Plan reasoning controls
   and provider-native `rawStopReason` terminal fields.
-- All 27 deterministic migration oracles passed against the same source
+- All 28 deterministic migration oracles passed against the same source
   baseline.
 - Installed `pi --export` output was byte-identical to upstream with SHA-256
   `3613ceef433cc31040a5413427db35c4fd5b1d480aab0988b1613f634809bcb6`.
@@ -169,6 +175,9 @@ Verified on July 29, 2026 against source commit
   `AGENTS.md` in startup Context order.
 - The installed `pi-server` completed `serve`, `spawn`, `status`,
   `get_available_models`, `get_state`, and `stop` in an isolated directory.
+- The final RPC parity smoke completed isolated `spawn`, `status`, direct
+  `get_state`, streamed `get_state`, `stop`, and empty-list read-back through
+  the installed `pi-server`.
 - The installed server launched a separate Kotlin RPC child for each instance.
   Killing that child persisted `error` while `status` and `list` remained
   available; killing and restarting the server converted the previously
@@ -457,9 +466,9 @@ Verified on July 29, 2026 against source commit
   the source worktree remained clean, and an isolated rerun of the whole file
   passed all 8 tests.
 - `./migration/audit-migration.sh sync` passes through `d7b02636`.
-  `./migration/audit-migration.sh full` intentionally remains nonzero on five
-  partial areas: CLI workflows, package management, extension runtime,
-  interactive terminal, and RPC/server parity.
+  `./migration/audit-migration.sh full` intentionally remains nonzero on four
+  partial areas: CLI workflows, package management, extension runtime, and
+  interactive terminal.
 - The next July 29 synchronization pass reviewed every source commit through
   `cced6a21da273b26ee4a23a803680614bbe8dd1e`. Kotlin now avoids duplicate
   context files in nested linked worktrees and accepts nullable array schemas
@@ -584,7 +593,6 @@ Verified on July 29, 2026 against source commit
   terminal transcripts at multiple widths.
 - Close CLI behavior gaps for options that are parsed or documented but do not
   yet have complete runtime behavior.
-- Complete RPC command and event parity across direct JSONL and server streams.
 
 ## Completeness audit
 

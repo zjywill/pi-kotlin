@@ -1,9 +1,12 @@
 package works.earendil.pi.agent
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import works.earendil.pi.ai.AssistantDone
@@ -62,12 +65,19 @@ suspend fun runAgentLoop(
                 pendingMessages = emptyList()
             }
 
-            val message = streamAssistantResponse(currentContext, currentConfig, emit)
+            val message =
+                try {
+                    streamAssistantResponse(currentContext, currentConfig, emit)
+                } catch (error: CancellationException) {
+                    emitAbortedStreamResponse(currentContext, currentConfig, emit, error)
+                }
             newMessages += message
 
             if (message.stopReason == StopReason.ERROR || message.stopReason == StopReason.ABORTED) {
-                emit.emit(AgentEvent.TurnEnd(message, emptyList()))
-                emit.emit(AgentEvent.AgentEnd(newMessages))
+                withContext(NonCancellable) {
+                    emit.emit(AgentEvent.TurnEnd(message, emptyList()))
+                    emit.emit(AgentEvent.AgentEnd(newMessages))
+                }
                 return newMessages
             }
 
@@ -147,6 +157,8 @@ private suspend fun streamAssistantResponse(
     val stream =
         try {
             config.streamFunction.stream(config.model, llmContext, config.streamOptions)
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Throwable) {
             return emitThrownStreamError(config.model, error, context, emit)
         }
@@ -198,6 +210,42 @@ private suspend fun streamAssistantResponse(
     emit.emit(AgentEvent.MessageEnd(message))
     return message
 }
+
+private suspend fun emitAbortedStreamResponse(
+    context: AgentContext,
+    config: AgentLoopConfig,
+    emit: AgentEventSink,
+    error: CancellationException,
+): AssistantMessage =
+    withContext(NonCancellable) {
+        val partialIndex =
+            context.messages.lastIndex.takeIf { index ->
+                index >= 0 &&
+                    (context.messages[index] as? AssistantMessage)?.stopReason == StopReason.PENDING
+            }
+        val partial = partialIndex?.let(context.messages::get) as? AssistantMessage
+        val message =
+            partial?.copy(
+                stopReason = StopReason.ABORTED,
+                errorMessage = error.message ?: "Operation aborted",
+            )
+                ?: AssistantMessage(
+                    content = emptyList(),
+                    api = config.model.api,
+                    provider = config.model.provider,
+                    model = config.model.id,
+                    stopReason = StopReason.ABORTED,
+                    errorMessage = error.message ?: "Operation aborted",
+                )
+        if (partialIndex == null) {
+            context.messages += message
+            emit.emit(AgentEvent.MessageStart(message))
+        } else {
+            context.messages[partialIndex] = message
+        }
+        emit.emit(AgentEvent.MessageEnd(message))
+        message
+    }
 
 private suspend fun emitThrownStreamError(
     model: Model,

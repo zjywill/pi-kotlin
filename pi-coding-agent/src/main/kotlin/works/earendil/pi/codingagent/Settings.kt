@@ -10,8 +10,10 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -78,8 +80,22 @@ internal data class SettingsSnapshot(
             PackageResourceType.SKILLS -> skills
             PackageResourceType.PROMPTS -> prompts
             PackageResourceType.THEMES -> themes
-        }
+    }
 }
+
+internal data class AgentRuntimeSettings(
+    val defaultProvider: String? = null,
+    val defaultModel: String? = null,
+    val defaultThinkingLevel: String? = null,
+    val steeringMode: String = "one-at-a-time",
+    val followUpMode: String = "one-at-a-time",
+    val autoCompactionEnabled: Boolean = true,
+    val compactionReserveTokens: Int = 16_384,
+    val compactionKeepRecentTokens: Int = 20_000,
+    val autoRetryEnabled: Boolean = true,
+    val retryMaxAttempts: Int = 3,
+    val retryBaseDelayMs: Long = 2_000,
+)
 
 internal class SettingsStore(
     private val cwd: Path,
@@ -107,16 +123,73 @@ internal class SettingsStore(
 
     fun mergedThemeSetting(): String? = project().theme ?: global().theme
 
-    fun setTheme(theme: String) {
-        withSettingsLock(globalPath) {
-            val current = readRaw(globalPath, SettingsScope.USER)
-            val updated =
-                buildJsonObject {
-                    current.forEach { (key, value) -> put(key, value) }
-                    put("theme", theme)
-                }
-            writeRaw(globalPath, updated)
+    fun agentRuntimeSettings(): AgentRuntimeSettings {
+        val global = global().raw
+        val project = project().raw
+
+        fun topLevel(name: String): JsonElement? = project[name] ?: global[name]
+
+        fun nested(
+            section: String,
+            name: String,
+        ): JsonElement? =
+            (project[section] as? JsonObject)?.get(name)
+                ?: (global[section] as? JsonObject)?.get(name)
+
+        return AgentRuntimeSettings(
+            defaultProvider = topLevel("defaultProvider").stringValue(),
+            defaultModel = topLevel("defaultModel").stringValue(),
+            defaultThinkingLevel = topLevel("defaultThinkingLevel").stringValue(),
+            steeringMode = topLevel("steeringMode").stringValue() ?: "one-at-a-time",
+            followUpMode = topLevel("followUpMode").stringValue() ?: "one-at-a-time",
+            autoCompactionEnabled = nested("compaction", "enabled").booleanValue() ?: true,
+            compactionReserveTokens =
+                nested("compaction", "reserveTokens").intValue()?.coerceAtLeast(0) ?: 16_384,
+            compactionKeepRecentTokens =
+                nested("compaction", "keepRecentTokens").intValue()?.coerceAtLeast(0) ?: 20_000,
+            autoRetryEnabled = nested("retry", "enabled").booleanValue() ?: true,
+            retryMaxAttempts = nested("retry", "maxRetries").intValue()?.coerceAtLeast(0) ?: 3,
+            retryBaseDelayMs =
+                nested("retry", "baseDelayMs")
+                    .intValue()
+                    ?.toLong()
+                    ?.coerceAtLeast(0)
+                    ?: 2_000,
+        )
+    }
+
+    fun setDefaultModelAndProvider(
+        provider: String,
+        model: String,
+    ) {
+        updateGlobal {
+            put("defaultProvider", provider)
+            put("defaultModel", model)
         }
+    }
+
+    fun setDefaultThinkingLevel(level: String) {
+        updateGlobal { put("defaultThinkingLevel", level) }
+    }
+
+    fun setSteeringMode(mode: String) {
+        updateGlobal { put("steeringMode", mode) }
+    }
+
+    fun setFollowUpMode(mode: String) {
+        updateGlobal { put("followUpMode", mode) }
+    }
+
+    fun setAutoCompactionEnabled(enabled: Boolean) {
+        updateGlobalNested("compaction", "enabled", JsonPrimitive(enabled))
+    }
+
+    fun setAutoRetryEnabled(enabled: Boolean) {
+        updateGlobalNested("retry", "enabled", JsonPrimitive(enabled))
+    }
+
+    fun setTheme(theme: String) {
+        updateGlobal { put("theme", theme) }
     }
 
     fun setPackages(
@@ -226,6 +299,41 @@ internal class SettingsStore(
         }
     }
 
+    private fun updateGlobal(block: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit) {
+        withSettingsLock(globalPath) {
+            val current = readRaw(globalPath, SettingsScope.USER)
+            val updated =
+                buildJsonObject {
+                    current.forEach { (key, value) -> put(key, value) }
+                    block()
+                }
+            writeRaw(globalPath, updated)
+        }
+    }
+
+    private fun updateGlobalNested(
+        section: String,
+        name: String,
+        value: JsonElement,
+    ) {
+        withSettingsLock(globalPath) {
+            val current = readRaw(globalPath, SettingsScope.USER)
+            val existing = (current[section] as? JsonObject) ?: JsonObject(emptyMap())
+            val updated =
+                buildJsonObject {
+                    current.forEach { (key, currentValue) -> put(key, currentValue) }
+                    put(
+                        section,
+                        buildJsonObject {
+                            existing.forEach { (key, nestedValue) -> put(key, nestedValue) }
+                            put(name, value)
+                        },
+                    )
+                }
+            writeRaw(globalPath, updated)
+        }
+    }
+
     private fun JsonObject.stringList(
         key: String,
         path: Path,
@@ -246,6 +354,17 @@ internal class SettingsStore(
                 .getOrNull()
         }
 }
+
+private fun JsonElement?.stringValue(): String? =
+    (this as? JsonPrimitive)
+        ?.takeIf(JsonPrimitive::isString)
+        ?.contentOrNull
+
+private fun JsonElement?.booleanValue(): Boolean? =
+    (this as? JsonPrimitive)?.booleanOrNull
+
+private fun JsonElement?.intValue(): Int? =
+    (this as? JsonPrimitive)?.intOrNull
 
 private fun parsePackageSource(value: JsonElement): PackageSourceConfig? =
     when (value) {

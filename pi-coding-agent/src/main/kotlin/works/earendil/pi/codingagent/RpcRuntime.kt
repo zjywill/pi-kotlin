@@ -12,11 +12,14 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -51,10 +54,12 @@ import works.earendil.pi.ai.CustomMessage
 import works.earendil.pi.ai.ImageContent
 import works.earendil.pi.ai.Message
 import works.earendil.pi.ai.Model
+import works.earendil.pi.ai.ModelThinkingLevel
 import works.earendil.pi.ai.Models
 import works.earendil.pi.ai.SimpleStreamOptions
 import works.earendil.pi.ai.StreamFunction
 import works.earendil.pi.ai.StreamOptions
+import works.earendil.pi.ai.StopReason
 import works.earendil.pi.ai.TextContent
 import works.earendil.pi.ai.ThinkingLevel
 import works.earendil.pi.ai.ToolCall
@@ -73,6 +78,85 @@ import kotlin.math.max
 
 private const val DIRECT_EXTENSION_UI_CANCEL_WAIT_MS = 1_000L
 private val HTML_TEMPLATE_RENDERED_TOOLS = setOf("bash", "read", "write", "edit", "ls")
+private val NON_RETRYABLE_LIMIT_PATTERN =
+    Regex(
+        listOf(
+            "GoUsageLimitError",
+            "FreeUsageLimitError",
+            "Monthly usage limit reached",
+            "available balance",
+            "insufficient_quota",
+            "out of budget",
+            "quota exceeded",
+            "billing",
+        ).joinToString("|"),
+        RegexOption.IGNORE_CASE,
+    )
+private val RETRYABLE_ERROR_PATTERN =
+    Regex(
+        listOf(
+            "overloaded",
+            "rate.?limit",
+            "too many requests",
+            "429",
+            "500",
+            "502",
+            "503",
+            "504",
+            "524",
+            "service.?unavailable",
+            "server.?error",
+            "internal.?error",
+            "provider.?returned.?error",
+            "network.?error",
+            "connection.?error",
+            "connection.?refused",
+            "connection.?lost",
+            "other side closed",
+            "fetch failed",
+            "getaddrinfo",
+            "ENOTFOUND",
+            "EAI_AGAIN",
+            "upstream.?connect",
+            "reset before headers",
+            "socket hang up",
+            "socket connection was closed",
+            "timed? out",
+            "timeout",
+            "terminated",
+            "websocket.?closed",
+            "websocket.?error",
+            "ended without",
+            "stream ended before message_stop",
+            "stream ended before a terminal response event",
+            "http2 request did not get a response",
+            "retry delay",
+            "you can retry your request",
+            "try your request again",
+            "please retry your request",
+            "ResourceExhausted",
+        ).joinToString("|"),
+        RegexOption.IGNORE_CASE,
+    )
+private val CONTEXT_OVERFLOW_PATTERN =
+    Regex(
+        listOf(
+            "prompt is too long",
+            "request_too_large",
+            "input is too long for requested model",
+            "exceeds the context window",
+            "maximum context length",
+            "input token count.*exceeds the maximum",
+            "maximum prompt length",
+            "exceeds the available context size",
+            "context window exceeds limit",
+            "exceeded model token limit",
+            "context[_ ]length[_ ]exceeded",
+            "too many tokens",
+            "token limit exceeded",
+        ).joinToString("|"),
+        RegexOption.IGNORE_CASE,
+    )
 
 data class RpcRuntimeOptions(
     val cwd: Path = Path.of("").toAbsolutePath().normalize(),
@@ -173,6 +257,14 @@ class RpcRuntime(
     private var followUpMode = QueueMode.ONE_AT_A_TIME
     private var autoCompactionEnabled = true
     private var autoRetryEnabled = true
+    private var retryMaxAttempts = 3
+    private var retryBaseDelayMs = 2_000L
+    private var retryAttempt = 0
+    private var retryDelayJob: Job? = null
+    private val compacting = AtomicBoolean(false)
+    private var compactionSettings = DEFAULT_COMPACTION_SETTINGS
+    private val steeringMessages = CopyOnWriteArrayList<String>()
+    private val followUpMessages = CopyOnWriteArrayList<String>()
     private var promptJob: Job? = null
     private val activeBashes = ConcurrentHashMap.newKeySet<RunningBash>()
     private val pendingBashMessages = mutableListOf<BashExecutionMessage>()
@@ -184,6 +276,7 @@ class RpcRuntime(
     private var extensionHost: ExtensionHost? = null
     private val extensionProviders = ExtensionProviderRegistry(models, extensionHost = { extensionHost })
     private var extensionContextProvider: () -> JsonObject = { JsonObject(emptyMap()) }
+    private var runtimeSettingsStore: SettingsStore? = null
     private var baseSystemPrompt: String = ""
     private var availableTools: List<AgentTool> = emptyList()
     private var scopedModels: List<ScopedModel> = emptyList()
@@ -272,17 +365,22 @@ class RpcRuntime(
             when (type) {
                 "prompt" -> handlePrompt(command, id)
                 "steer" -> {
-                    agent.steer(userMessage(command))
+                    queueSteering(command)
+                    delay(1)
                     successResponse(id, type)
                 }
 
                 "follow_up" -> {
-                    agent.followUp(userMessage(command))
+                    queueFollowUp(command)
+                    delay(1)
                     successResponse(id, type)
                 }
 
                 "abort" -> {
-                    promptJob?.cancel()
+                    extensionProviders.abortActiveOperations()
+                    promptJob?.cancel(CancellationException("Operation aborted"))
+                    promptJob?.join()
+                    retryDelayJob?.cancel()
                     successResponse(id, type)
                 }
 
@@ -328,8 +426,7 @@ class RpcRuntime(
                 "set_thinking_level" -> {
                     val level = command.string("level")?.toAgentThinking()
                         ?: return errorResponse(id, type, "Invalid thinking level")
-                    agent.state.thinkingLevel = level
-                    sessionManager.appendThinkingLevelChange(level.toProtocolValue())
+                    setThinkingLevel(level)
                     successResponse(id, type)
                 }
 
@@ -349,27 +446,34 @@ class RpcRuntime(
                 "set_steering_mode" -> {
                     steeringMode = command.string("mode").toQueueMode()
                     agent.setSteeringMode(steeringMode)
+                    runtimeSettingsStore?.setSteeringMode(steeringMode.toProtocolValue())
                     successResponse(id, type)
                 }
 
                 "set_follow_up_mode" -> {
                     followUpMode = command.string("mode").toQueueMode()
                     agent.setFollowUpMode(followUpMode)
+                    runtimeSettingsStore?.setFollowUpMode(followUpMode.toProtocolValue())
                     successResponse(id, type)
                 }
 
                 "compact" -> handleCompact(command, id)
                 "set_auto_compaction" -> {
                     autoCompactionEnabled = command["enabled"]?.jsonPrimitive?.booleanOrNull ?: false
+                    runtimeSettingsStore?.setAutoCompactionEnabled(autoCompactionEnabled)
                     successResponse(id, type)
                 }
 
                 "set_auto_retry" -> {
                     autoRetryEnabled = command["enabled"]?.jsonPrimitive?.booleanOrNull ?: false
+                    runtimeSettingsStore?.setAutoRetryEnabled(autoRetryEnabled)
                     successResponse(id, type)
                 }
 
-                "abort_retry" -> successResponse(id, type)
+                "abort_retry" -> {
+                    retryDelayJob?.cancel()
+                    successResponse(id, type)
+                }
                 "bash" -> handleBash(command, id)
                 "abort_bash" -> {
                     abortBashes()
@@ -411,7 +515,12 @@ class RpcRuntime(
                         type,
                         buildJsonObject {
                             put("tree", JsonArray(sessionManager.getTree().map(::encodeTreeNode)))
-                            sessionManager.getLeafId()?.let { put("leafId", it) } ?: put("leafId", JsonNull)
+                            val leafId = sessionManager.getLeafId()
+                            if (leafId == null) {
+                                put("leafId", JsonNull)
+                            } else {
+                                put("leafId", leafId)
+                            }
                         },
                     )
 
@@ -420,7 +529,12 @@ class RpcRuntime(
                         id,
                         type,
                         buildJsonObject {
-                            lastAssistantText()?.let { put("text", it) } ?: put("text", JsonNull)
+                            val text = lastAssistantText()
+                            if (text == null) {
+                                put("text", JsonNull)
+                            } else {
+                                put("text", text)
+                            }
                         },
                     )
 
@@ -429,7 +543,7 @@ class RpcRuntime(
                     if (name.isEmpty()) {
                         errorResponse(id, type, "Session name cannot be empty")
                     } else {
-                        sessionManager.appendSessionInfo(name)
+                        setSessionName(name)
                         successResponse(id, type)
                     }
                 }
@@ -441,11 +555,7 @@ class RpcRuntime(
                         buildJsonObject {
                             put(
                                 "messages",
-                                JsonArray(
-                                    agent.state.messages.map {
-                                        protocolJson.encodeToJsonElement(Message.serializer(), it)
-                                    },
-                                ),
+                                JsonArray(agent.state.messages.map(::encodeRpcMessage)),
                             )
                         },
                     )
@@ -548,7 +658,7 @@ class RpcRuntime(
                     host.invokeCommand(name, args, extensionContextProvider())
                 }
             applyExtensionActions(invocation.actions)
-            if (!agent.state.isStreaming) {
+            if (options.extensionMode == ExtensionMode.TUI) {
                 emit(buildJsonObject { put("type", "agent_settled") })
             }
             return successResponse(id, "prompt")
@@ -556,12 +666,12 @@ class RpcRuntime(
         if (agent.state.isStreaming) {
             return when (command.string("streamingBehavior")) {
                 "steer" -> {
-                    agent.steer(userMessage(command))
+                    queueSteering(command)
                     successResponse(id, "prompt")
                 }
 
                 "followUp" -> {
-                    agent.followUp(userMessage(command))
+                    queueFollowUp(command)
                     successResponse(id, "prompt")
                 }
 
@@ -579,9 +689,9 @@ class RpcRuntime(
                             systemPrompt = baseSystemPrompt,
                             context = extensionContextProvider,
                             onActions = { applyExtensionActions(it) },
-                        )
+                    )
                     agent.state.systemPrompt = before?.systemPrompt ?: baseSystemPrompt
-                    agent.prompt(prompt)
+                    runPromptWithRetry(prompt)
                 } finally {
                     flushPendingBashMessages()
                     emit(buildJsonObject { put("type", "agent_settled") })
@@ -589,6 +699,213 @@ class RpcRuntime(
                 }
             }
         return successResponse(id, "prompt")
+    }
+
+    private suspend fun runPromptWithRetry(prompt: UserMessage) {
+        var messages: List<Message> = listOf(prompt)
+        while (true) {
+            agent.prompt(messages)
+            val assistant = agent.state.messages.filterIsInstance<AssistantMessage>().lastOrNull()
+                ?: return
+            if (!shouldRetry(assistant)) {
+                if (assistant.stopReason == StopReason.ERROR && retryAttempt > 0) {
+                    emitAutoRetryEnd(
+                        success = false,
+                        attempt = retryAttempt,
+                        finalError = assistant.errorMessage,
+                    )
+                    retryAttempt = 0
+                }
+                return
+            }
+            retryAttempt += 1
+            if (retryAttempt > retryMaxAttempts) {
+                retryAttempt -= 1
+                if (retryAttempt > 0) {
+                    emitAutoRetryEnd(
+                        success = false,
+                        attempt = retryAttempt,
+                        finalError = assistant.errorMessage,
+                    )
+                    retryAttempt = 0
+                }
+                return
+            }
+            val retryDelay = retryBaseDelayMs * (1L shl (retryAttempt - 1).coerceAtMost(20))
+            if (agent.state.messages.lastOrNull() is AssistantMessage) {
+                agent.state.messages = agent.state.messages.dropLast(1)
+            }
+            if (
+                !waitForRetryDelay(retryDelay) {
+                    emit(
+                        buildJsonObject {
+                            put("type", "auto_retry_start")
+                            put("attempt", retryAttempt)
+                            put("maxAttempts", retryMaxAttempts)
+                            put("delayMs", retryDelay)
+                            put("errorMessage", assistant.errorMessage ?: "Unknown error")
+                        },
+                    )
+                }
+            ) {
+                val attempt = retryAttempt
+                retryAttempt = 0
+                emitAutoRetryEnd(
+                    success = false,
+                    attempt = attempt,
+                    finalError = "Retry cancelled",
+                )
+                return
+            }
+            messages = emptyList()
+        }
+    }
+
+    private suspend fun waitForRetryDelay(
+        delayMs: Long,
+        onReady: () -> Unit,
+    ): Boolean {
+        val job =
+            scope.launch(start = CoroutineStart.LAZY) {
+                delay(delayMs)
+            }
+        retryDelayJob = job
+        return try {
+            onReady()
+            job.start()
+            job.join()
+            !job.isCancelled
+        } finally {
+            if (retryDelayJob === job) {
+                retryDelayJob = null
+            }
+        }
+    }
+
+    private fun shouldRetry(message: AssistantMessage): Boolean =
+        autoRetryEnabled &&
+            retryAttempt < retryMaxAttempts &&
+            message.stopReason == StopReason.ERROR &&
+            message.errorMessage?.let(::isRetryableErrorMessage) == true
+
+    private fun isRetryableErrorMessage(message: String): Boolean {
+        if (NON_RETRYABLE_LIMIT_PATTERN.containsMatchIn(message)) {
+            return false
+        }
+        if (CONTEXT_OVERFLOW_PATTERN.containsMatchIn(message)) {
+            return false
+        }
+        return RETRYABLE_ERROR_PATTERN.containsMatchIn(message)
+    }
+
+    private fun emitAutoRetryEnd(
+        success: Boolean,
+        attempt: Int,
+        finalError: String? = null,
+    ) {
+        emit(
+            buildJsonObject {
+                put("type", "auto_retry_end")
+                put("success", success)
+                put("attempt", attempt)
+                finalError?.let { put("finalError", it) }
+            },
+        )
+    }
+
+    private fun queueSteering(command: JsonObject) {
+        val message = userMessage(command)
+        steeringMessages += contentText(message.content)
+        emitQueueUpdate()
+        agent.steer(message)
+    }
+
+    private fun queueFollowUp(command: JsonObject) {
+        val message = userMessage(command)
+        followUpMessages += contentText(message.content)
+        emitQueueUpdate()
+        agent.followUp(message)
+    }
+
+    private fun consumeQueuedMessage(message: Message) {
+        val user = message as? UserMessage ?: return
+        val text = contentText(user.content)
+        val steeringIndex = steeringMessages.indexOf(text)
+        if (steeringIndex >= 0) {
+            steeringMessages.removeAt(steeringIndex)
+            emitQueueUpdate()
+            return
+        }
+        val followUpIndex = followUpMessages.indexOf(text)
+        if (followUpIndex >= 0) {
+            followUpMessages.removeAt(followUpIndex)
+            emitQueueUpdate()
+        }
+    }
+
+    private fun emitQueueUpdate() {
+        emit(
+            buildJsonObject {
+                put("type", "queue_update")
+                put("steering", JsonArray(steeringMessages.map(::JsonPrimitive)))
+                put("followUp", JsonArray(followUpMessages.map(::JsonPrimitive)))
+            },
+        )
+    }
+
+    private fun setSessionName(name: String) {
+        sessionManager.appendSessionInfo(name)
+        emit(
+            buildJsonObject {
+                put("type", "session_info_changed")
+                put("name", name)
+            },
+        )
+    }
+
+    private fun emitEntryAppended(entryId: String) {
+        val entry = sessionManager.getEntry(entryId) ?: return
+        emit(
+            buildJsonObject {
+                put("type", "entry_appended")
+                put("entry", encodeEntry(entry))
+            },
+        )
+        emitExtensionRendering(entry)
+    }
+
+    private fun setThinkingLevel(requested: AgentThinkingLevel) {
+        val effective = clampThinkingLevel(requested)
+        val previous = agent.state.thinkingLevel
+        agent.state.thinkingLevel = effective
+        if (effective == previous) {
+            return
+        }
+        sessionManager.appendThinkingLevelChange(effective.toProtocolValue())
+        if (agent.state.model.reasoning || effective != AgentThinkingLevel.OFF) {
+            runtimeSettingsStore?.setDefaultThinkingLevel(effective.toProtocolValue())
+        }
+        emit(
+            buildJsonObject {
+                put("type", "thinking_level_changed")
+                put("level", effective.toProtocolValue())
+            },
+        )
+    }
+
+    private fun clampThinkingLevel(requested: AgentThinkingLevel): AgentThinkingLevel {
+        val available = availableThinkingLevels()
+        if (requested in available) {
+            return requested
+        }
+        val requestedIndex = AgentThinkingLevel.entries.indexOf(requested)
+        for (index in requestedIndex until AgentThinkingLevel.entries.size) {
+            AgentThinkingLevel.entries[index].takeIf { it in available }?.let { return it }
+        }
+        for (index in requestedIndex - 1 downTo 0) {
+            AgentThinkingLevel.entries[index].takeIf { it in available }?.let { return it }
+        }
+        return available.firstOrNull() ?: AgentThinkingLevel.OFF
     }
 
     private suspend fun handleSetModel(
@@ -604,6 +921,8 @@ class RpcRuntime(
                 ?: return errorResponse(id, "set_model", "Model not found: $provider/$modelId")
         agent.state.model = model
         sessionManager.appendModelChange(provider, modelId)
+        runtimeSettingsStore?.setDefaultModelAndProvider(provider, modelId)
+        setThinkingLevel(agent.state.thinkingLevel)
         return successResponse(
             id,
             "set_model",
@@ -626,13 +945,17 @@ class RpcRuntime(
         }
         val currentIndex = available.indexOfFirst { it.provider == agent.state.model.provider && it.id == agent.state.model.id }
         val next = available[(currentIndex + 1).mod(available.size)]
+        val inheritedThinking = agent.state.thinkingLevel
         agent.state.model = next
-        scoped
-            .firstOrNull { it.model.provider == next.provider && it.model.id == next.id }
-            ?.thinkingLevel
-            ?.toCoreThinking()
-            ?.let { agent.state.thinkingLevel = it }
+        val requestedThinking =
+            scoped
+                .firstOrNull { it.model.provider == next.provider && it.model.id == next.id }
+                ?.thinkingLevel
+                ?.toCoreThinking()
+                ?: inheritedThinking
         sessionManager.appendModelChange(next.provider, next.id)
+        runtimeSettingsStore?.setDefaultModelAndProvider(next.provider, next.id)
+        setThinkingLevel(requestedThinking)
         return successResponse(
             id,
             "cycle_model",
@@ -645,14 +968,16 @@ class RpcRuntime(
     }
 
     private fun handleCycleThinking(id: String?): JsonObject {
+        if (!agent.state.model.reasoning) {
+            return successResponse(id, "cycle_thinking_level", JsonNull)
+        }
         val levels = availableThinkingLevels()
         if (levels.isEmpty()) {
             return successResponse(id, "cycle_thinking_level", JsonNull)
         }
         val current = levels.indexOf(agent.state.thinkingLevel)
         val next = levels[(current + 1).mod(levels.size)]
-        agent.state.thinkingLevel = next
-        sessionManager.appendThinkingLevelChange(next.toProtocolValue())
+        setThinkingLevel(next)
         return successResponse(
             id,
             "cycle_thinking_level",
@@ -664,59 +989,121 @@ class RpcRuntime(
         command: JsonObject,
         id: String?,
     ): JsonObject {
-        ensureIdle("compact")
-        val entries = sessionManager.getBranch()
-        val preparation =
-            prepareCompaction(entries)
-                ?: error(
-                    if (entries.lastOrNull() is works.earendil.pi.codingagent.session.CompactionEntry) {
-                        "Already compacted"
-                    } else {
-                        "Nothing to compact (session too small)"
-                    },
-                )
-        emit(
-            buildJsonObject {
-                put("type", "compaction_start")
-                put("reason", "manual")
-            },
-        )
-        val result =
-            compact(
-                preparation = preparation,
-                models = models,
-                model = agent.state.model,
-                apiKey = options.apiKey,
-                customInstructions = command.string("customInstructions"),
-                thinkingLevel = agent.state.thinkingLevel.toProviderThinking(),
+        check(compacting.compareAndSet(false, true)) { "Compaction is already in progress" }
+        try {
+            promptJob?.cancel()
+            promptJob?.join()
+            agent.waitForIdle()
+            val entries = sessionManager.getBranch()
+            val preparation =
+                prepareCompaction(entries, compactionSettings)
+                    ?: error(
+                        if (entries.lastOrNull() is works.earendil.pi.codingagent.session.CompactionEntry) {
+                            "Already compacted"
+                        } else {
+                            "Nothing to compact (session too small)"
+                        },
+                    )
+            emit(
+                buildJsonObject {
+                    put("type", "compaction_start")
+                    put("reason", "manual")
+                },
             )
-        sessionManager.appendCompaction(
-            result.summary,
-            result.firstKeptEntryId,
-            result.tokensBefore,
-            result.details,
-            usage = result.usage,
-        )
-        agent.state.messages = sessionManager.buildSessionContext().messages
-        val data =
-            buildJsonObject {
-                put("summary", result.summary)
-                put("firstKeptEntryId", result.firstKeptEntryId)
-                put("tokensBefore", result.tokensBefore)
-                put("estimatedTokensAfter", estimateContextTokens(agent.state.messages).tokens)
-                put("usage", protocolJson.encodeToJsonElement(Usage.serializer(), result.usage))
-                put("details", result.details)
+            val result =
+                compactWithRetry(
+                    preparation = preparation,
+                    customInstructions = command.string("customInstructions"),
+                )
+            sessionManager.appendCompaction(
+                result.summary,
+                result.firstKeptEntryId,
+                result.tokensBefore,
+                result.details,
+                fromHook = false,
+                usage = result.usage,
+            )
+            agent.state.messages = sessionManager.buildSessionContext().messages
+            val data =
+                buildJsonObject {
+                    put("summary", result.summary)
+                    put("firstKeptEntryId", result.firstKeptEntryId)
+                    put("tokensBefore", result.tokensBefore)
+                    put("estimatedTokensAfter", agent.state.messages.sumOf(::estimateTokens))
+                    put("usage", rpcPayloadJson.encodeToJsonElement(Usage.serializer(), result.usage))
+                    put("details", result.details)
+                }
+            emit(
+                buildJsonObject {
+                    put("type", "compaction_end")
+                    put("reason", "manual")
+                    put("result", data)
+                    put("aborted", false)
+                    put("willRetry", false)
+                },
+            )
+            return successResponse(id, "compact", data)
+        } finally {
+            compacting.set(false)
+        }
+    }
+
+    private suspend fun compactWithRetry(
+        preparation: CompactionPreparation,
+        customInstructions: String?,
+    ): CompactionResult {
+        var attempt = 0
+        var retried = false
+        try {
+            while (true) {
+                try {
+                    return compact(
+                        preparation = preparation,
+                        models = models,
+                        model = agent.state.model,
+                        apiKey = options.apiKey,
+                        customInstructions = customInstructions,
+                        thinkingLevel = agent.state.thinkingLevel.toProviderThinking(),
+                    )
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    val message = error.message ?: error::class.simpleName.orEmpty()
+                    val retryMessage = message.removePrefix("Summarization failed: ")
+                    if (
+                        !autoRetryEnabled ||
+                        attempt >= retryMaxAttempts ||
+                        !isRetryableErrorMessage(retryMessage)
+                    ) {
+                        throw error
+                    }
+                    attempt += 1
+                    retried = true
+                    val retryDelay = retryBaseDelayMs * (1L shl (attempt - 1).coerceAtMost(20))
+                    emit(
+                        buildJsonObject {
+                            put("type", "summarization_retry_scheduled")
+                            put("attempt", attempt)
+                            put("maxAttempts", retryMaxAttempts)
+                            put("delayMs", retryDelay)
+                            put("errorMessage", retryMessage)
+                        },
+                    )
+                    delay(retryDelay)
+                    emit(
+                        buildJsonObject {
+                            put("type", "summarization_retry_attempt_start")
+                            put("source", "compaction")
+                            put("reason", "manual")
+                        },
+                    )
+                }
             }
-        emit(
-            buildJsonObject {
-                put("type", "compaction_end")
-                put("reason", "manual")
-                put("result", data)
-                put("aborted", false)
-                put("willRetry", false)
-            },
-        )
-        return successResponse(id, "compact", data)
+        } finally {
+            if (retried) {
+                emit(buildJsonObject { put("type", "summarization_retry_finished") })
+            }
+        }
     }
 
     private suspend fun handleBash(
@@ -783,9 +1170,7 @@ class RpcRuntime(
                             ?.jsonPrimitive
                             ?.contentOrNull
                             ?.toIntOrNull()
-                    if (cancelled || exitCode == null) {
-                        put("exitCode", JsonNull)
-                    } else {
+                    if (!cancelled && exitCode != null) {
                         put("exitCode", exitCode)
                     }
                     put("cancelled", cancelled)
@@ -838,9 +1223,7 @@ class RpcRuntime(
                     val truncated = truncateTail(output.toString())
                     buildJsonObject {
                         put("output", truncated.content)
-                        if (running.cancelled.get()) {
-                            put("exitCode", JsonNull)
-                        } else {
+                        if (!running.cancelled.get()) {
                             put("exitCode", exitCode)
                         }
                         put("cancelled", running.cancelled.get())
@@ -889,6 +1272,20 @@ class RpcRuntime(
         clone: Boolean,
     ): JsonObject {
         ensureIdle(if (clone) "clone" else "fork")
+        val selectedEntry =
+            if (clone) {
+                sessionManager.getLeafEntry()
+                    ?: return errorResponse(id, "clone", "Cannot clone session: no current entry selected")
+            } else {
+                val entryId = command.string("entryId")
+                    ?: return errorResponse(id, "fork", "Entry id is required")
+                sessionManager
+                    .getEntry(entryId)
+                    ?.takeIf { entry ->
+                        entry is SessionMessageEntry && entry.message is UserMessage
+                    }
+                    ?: return errorResponse(id, "fork", "Invalid entry ID for forking")
+            }
         val sourceFile =
             sessionManager.getSessionFile()
                 ?: return errorResponse(id, if (clone) "clone" else "fork", "Session is not persisted")
@@ -901,14 +1298,17 @@ class RpcRuntime(
                 options.cwd,
                 options.sessionDir,
             )
-        if (!clone) {
-            val entryId = command.string("entryId")
-                ?: return errorResponse(id, "fork", "Entry id is required")
-            if (forked.getEntry(entryId) == null) {
-                return errorResponse(id, "fork", "Entry $entryId not found")
-            }
-            forked.branch(entryId)
+        val targetLeafId = if (clone) selectedEntry.id else selectedEntry.parentId
+        if (targetLeafId == null) {
+            forked.resetLeaf()
+        } else {
+            forked.branch(targetLeafId)
         }
+        val selectedText =
+            (selectedEntry as? SessionMessageEntry)
+                ?.message
+                ?.let { it as? UserMessage }
+                ?.let { contentText(it.content) }
         replaceSession(forked)
         return if (clone) {
             successResponse(id, "clone", buildJsonObject { put("cancelled", false) })
@@ -917,7 +1317,7 @@ class RpcRuntime(
                 id,
                 "fork",
                 buildJsonObject {
-                    put("text", lastAssistantText().orEmpty())
+                    put("text", selectedText.orEmpty())
                     put("cancelled", false)
                 },
             )
@@ -941,7 +1341,12 @@ class RpcRuntime(
             "get_entries",
             buildJsonObject {
                 put("entries", JsonArray(entries.map(::encodeEntry)))
-                sessionManager.getLeafId()?.let { put("leafId", it) } ?: put("leafId", JsonNull)
+                val leafId = sessionManager.getLeafId()
+                if (leafId == null) {
+                    put("leafId", JsonNull)
+                } else {
+                    put("leafId", leafId)
+                }
             },
         )
     }
@@ -966,24 +1371,113 @@ class RpcRuntime(
         }
 
     private fun sessionStatsJson(): JsonObject {
-        var cachedTokens = 0
-        var uncachedTokens = 0
-        var totalTokens = 0
-        var costTotal = 0.0
-        val messages = sessionManager.getEntries().filterIsInstance<SessionMessageEntry>()
-        messages.forEach { entry ->
-            val usage = (entry.message as? AssistantMessage)?.usage ?: return@forEach
-            cachedTokens += usage.cacheRead
-            uncachedTokens += usage.input + usage.cacheWrite
-            totalTokens += usage.input + usage.output + usage.cacheRead + usage.cacheWrite
-            costTotal += usage.cost.total
+        var userMessages = 0
+        var assistantMessages = 0
+        var toolCalls = 0
+        var toolResults = 0
+        var totalMessages = 0
+        var input = 0
+        var output = 0
+        var cacheRead = 0
+        var cacheWrite = 0
+        var cost = 0.0
+
+        fun addUsage(usage: Usage) {
+            input += usage.input
+            output += usage.output
+            cacheRead += usage.cacheRead
+            cacheWrite += usage.cacheWrite
+            cost += usage.cost.total
         }
+
+        sessionManager.getEntries().forEach { entry ->
+            when (entry) {
+                is works.earendil.pi.codingagent.session.CompactionEntry ->
+                    entry.usage?.let(::addUsage)
+
+                is works.earendil.pi.codingagent.session.BranchSummaryEntry ->
+                    entry.usage?.let(::addUsage)
+
+                is SessionMessageEntry -> {
+                    totalMessages += 1
+                    when (val message = entry.message) {
+                        is UserMessage -> userMessages += 1
+                        is AssistantMessage -> {
+                            assistantMessages += 1
+                            toolCalls += message.content.count { it is ToolCall }
+                            addUsage(message.usage)
+                        }
+
+                        is ToolResultMessage -> {
+                            toolResults += 1
+                            message.usage?.let(::addUsage)
+                        }
+
+                        else -> Unit
+                    }
+                }
+
+                else -> Unit
+            }
+        }
+
         return buildJsonObject {
-            put("messageCount", messages.size)
-            put("cachedTokens", cachedTokens)
-            put("uncachedTokens", uncachedTokens)
-            put("totalTokens", totalTokens)
-            put("costTotal", costTotal)
+            sessionManager.getSessionFile()?.let { put("sessionFile", it.toString()) }
+            put("sessionId", sessionManager.getSessionId())
+            put("userMessages", userMessages)
+            put("assistantMessages", assistantMessages)
+            put("toolCalls", toolCalls)
+            put("toolResults", toolResults)
+            put("totalMessages", totalMessages)
+            put(
+                "tokens",
+                buildJsonObject {
+                    put("input", input)
+                    put("output", output)
+                    put("cacheRead", cacheRead)
+                    put("cacheWrite", cacheWrite)
+                    put("total", input + output + cacheRead + cacheWrite)
+                },
+            )
+            put("cost", cost)
+            contextUsageJson()?.let { put("contextUsage", it) }
+        }
+    }
+
+    private fun contextUsageJson(): JsonObject? {
+        val contextWindow = agent.state.model.contextWindow
+        if (contextWindow <= 0) {
+            return null
+        }
+        val branch = sessionManager.getBranch()
+        val latestCompactionIndex =
+            branch.indexOfLast {
+                it is works.earendil.pi.codingagent.session.CompactionEntry
+            }
+        if (latestCompactionIndex >= 0) {
+            val hasPostCompactionUsage =
+                branch
+                    .drop(latestCompactionIndex + 1)
+                    .filterIsInstance<SessionMessageEntry>()
+                    .mapNotNull { it.message as? AssistantMessage }
+                    .any {
+                        it.stopReason != StopReason.ABORTED &&
+                            it.stopReason != StopReason.ERROR &&
+                            it.usage.totalTokens > 0
+                    }
+            if (!hasPostCompactionUsage) {
+                return buildJsonObject {
+                    put("tokens", JsonNull)
+                    put("contextWindow", contextWindow)
+                    put("percent", JsonNull)
+                }
+            }
+        }
+        val tokens = estimateContextTokens(agent.state.messages).tokens
+        return buildJsonObject {
+            put("tokens", tokens)
+            put("contextWindow", contextWindow)
+            put("percent", tokens.toDouble() / contextWindow.toDouble() * 100.0)
         }
     }
 
@@ -992,7 +1486,7 @@ class RpcRuntime(
             put("model", protocolJson.encodeToJsonElement(Model.serializer(), agent.state.model))
             put("thinkingLevel", agent.state.thinkingLevel.toProtocolValue())
             put("isStreaming", agent.state.isStreaming)
-            put("isCompacting", false)
+            put("isCompacting", compacting.get())
             put("steeringMode", steeringMode.toProtocolValue())
             put("followUpMode", followUpMode.toProtocolValue())
             sessionManager.getSessionFile()?.let { put("sessionFile", it.toString()) }
@@ -1000,16 +1494,17 @@ class RpcRuntime(
             sessionManager.getSessionName()?.let { put("sessionName", it) }
             put("autoCompactionEnabled", autoCompactionEnabled)
             put("messageCount", agent.state.messages.size)
-            put("pendingMessageCount", if (agent.hasQueuedMessages()) 1 else 0)
+            put("pendingMessageCount", steeringMessages.size + followUpMessages.size)
         }
 
     private fun lastAssistantText(): String? =
         agent.state.messages
+            .asReversed()
             .filterIsInstance<AssistantMessage>()
-            .lastOrNull()
-            ?.content
-            ?.filterIsInstance<TextContent>()
-            ?.joinToString("") { it.text }
+            .firstOrNull { message ->
+                message.stopReason != StopReason.ABORTED || message.content.isNotEmpty()
+            }
+            ?.let { message -> contentText(message.content, "").trim() }
             ?.takeIf(String::isNotEmpty)
 
     private fun createInitialSession(): SessionManager =
@@ -1183,6 +1678,36 @@ class RpcRuntime(
                     },
             )
         projectTrusted = bootstrap.projectTrusted
+        val settingsStore =
+            SettingsStore(
+                cwd = sessionManager.getCwd(),
+                agentDir = options.agentDir,
+                projectTrusted = projectTrusted,
+            )
+        runtimeSettingsStore = settingsStore
+        val runtimeSettings = settingsStore.agentRuntimeSettings()
+        steeringMode = runtimeSettings.steeringMode.toQueueMode()
+        followUpMode = runtimeSettings.followUpMode.toQueueMode()
+        autoCompactionEnabled = runtimeSettings.autoCompactionEnabled
+        compactionSettings =
+            CompactionSettings(
+                enabled = runtimeSettings.autoCompactionEnabled,
+                reserveTokens = runtimeSettings.compactionReserveTokens,
+                keepRecentTokens = runtimeSettings.compactionKeepRecentTokens,
+            )
+        autoRetryEnabled = runtimeSettings.autoRetryEnabled
+        retryMaxAttempts = runtimeSettings.retryMaxAttempts
+        retryBaseDelayMs = runtimeSettings.retryBaseDelayMs
+        if (
+            options.thinking == null &&
+            sessionManager.getBranch().none {
+                it is works.earendil.pi.codingagent.session.ThinkingLevelChangeEntry
+            }
+        ) {
+            runtimeSettings.defaultThinkingLevel
+                ?.toCoreThinkingLevel()
+                ?.let { thinking = it }
+        }
         val host = bootstrap.host
         extensionHost = host
         extensionContextProvider = ::currentExtensionContext
@@ -1214,9 +1739,17 @@ class RpcRuntime(
             sessionScopedModels.firstOrNull()?.thinkingLevel?.toCoreThinking()?.let { thinking = it }
         }
         val model =
-            resolveModel(context.model?.provider, context.model?.modelId, sessionScopedModels)
+            resolveModel(
+                context.model?.provider ?: runtimeSettings.defaultProvider,
+                context.model?.modelId ?: runtimeSettings.defaultModel,
+                sessionScopedModels,
+            )
                 ?: error("No model is available")
         modelRef = model
+        if (sessionManager.getEntries().isEmpty()) {
+            sessionManager.appendModelChange(model.provider, model.id)
+            sessionManager.appendThinkingLevelChange(thinking.toProtocolValue())
+        }
         val promptResources =
             loadPromptResources(
                 cwd = sessionManager.getCwd(),
@@ -1307,17 +1840,50 @@ class RpcRuntime(
         host?.bindBackgroundActions { applyExtensionActions(it) }
         agentUnsubscribe =
             created.subscribe { event ->
+                if (event is AgentEvent.MessageStart) {
+                    consumeQueuedMessage(event.message)
+                }
+                val encoded =
+                    encodeAgentEvent(
+                        event = event,
+                        willRetry =
+                            if (event is AgentEvent.AgentEnd) {
+                                event.messages
+                                    .filterIsInstance<AssistantMessage>()
+                                    .lastOrNull()
+                                    ?.let(::shouldRetry)
+                                    ?: false
+                            } else {
+                                false
+                            },
+                    )
+                val emitBeforeExtension =
+                    event is AgentEvent.MessageStart && event.message is AssistantMessage
+                if (emitBeforeExtension) {
+                    emit(encoded)
+                }
                 emitExtensionAgentEvent(
                     host = host,
                     event = event,
                     context = ::currentExtensionContext,
                     onActions = { applyExtensionActions(it) },
                 )
-                emit(encodeAgentEvent(event))
+                if (!emitBeforeExtension) {
+                    emit(encoded)
+                }
                 if (event is AgentEvent.MessageEnd) {
                     val entryId = appendAgentMessage(sessionManager, event.message)
                     if (event.message is CustomMessage) {
                         sessionManager.getEntry(entryId)?.let(::emitExtensionRendering)
+                    }
+                    val assistant = event.message as? AssistantMessage
+                    if (
+                        assistant != null &&
+                        assistant.stopReason != StopReason.ERROR &&
+                        retryAttempt > 0
+                    ) {
+                        emitAutoRetryEnd(success = true, attempt = retryAttempt)
+                        retryAttempt = 0
                     }
                 }
                 if (event is AgentEvent.AgentEnd) {
@@ -1415,20 +1981,16 @@ class RpcRuntime(
             actions.forEach { action ->
                 when (action.type) {
                 "ui" ->
-                    emit(
-                        JsonObject(
-                            mapOf("type" to JsonPrimitive("extension_ui_request")) + action.data,
-                        ),
-                    )
+                    emit(rpcExtensionUiEvent(action.data))
 
                 "append_entry" ->
                     action.data.stringValue("customType")?.let { customType ->
                         val entryId = sessionManager.appendCustomEntry(customType, action.data["data"])
-                        sessionManager.getEntry(entryId)?.let(::emitExtensionRendering)
+                        emitEntryAppended(entryId)
                     }
 
                 "set_session_name" ->
-                    action.data.stringValue("name")?.let(sessionManager::appendSessionInfo)
+                    action.data.stringValue("name")?.let(::setSessionName)
 
                 "set_label" -> {
                     val entryId = action.data.stringValue("entryId")
@@ -1459,10 +2021,7 @@ class RpcRuntime(
                 "set_thinking_level" ->
                     action.data.stringValue("level")
                         ?.toCoreThinkingLevel()
-                        ?.let { level ->
-                            agent.state.thinkingLevel = level
-                            sessionManager.appendThinkingLevelChange(level.toProtocolValue())
-                        }
+                        ?.let(::setThinkingLevel)
 
                 "set_theme" -> {
                     val name = action.data.stringValue("name")
@@ -1644,20 +2203,16 @@ class RpcRuntime(
         actions.forEach { action ->
             when (action.type) {
                 "ui" ->
-                    emit(
-                        JsonObject(
-                            mapOf("type" to JsonPrimitive("extension_ui_request")) + action.data,
-                        ),
-                    )
+                    emit(rpcExtensionUiEvent(action.data))
 
                 "append_entry" ->
                     action.data.stringValue("customType")?.let { customType ->
                         val entryId = sessionManager.appendCustomEntry(customType, action.data["data"])
-                        sessionManager.getEntry(entryId)?.let(::emitExtensionRendering)
+                        emitEntryAppended(entryId)
                     }
 
                 "set_session_name" ->
-                    action.data.stringValue("name")?.let(sessionManager::appendSessionInfo)
+                    action.data.stringValue("name")?.let(::setSessionName)
 
                 "send_message" -> {
                     val entryId = appendExtensionMessage(sessionManager, action.data["message"])
@@ -1977,6 +2532,11 @@ class RpcRuntime(
     }
 
     private fun replaceSession(session: SessionManager) {
+        retryDelayJob?.cancel()
+        retryDelayJob = null
+        retryAttempt = 0
+        steeringMessages.clear()
+        followUpMessages.clear()
         cancelPendingExtensionUiRequests()
         detachAgent()
         shutdownExtensionSession()
@@ -2091,14 +2651,23 @@ class RpcRuntime(
         buildJsonObject {
             put("output", result.stringValue("output").orEmpty())
             val exitCode = result["exitCode"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
-            if (exitCode == null) {
-                put("exitCode", JsonNull)
-            } else {
-                put("exitCode", exitCode)
-            }
+            exitCode?.let { put("exitCode", it) }
             put("cancelled", result["cancelled"]?.jsonPrimitive?.booleanOrNull ?: false)
             put("truncated", result["truncated"]?.jsonPrimitive?.booleanOrNull ?: false)
             result.stringValue("fullOutputPath")?.let { put("fullOutputPath", it) }
+        }
+
+    private fun rpcExtensionUiEvent(data: JsonObject): JsonObject =
+        buildJsonObject {
+            put("type", "extension_ui_request")
+            val method = data.stringValue("method")
+            data.forEach { (name, value) ->
+                when {
+                    method == "setStatus" && name == "key" -> put("statusKey", value)
+                    method == "setStatus" && name == "text" -> put("statusText", value)
+                    else -> put(name, value)
+                }
+            }
         }
 
     private fun recordBashResult(
@@ -2157,11 +2726,7 @@ class RpcRuntime(
                 ?.jsonArray
                 ?.map { protocolJson.decodeFromJsonElement(ImageContent.serializer(), it) }
                 .orEmpty()
-        return if (images.isEmpty()) {
-            UserMessage(text)
-        } else {
-            UserMessage(listOf(TextContent(text)) + images)
-        }
+        return UserMessage(listOf(TextContent(text)) + images)
     }
 
     private fun resolvePath(value: String): Path {
@@ -2178,10 +2743,20 @@ class RpcRuntime(
         }
 
     private fun availableThinkingLevels(): List<AgentThinkingLevel> =
-        if (agent.state.model.reasoning) {
-            AgentThinkingLevel.entries
-        } else {
+        if (!agent.state.model.reasoning) {
             listOf(AgentThinkingLevel.OFF)
+        } else {
+            AgentThinkingLevel.entries.filter { level ->
+                val modelLevel = ModelThinkingLevel.valueOf(level.name)
+                val mapping = agent.state.model.thinkingLevelMap
+                when {
+                    mapping.containsKey(modelLevel) && mapping[modelLevel] == null -> false
+                    level == AgentThinkingLevel.XHIGH || level == AgentThinkingLevel.MAX ->
+                        mapping.containsKey(modelLevel)
+
+                    else -> true
+                }
+            }
         }
 
     private fun emit(value: JsonObject) {
@@ -2241,9 +2816,10 @@ suspend fun runRpcJsonLines(
             }
             val job =
                 launch {
-                    runtime.handleLine(line)?.let { response ->
+                    val response = runtime.handleLine(line)
+                    response?.let {
                         synchronized(lock) {
-                            output.println(protocolJson.encodeToString(JsonObject.serializer(), response))
+                            output.println(protocolJson.encodeToString(JsonObject.serializer(), it))
                             output.flush()
                         }
                     }

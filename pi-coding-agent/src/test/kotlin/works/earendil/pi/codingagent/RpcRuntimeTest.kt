@@ -145,6 +145,7 @@ class RpcRuntimeTest {
             )
 
             val renders = events.filter { it.eventType() == "extension_render" }
+            assertEquals(3, events.count { it.eventType() == "entry_appended" })
             assertEquals(
                 listOf("winner", "fallback", "broken-message", "winner-entry", "broken-entry"),
                 renders.map { it["customType"]?.jsonPrimitive?.content },
@@ -182,6 +183,292 @@ class RpcRuntimeTest {
             assertTrue(renders.none { event ->
                 event["lines"]?.jsonArray.orEmpty().any { it.jsonPrimitive.content.contains("second-") }
             })
+            runtime.close()
+        }
+
+    @Test
+    fun `session events queue counts and runtime settings match rpc state`() =
+        runTest {
+            val root = Files.createTempDirectory("pi-kotlin-rpc-session-events")
+            val agentDir = Files.createDirectories(root.resolve("agent"))
+            val provider =
+                FauxProvider(
+                    definitions =
+                        listOf(
+                            FauxModelDefinition("faux-1", reasoning = true),
+                            FauxModelDefinition("faux-2", reasoning = true),
+                        ),
+                )
+            val firstCall = CompletableDeferred<Unit>()
+            val releaseFirst = CompletableDeferred<Unit>()
+            provider.setResponses(
+                listOf(
+                    FauxResponseStep.Factory { _, _, _, _ ->
+                        firstCall.complete(Unit)
+                        releaseFirst.await()
+                        fauxAssistantMessage("first")
+                    },
+                    FauxResponseStep.Message(fauxAssistantMessage("steered")),
+                    FauxResponseStep.Message(fauxAssistantMessage("followed")),
+                ),
+            )
+            val runtime =
+                RpcRuntime(
+                    Models(listOf(provider)),
+                    RpcRuntimeOptions(
+                        cwd = root,
+                        agentDir = agentDir,
+                        noSession = true,
+                        provider = "faux",
+                        model = "faux-1",
+                    ),
+                )
+            val events = CopyOnWriteArrayList<JsonObject>()
+            runtime.subscribe(events::add)
+
+            assertSuccess(
+                runtime.handle(
+                    buildJsonObject {
+                        put("type", "set_thinking_level")
+                        put("level", "high")
+                    },
+                ),
+            )
+            assertSuccess(
+                runtime.handle(
+                    buildJsonObject {
+                        put("type", "set_steering_mode")
+                        put("mode", "all")
+                    },
+                ),
+            )
+            assertSuccess(
+                runtime.handle(
+                    buildJsonObject {
+                        put("type", "set_follow_up_mode")
+                        put("mode", "all")
+                    },
+                ),
+            )
+            assertSuccess(
+                runtime.handle(
+                    buildJsonObject {
+                        put("type", "set_auto_compaction")
+                        put("enabled", false)
+                    },
+                ),
+            )
+            assertSuccess(
+                runtime.handle(
+                    buildJsonObject {
+                        put("type", "set_auto_retry")
+                        put("enabled", false)
+                    },
+                ),
+            )
+            assertSuccess(
+                runtime.handle(
+                    buildJsonObject {
+                        put("type", "set_session_name")
+                        put("name", "RPC events")
+                    },
+                ),
+            )
+            assertSuccess(
+                runtime.handle(
+                    buildJsonObject {
+                        put("id", "prompt")
+                        put("type", "prompt")
+                        put("message", "start")
+                    },
+                ),
+            )
+            withContext(Dispatchers.Default) {
+                withTimeout(5_000) { firstCall.await() }
+            }
+            assertSuccess(
+                runtime.handle(
+                    buildJsonObject {
+                        put("type", "steer")
+                        put("message", "steer")
+                    },
+                ),
+            )
+            assertSuccess(
+                runtime.handle(
+                    buildJsonObject {
+                        put("type", "follow_up")
+                        put("message", "follow")
+                    },
+                ),
+            )
+            val queued = requireNotNull(runtime.handle(buildJsonObject { put("type", "get_state") }))
+            assertEquals(2, queued.data()["pendingMessageCount"]?.jsonPrimitive?.content?.toInt())
+            releaseFirst.complete(Unit)
+            runtime.waitForIdle()
+            val settled = requireNotNull(runtime.handle(buildJsonObject { put("type", "get_state") }))
+            assertEquals(0, settled.data()["pendingMessageCount"]?.jsonPrimitive?.content?.toInt())
+
+            val queueEvents = events.filter { it.eventType() == "queue_update" }
+            assertEquals(4, queueEvents.size)
+            assertEquals(listOf("steer"), queueEvents[0]["steering"]?.jsonArray?.map { it.jsonPrimitive.content })
+            assertEquals(listOf("follow"), queueEvents[1]["followUp"]?.jsonArray?.map { it.jsonPrimitive.content })
+            assertTrue(queueEvents.last()["steering"]?.jsonArray.orEmpty().isEmpty())
+            assertTrue(queueEvents.last()["followUp"]?.jsonArray.orEmpty().isEmpty())
+            assertTrue(events.any { it.eventType() == "thinking_level_changed" })
+            assertTrue(events.any { it.eventType() == "session_info_changed" })
+            runtime.close()
+
+            val settings = protocolJson.parseToJsonElement(Files.readString(agentDir.resolve("settings.json"))).jsonObject
+            assertEquals("all", settings["steeringMode"]?.jsonPrimitive?.content)
+            assertEquals("all", settings["followUpMode"]?.jsonPrimitive?.content)
+            assertEquals("high", settings["defaultThinkingLevel"]?.jsonPrimitive?.content)
+            assertEquals(false, settings["compaction"]?.jsonObject?.get("enabled")?.jsonPrimitive?.boolean)
+            assertEquals(false, settings["retry"]?.jsonObject?.get("enabled")?.jsonPrimitive?.boolean)
+
+            val restarted =
+                RpcRuntime(
+                    Models(listOf(provider)),
+                    RpcRuntimeOptions(
+                        cwd = root,
+                        agentDir = agentDir,
+                        noSession = true,
+                        provider = "faux",
+                        model = "faux-1",
+                    ),
+                )
+            val restartedState =
+                requireNotNull(restarted.handle(buildJsonObject { put("type", "get_state") })).data()
+            assertEquals("all", restartedState["steeringMode"]?.jsonPrimitive?.content)
+            assertEquals("all", restartedState["followUpMode"]?.jsonPrimitive?.content)
+            assertEquals(false, restartedState["autoCompactionEnabled"]?.jsonPrimitive?.boolean)
+            assertEquals("high", restartedState["thinkingLevel"]?.jsonPrimitive?.content)
+            restarted.close()
+        }
+
+    @Test
+    fun `auto retry emits retry lifecycle and continues after a transient error`() =
+        runTest {
+            val root = Files.createTempDirectory("pi-kotlin-rpc-auto-retry")
+            val agentDir = Files.createDirectories(root.resolve("agent"))
+            Files.writeString(
+                agentDir.resolve("settings.json"),
+                """{"retry":{"enabled":true,"maxRetries":2,"baseDelayMs":1}}""",
+            )
+            val provider = FauxProvider()
+            provider.setResponses(
+                listOf(
+                    FauxResponseStep.Message(
+                        fauxAssistantMessage(
+                            content = emptyList(),
+                            stopReason = StopReason.ERROR,
+                            errorMessage = "503 service unavailable",
+                        ),
+                    ),
+                    FauxResponseStep.Message(fauxAssistantMessage("recovered")),
+                ),
+            )
+            val runtime =
+                RpcRuntime(
+                    Models(listOf(provider)),
+                    RpcRuntimeOptions(
+                        cwd = root,
+                        agentDir = agentDir,
+                        noSession = true,
+                        provider = "faux",
+                        model = "faux-1",
+                    ),
+                )
+            val events = CopyOnWriteArrayList<JsonObject>()
+            runtime.subscribe(events::add)
+
+            assertSuccess(
+                runtime.handle(
+                    buildJsonObject {
+                        put("type", "prompt")
+                        put("message", "retry")
+                    },
+                ),
+            )
+            runtime.waitForIdle()
+
+            assertEquals(2, provider.state.callCount)
+            val retryStart = events.single { it.eventType() == "auto_retry_start" }
+            val retryEnd = events.single { it.eventType() == "auto_retry_end" }
+            assertEquals(1, retryStart["attempt"]?.jsonPrimitive?.content?.toInt())
+            assertEquals(2, retryStart["maxAttempts"]?.jsonPrimitive?.content?.toInt())
+            assertEquals(true, retryEnd["success"]?.jsonPrimitive?.boolean)
+            val agentEnds = events.filter { it.eventType() == "agent_end" }
+            assertEquals(listOf(true, false), agentEnds.map { it["willRetry"]?.jsonPrimitive?.boolean })
+            assertTrue(
+                events.indexOfFirst { it.eventType() == "message_end" && it["message"]?.jsonObject
+                    ?.get("role")?.jsonPrimitive?.content == "assistant" } <
+                    events.indexOfFirst { it.eventType() == "auto_retry_start" },
+            )
+            runtime.close()
+        }
+
+    @Test
+    fun `abort retry cancels backoff without cancelling rpc runtime`() =
+        runTest {
+            val root = Files.createTempDirectory("pi-kotlin-rpc-abort-retry")
+            val agentDir = Files.createDirectories(root.resolve("agent"))
+            Files.writeString(
+                agentDir.resolve("settings.json"),
+                """{"retry":{"enabled":true,"maxRetries":2,"baseDelayMs":5000}}""",
+            )
+            val provider = FauxProvider()
+            provider.setResponses(
+                listOf(
+                    FauxResponseStep.Message(
+                        fauxAssistantMessage(
+                            content = emptyList(),
+                            stopReason = StopReason.ERROR,
+                            errorMessage = "503 service unavailable",
+                        ),
+                    ),
+                    FauxResponseStep.Message(fauxAssistantMessage("must not run")),
+                ),
+            )
+            val runtime =
+                RpcRuntime(
+                    Models(listOf(provider)),
+                    RpcRuntimeOptions(
+                        cwd = root,
+                        agentDir = agentDir,
+                        noSession = true,
+                        provider = "faux",
+                        model = "faux-1",
+                    ),
+                )
+            val retryStarted = CompletableDeferred<Unit>()
+            val events = CopyOnWriteArrayList<JsonObject>()
+            runtime.subscribe { event ->
+                events += event
+                if (event.eventType() == "auto_retry_start") {
+                    retryStarted.complete(Unit)
+                }
+            }
+
+            assertSuccess(
+                runtime.handle(
+                    buildJsonObject {
+                        put("type", "prompt")
+                        put("message", "retry")
+                    },
+                ),
+            )
+            withContext(Dispatchers.Default) {
+                withTimeout(5_000) { retryStarted.await() }
+            }
+            assertSuccess(runtime.handle(buildJsonObject { put("type", "abort_retry") }))
+            runtime.waitForIdle()
+
+            assertEquals(1, provider.state.callCount)
+            val retryEnd = events.single { it.eventType() == "auto_retry_end" }
+            assertEquals(false, retryEnd["success"]?.jsonPrimitive?.boolean)
+            assertEquals("Retry cancelled", retryEnd["finalError"]?.jsonPrimitive?.content)
+            assertSuccess(runtime.handle(buildJsonObject { put("type", "get_state") }))
             runtime.close()
         }
 
@@ -635,7 +922,7 @@ class RpcRuntimeTest {
 
             assertSuccess(response)
             assertEquals("started", response.data()["output"]?.jsonPrimitive?.content)
-            assertEquals(JsonNull, response.data()["exitCode"])
+            assertEquals(null, response.data()["exitCode"])
             assertTrue(response.data()["cancelled"]?.jsonPrimitive?.boolean ?: false)
             assertEquals(0, runtime.activeBashCount)
             runtime.close()
@@ -1494,7 +1781,7 @@ class RpcRuntimeTest {
         }
 
     @Test
-    fun `startup model reference preserves slash ids and thinking suffix`() =
+    fun `startup model reference preserves slash ids and clamps unsupported thinking suffix`() =
         runTest {
             val provider =
                 FauxProvider(
@@ -1520,7 +1807,7 @@ class RpcRuntimeTest {
             val state = requireNotNull(runtime.handle(buildJsonObject { put("type", "get_state") }))
 
             assertEquals("vendor/model", state.data()["model"]?.jsonObject?.get("id")?.jsonPrimitive?.content)
-            assertEquals("xhigh", state.data()["thinkingLevel"]?.jsonPrimitive?.content)
+            assertEquals("high", state.data()["thinkingLevel"]?.jsonPrimitive?.content)
             runtime.close()
         }
 
@@ -1610,6 +1897,7 @@ class RpcRuntimeTest {
                     Models(listOf(provider)),
                     RpcRuntimeOptions(
                         cwd = cwd,
+                        agentDir = Files.createDirectories(cwd.resolve("agent")),
                         noSession = true,
                         provider = "faux",
                         model = "faux-1",
@@ -1685,7 +1973,7 @@ class RpcRuntimeTest {
             assertEquals("all", state.data()["steeringMode"]?.jsonPrimitive?.content)
             assertEquals("all", state.data()["followUpMode"]?.jsonPrimitive?.content)
             assertEquals("RPC Session", state.data()["sessionName"]?.jsonPrimitive?.content)
-            assertEquals(4, entries.data()["entries"]?.jsonArray?.size)
+            assertEquals(6, entries.data()["entries"]?.jsonArray?.size)
             assertEquals(
                 "bashExecution",
                 entries.data()["entries"]
@@ -1736,11 +2024,24 @@ class RpcRuntimeTest {
     @Test
     fun `compact summarizes old turns and reloads agent context`() =
         runTest {
+            val root = Files.createTempDirectory("pi-kotlin-rpc-compact")
+            val agentDir = Files.createDirectories(root.resolve("agent"))
+            Files.writeString(
+                agentDir.resolve("settings.json"),
+                """{"retry":{"enabled":true,"maxRetries":2,"baseDelayMs":1}}""",
+            )
             val provider = FauxProvider()
             provider.setResponses(
                 listOf(
                     FauxResponseStep.Message(fauxAssistantMessage("first response")),
                     FauxResponseStep.Message(fauxAssistantMessage("second response")),
+                    FauxResponseStep.Message(
+                        fauxAssistantMessage(
+                            content = emptyList(),
+                            stopReason = StopReason.ERROR,
+                            errorMessage = "503 service unavailable",
+                        ),
+                    ),
                     FauxResponseStep.Message(fauxAssistantMessage("structured summary")),
                 ),
             )
@@ -1748,7 +2049,8 @@ class RpcRuntimeTest {
                 RpcRuntime(
                     Models(listOf(provider)),
                     RpcRuntimeOptions(
-                        cwd = Files.createTempDirectory("pi-kotlin-rpc-compact"),
+                        cwd = root,
+                        agentDir = agentDir,
                         noSession = true,
                         provider = "faux",
                         model = "faux-1",
@@ -1778,11 +2080,32 @@ class RpcRuntimeTest {
                     ),
                 )
             val messages = requireNotNull(runtime.handle(buildJsonObject { put("type", "get_messages") }))
+            val entries = requireNotNull(runtime.handle(buildJsonObject { put("type", "get_entries") }))
 
             assertSuccess(response)
             assertEquals("structured summary", response.data()["summary"]?.jsonPrimitive?.content)
             assertTrue(response.data()["tokensBefore"]?.jsonPrimitive?.content?.toInt() ?: 0 > 0)
-            assertEquals(listOf("compaction_start", "compaction_end"), events)
+            assertTrue(entries.data()["leafId"] !is JsonNull)
+            assertEquals(
+                false,
+                entries.data()["entries"]
+                    ?.jsonArray
+                    ?.last()
+                    ?.jsonObject
+                    ?.get("fromHook")
+                    ?.jsonPrimitive
+                    ?.boolean,
+            )
+            assertEquals(
+                listOf(
+                    "compaction_start",
+                    "summarization_retry_scheduled",
+                    "summarization_retry_attempt_start",
+                    "summarization_retry_finished",
+                    "compaction_end",
+                ),
+                events,
+            )
             assertEquals(
                 "compactionSummary",
                 messages.data()["messages"]?.jsonArray?.first()?.jsonObject

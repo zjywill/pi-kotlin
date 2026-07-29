@@ -42,6 +42,13 @@ Last reviewed: July 29, 2026
   - [x] `--min-expiry` duration parsing and 30-minute bearer default
   - [x] Credential-only stdout and typed validation errors
 - [x] Agent loop
+- [x] RPC command and event runtime
+  - [x] Complete command response shapes, state/settings mutation, queries, and
+        session operations
+  - [x] Prompt, steering, follow-up, queue, abort, retry, compaction, bash, and
+        extension UI event ordering
+  - [x] Persist aborted assistants and preserve session entry/tree leaf state
+  - [x] Independent installed TypeScript/Kotlin native-provider grader
 - [x] SQLite session storage
 - [x] Context files, skills, and prompt templates
   - [x] File-backed `SYSTEM.md` and `APPEND_SYSTEM.md` source paths in startup
@@ -101,16 +108,16 @@ Last reviewed: July 29, 2026
   - [x] Port Qwen Token Plan reasoning controls
   - [x] Show system prompt file sources in startup Context output
 
-The latest implementation stage migrates server process isolation and recovery
-through `d7b02636`. Each Kotlin server instance now runs an independent
-`pi --mode rpc` child process with correlated requests, event fan-out,
-extension UI response routing, stderr/exit propagation, pending-request
-rejection, and persistent error-state handling. Restart recovery matches
-upstream for `starting`, `online`, `stopping`, `stopped`, and `error` records.
-`./gradlew clean test installDist` passes with 380 tests, all 27 deterministic
-migration oracles pass, and installed crash/restart smoke verifies that child
-failure does not terminate the server. The full audit remains nonzero on the
-five partial areas listed below.
+The latest implementation stage closes direct RPC command and event parity
+through `d7b02636`. The installed TypeScript and Kotlin CLIs now produce the
+same normalized transcript for command errors, state/settings, prompts and
+queues, abort/retry lifecycle, bash, extension UI, compaction, session queries
+and branching, and HTML export when driven by the same native provider and
+JSONL command sequence. Server process isolation and restart recovery remain
+covered by their independent oracle. `./gradlew clean test installDist` passes
+with 384 tests, all 28 deterministic migration oracles pass, and installed
+server direct/stream state smoke passes. The full audit remains nonzero on the
+four partial areas listed below.
 
 ## Remaining
 
@@ -224,15 +231,38 @@ five partial areas listed below.
 ### 8. RPC and server
 
 - [x] Process recovery
-- [ ] Full RPC command parity
-- [ ] Full event parity
+- [x] Full RPC command parity
+- [x] Full event parity
 - [x] Extension UI request/response support over JSONL and server streams
 
 ## Next stage
 
-Complete full RPC command and event parity, then continue the remaining
-interactive extension/full-screen terminal and CLI/package gaps as separately
-audited slices.
+Continue the remaining CLI/configuration, package-management, interactive
+extension, and full-screen terminal gaps as separately audited slices.
+
+Evidence for the completed RPC command/event parity stage:
+
+- [x] Same direct native provider fixture loaded by installed TypeScript and
+      Kotlin CLIs
+- [x] Parse/unknown errors, state, model, thinking, settings, prompts, steering,
+      follow-up, queues, abort, retry, bash, dialogs, compaction, entries/tree,
+      fork/clone/switch/new-session, and HTML export compared
+- [x] Full default-field message/event encoding and upstream-compatible text
+      block payloads
+- [x] Aborted assistant terminal lifecycle and session persistence
+- [x] Compaction retry/settings/result parity and explicit `fromHook=false`
+- [x] Stable session leaf IDs, last-assistant text, branch names, and initial
+      model/thinking entries
+- [x] Focused AgentLoop and RPC runtime tests
+- [x] `./migration/oracle/compare-rpc-runtime.sh` with zero diff
+- [x] `./gradlew clean test installDist` with 384 tests and no failures,
+      errors, or skips
+- [x] All 28 deterministic migration oracles
+- [x] Installed `pi-server` spawn, status, direct `get_state`, streamed
+      `get_state`, stop, and empty-list smoke
+- [x] `./migration/audit-migration.sh sync` through `d7b02636`
+- [x] `./migration/audit-migration.sh full` identifies exactly four remaining
+      partial areas
 
 Evidence for the completed server process recovery stage:
 
@@ -251,7 +281,7 @@ Evidence for the completed server process recovery stage:
 - [x] All 27 deterministic migration oracles
 - [x] Installed lifecycle, child crash, and server restart recovery smoke
 - [x] `./migration/audit-migration.sh sync` through `d7b02636`
-- [x] `./migration/audit-migration.sh full` still identifies exactly five
+- [x] `./migration/audit-migration.sh full` now identifies exactly four
       partial areas
 
 Evidence for the completed HTML export stage:

@@ -31,6 +31,7 @@ class SessionManager private constructor(
     private val byId = linkedMapOf<String, SessionEntry>()
     private val labelsById = mutableMapOf<String, String>()
     private val labelTimestampsById = mutableMapOf<String, String>()
+    @Volatile
     private var leafId: String? = null
     private var flushed = false
 
@@ -166,7 +167,7 @@ class SessionManager private constructor(
     }
 
     fun getSessionName(): String? =
-        getEntries()
+        getBranch()
             .asReversed()
             .filterIsInstance<SessionInfoEntry>()
             .firstOrNull()

@@ -1,11 +1,16 @@
 package works.earendil.pi.agent
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import works.earendil.pi.ai.AssistantMessage
+import works.earendil.pi.ai.AssistantStart
 import works.earendil.pi.ai.Context
 import works.earendil.pi.ai.FauxProvider
 import works.earendil.pi.ai.FauxResponseStep
@@ -17,6 +22,7 @@ import works.earendil.pi.ai.TextContent
 import works.earendil.pi.ai.ToolCall
 import works.earendil.pi.ai.ToolResultMessage
 import works.earendil.pi.ai.UserMessage
+import works.earendil.pi.ai.createAssistantMessageEventStream
 import works.earendil.pi.ai.fauxAssistantMessage
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -152,6 +158,60 @@ class AgentLoopTest {
             val result = messages.filterIsInstance<ToolResultMessage>().single()
             assertTrue(result.isError)
             assertTrue((result.content.single() as TextContent).text.contains("output token limit"))
+        }
+
+    @Test
+    fun `cancellation finalizes a pending assistant and emits terminal lifecycle`() =
+        runTest {
+            val provider = FauxProvider()
+            val model = requireNotNull(provider.getModel())
+            val partial =
+                fauxAssistantMessage(
+                    content = listOf(TextContent("partial")),
+                    stopReason = StopReason.PENDING,
+                )
+            val started = CompletableDeferred<Unit>()
+            val events = mutableListOf<AgentEvent>()
+            val job =
+                launch {
+                    runAgentLoop(
+                        prompts = listOf(UserMessage("cancel")),
+                        context = AgentContext(systemPrompt = ""),
+                        config =
+                            AgentLoopConfig(
+                                model = model,
+                                streamFunction =
+                                    StreamFunction { _, _: Context, _: SimpleStreamOptions ->
+                                        createAssistantMessageEventStream().also { stream ->
+                                            stream.push(AssistantStart(partial))
+                                        }
+                                    },
+                            ),
+                        emit =
+                            AgentEventSink { event ->
+                                events += event
+                                if (event is AgentEvent.MessageStart && event.message is AssistantMessage) {
+                                    started.complete(Unit)
+                                }
+                            },
+                    )
+                }
+
+            started.await()
+            job.cancel(CancellationException("Operation aborted"))
+            job.join()
+
+            val messageEnd =
+                events
+                    .filterIsInstance<AgentEvent.MessageEnd>()
+                    .map(AgentEvent.MessageEnd::message)
+                    .filterIsInstance<AssistantMessage>()
+                    .single()
+            assertEquals(StopReason.ABORTED, messageEnd.stopReason)
+            assertEquals("Operation aborted", messageEnd.errorMessage)
+            assertEquals(listOf(TextContent("partial")), messageEnd.content)
+            assertTrue(events[events.lastIndex - 1] is AgentEvent.TurnEnd)
+            assertTrue(events.last() is AgentEvent.AgentEnd)
         }
 
     private fun config(
