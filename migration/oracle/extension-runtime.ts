@@ -46,6 +46,10 @@ const command = [...extension.commands.values()].find((value) => value.name === 
 if (!command) throw new Error("record was not registered");
 const dialogsCommand = [...extension.commands.values()].find((value) => value.name === "dialogs");
 if (!dialogsCommand) throw new Error("dialogs was not registered");
+const scheduleBackgroundCommand = [...extension.commands.values()].find(
+	value => value.name === "schedule-background",
+);
+if (!scheduleBackgroundCommand) throw new Error("schedule-background was not registered");
 const initialTools = [...extension.tools.values()];
 const initialCommands = [...extension.commands.values()];
 const initialFlags = [...extension.flags.values()];
@@ -112,10 +116,39 @@ const toolResult = await tool.execute(
 const commandActions: unknown[] = [];
 await command.handler("checkpoint", context(commandActions) as never);
 commandActions.unshift(...runtimeActions.splice(0));
+const dynamicTools = [...extension.tools.values()].map(({ definition }) => definition.name);
+const dynamicCommands = [...extension.commands.values()].map(value => value.name);
+const dynamicFlags = [...extension.flags.values()].map(value => value.name);
 
 const dialogActions: unknown[] = [];
 await dialogsCommand.handler("", context(dialogActions) as never);
 dialogActions.unshift(...runtimeActions.splice(0));
+
+await scheduleBackgroundCommand.handler("", context([]) as never);
+for (let attempt = 0; attempt < 200; attempt++) {
+	const ready =
+		extension.tools.has("background_echo") &&
+		[...extension.commands.values()].some(value => value.name === "background-command") &&
+		extension.flags.has("background-flag") &&
+		runtime.pendingProviderRegistrations.some(value => value.name === "background-provider");
+	if (ready) break;
+	await new Promise(resolve => setTimeout(resolve, 5));
+}
+const backgroundTool = extension.tools.get("background_echo")?.definition;
+if (!backgroundTool) throw new Error("background tool was not registered");
+const backgroundCommand = [...extension.commands.values()].find(value => value.name === "background-command");
+if (!backgroundCommand) throw new Error("background command was not registered");
+const backgroundProvider = runtime.pendingProviderRegistrations.find(value => value.name === "background-provider");
+if (!backgroundProvider) throw new Error("background provider was not registered");
+const backgroundToolResult = await backgroundTool.execute(
+	"background-call",
+	{ text: "ready" },
+	undefined,
+	undefined,
+	context([]) as never,
+);
+const backgroundCommandActions: unknown[] = [];
+await backgroundCommand.handler("", context(backgroundCommandActions) as never);
 
 const sessionActions: unknown[] = [];
 for (const handler of extension.handlers.get("session_start") ?? []) {
@@ -438,10 +471,12 @@ const output = {
 			value: runtime.flagValues.get(value.name) ?? null,
 		})),
 		providers: [
-			...runtime.pendingProviderRegistrations.map(value => ({
-				name: value.name,
-				config: value.config,
-			})),
+			...runtime.pendingProviderRegistrations
+				.map(value => ({
+					name: value.name,
+					config: value.config,
+				}))
+				.filter(value => value.name !== "background-provider"),
 			...runtime.pendingNativeProviderRegistrations.map(value => ({
 				name: value.provider.id,
 				config: {
@@ -468,9 +503,17 @@ const output = {
 		events: [...extension.handlers.keys()].sort(),
 	},
 	dynamicRegistrations: {
+		tools: dynamicTools,
+		commands: dynamicCommands,
+		flags: dynamicFlags,
+	},
+	backgroundRegistrations: {
 		tools: [...extension.tools.values()].map(({ definition }) => definition.name),
 		commands: [...extension.commands.values()].map(value => value.name),
 		flags: [...extension.flags.values()].map(value => value.name),
+		providerModelIds: backgroundProvider.config.models?.map(model => model.id) ?? [],
+		toolResult: backgroundToolResult,
+		commandActions: backgroundCommandActions,
 	},
 	tool: {
 		result: toolResult,

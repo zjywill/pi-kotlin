@@ -2,6 +2,8 @@ package works.earendil.pi.codingagent
 
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
@@ -104,6 +106,12 @@ fun main(args: Array<String>) =
         )
     val providerRegistry = ExtensionProviderRegistry(models, extensionHost = { host })
     try {
+        val backgroundRegistrationsReady = CountDownLatch(1)
+        host.bindBackgroundActions { actions ->
+            if (actions.any { it.type == "registrations_changed" }) {
+                backgroundRegistrationsReady.countDown()
+            }
+        }
         val registration = host.registrations
         val toolRegistration = registration.tools.single { it.name == "extension_echo" }
         val toolInvocation =
@@ -130,6 +138,28 @@ fun main(args: Array<String>) =
                 context = context,
             )
         val dynamicRegistration = host.registrations
+        host.invokeCommand(
+            name = "schedule-background",
+            args = "",
+            context = context,
+        )
+        check(backgroundRegistrationsReady.await(2, TimeUnit.SECONDS)) {
+            "Timed out waiting for background extension registrations"
+        }
+        val backgroundRegistration = host.registrations
+        val backgroundTool =
+            host.invokeTool(
+                toolId = backgroundRegistration.tools.single { it.name == "background_echo" }.id,
+                toolCallId = "background-call",
+                params = buildJsonObject { put("text", "ready") },
+                context = context,
+            )
+        val backgroundCommand =
+            host.invokeCommand(
+                name = "background-command",
+                args = "",
+                context = context,
+            )
         val session =
             host.emit(
                 event =
@@ -525,6 +555,38 @@ fun main(args: Array<String>) =
                         put("tools", JsonArray(dynamicRegistration.tools.map { JsonPrimitive(it.name) }))
                         put("commands", JsonArray(dynamicRegistration.commands.map { JsonPrimitive(it.name) }))
                         put("flags", JsonArray(dynamicRegistration.flags.map { JsonPrimitive(it.name) }))
+                    },
+                )
+                put(
+                    "backgroundRegistrations",
+                    buildJsonObject {
+                        put(
+                            "tools",
+                            JsonArray(backgroundRegistration.tools.map { JsonPrimitive(it.name) }),
+                        )
+                        put(
+                            "commands",
+                            JsonArray(backgroundRegistration.commands.map { JsonPrimitive(it.name) }),
+                        )
+                        put(
+                            "flags",
+                            JsonArray(backgroundRegistration.flags.map { JsonPrimitive(it.name) }),
+                        )
+                        put(
+                            "providerModelIds",
+                            JsonArray(
+                                backgroundRegistration.providers
+                                    .single {
+                                        it.getValue("name").jsonPrimitive.content == "background-provider"
+                                    }.getValue("config")
+                                    .jsonObject
+                                    .getValue("models")
+                                    .jsonArray
+                                    .map { model -> model.jsonObject.getValue("id") },
+                            ),
+                        )
+                        put("toolResult", requireNotNull(backgroundTool.result))
+                        put("commandActions", normalizedActions(backgroundCommand.actions))
                     },
                 )
                 put(

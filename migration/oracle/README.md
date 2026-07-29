@@ -100,14 +100,17 @@ function-valued `user_bash` output/exit status, live custom-provider stream
 events, legacy extension OAuth login/refresh/API-key derivation/model
 projection, direct native provider registration, native API-key auth context,
 provider-scoped store access, model filtering, both native stream methods, and
-named-provider `refreshModels`. Command-time tool, command, and flag
+named-provider `refreshModels`. It also schedules tool, command, flag, and
+provider registrations after an extension command returns, waits for the
+out-of-band update, and invokes the new tool and command. Command-time
 registrations are compared after the host refreshes its live registration
 metadata. Kotlin runtime tests additionally cover registration, model
 selection, interactive trust choices, UI timeout/EOF/shutdown behavior, server
 stream routing, bash and provider cancellation, arbitrary top-level OAuth
 credential fields, native auth `env`/`fileExists` correlation, model-store
-`read`/`write`/`delete`, immediate active-tool refresh, host lifecycle cleanup,
-and invalid re-registration rollback.
+`read`/`write`/`delete`, immediate and background active-tool refresh,
+background provider discovery, host lifecycle cleanup, and invalid
+re-registration rollback.
 
 The model catalog runtime comparison covers bundled-versus-remote timestamp
 selection, a newer persisted overlay restored without network access, and

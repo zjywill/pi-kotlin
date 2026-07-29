@@ -1,6 +1,9 @@
 package works.earendil.pi.codingagent
 
 import java.nio.file.Files
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -514,6 +517,137 @@ class ExtensionHostTest {
             )
             assertFalse(host.registrations.providers.isNotEmpty())
             host.close()
+        }
+
+    @Test
+    fun `delivers registrations created after a command response`() =
+        runTest {
+            assumeTrue(nodeAvailable(), "Node.js 22+ is required for extension runtime tests")
+            val root = Files.createTempDirectory("pi-kotlin-extension-background-registrations")
+            val agentDir = Files.createDirectories(root.resolve("agent"))
+            val extension =
+                root.resolve("background.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        import { Type } from "typebox";
+                        export default function(pi) {
+                          pi.registerCommand("schedule", {
+                            handler() {
+                              setTimeout(() => {
+                                pi.registerTool({
+                                  name: "background_echo",
+                                  label: "Background echo",
+                                  description: "Registered after the command response",
+                                  parameters: Type.Object({ text: Type.String() }),
+                                  async execute(_id, params) {
+                                    return {
+                                      content: [{ type: "text", text: `background:${'$'}{params.text}` }],
+                                      details: {},
+                                    };
+                                  },
+                                });
+                                pi.registerCommand("background-command", { handler() {} });
+                                pi.registerFlag("background-flag", { type: "boolean", default: true });
+                                pi.registerProvider("background-provider", {
+                                  name: "Background Provider",
+                                  baseUrl: "https://background.invalid/v1",
+                                  apiKey: "background-key",
+                                  api: "openai-completions",
+                                  models: [{
+                                    id: "background-model",
+                                    name: "Background Model",
+                                    reasoning: false,
+                                    input: ["text"],
+                                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                                    contextWindow: 8192,
+                                    maxTokens: 1024,
+                                  }],
+                                });
+                              }, 0);
+                            },
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val diagnostics = CopyOnWriteArrayList<ExtensionDiagnostic>()
+            val backgroundActions = CopyOnWriteArrayList<ExtensionAction>()
+            val registrationsReady = CountDownLatch(1)
+            val host =
+                assertNotNull(
+                    ExtensionHost.start(
+                        sources =
+                            listOf(
+                                ExtensionSource(
+                                    extension,
+                                    ResourceSourceInfo(extension, "local", baseDir = root),
+                                ),
+                            ),
+                        agentDir = agentDir,
+                        cwd = root,
+                        mode = ExtensionMode.RPC,
+                        projectTrusted = true,
+                        flagValues = emptyMap(),
+                        context = extensionTestContext(root),
+                        onDiagnostic = diagnostics::add,
+                    ),
+                )
+            try {
+                host.invokeCommand("schedule", "", extensionTestContext(root))
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+                while (host.registrations.tools.none { it.name == "background_echo" }) {
+                    check(System.nanoTime() < deadline) {
+                        "Timed out waiting for the host to receive background registrations"
+                    }
+                    Thread.sleep(10)
+                }
+                host.bindBackgroundActions { actions ->
+                    backgroundActions += actions
+                    if (actions.any { it.type == "registrations_changed" }) {
+                        registrationsReady.countDown()
+                    }
+                }
+                assertTrue(
+                    registrationsReady.await(2, TimeUnit.SECONDS),
+                    "Timed out waiting for background registrations",
+                )
+                assertEquals(
+                    listOf("background_echo"),
+                    host.registrations.tools.map { it.name },
+                )
+                assertTrue(host.registrations.commands.any { it.name == "background-command" })
+                assertTrue(host.registrations.flags.any { it.name == "background-flag" })
+                assertTrue(
+                    host.registrations.providers.any {
+                        it["name"]?.jsonPrimitive?.content == "background-provider"
+                    },
+                )
+                assertTrue(backgroundActions.any { it.type == "register_provider" })
+
+                val result =
+                    host.invokeTool(
+                        toolId = host.registrations.tools.single().id,
+                        toolCallId = "background-call",
+                        params = buildJsonObject { put("text", "ready") },
+                        context = extensionTestContext(root),
+                    )
+                assertEquals(
+                    "background:ready",
+                    result.result
+                        ?.jsonObject
+                        ?.get("content")
+                        ?.jsonArray
+                        ?.single()
+                        ?.jsonObject
+                        ?.get("text")
+                        ?.jsonPrimitive
+                        ?.content,
+                )
+                assertTrue(diagnostics.isEmpty(), diagnostics.joinToString())
+            } finally {
+                host.close()
+            }
         }
 
     private fun extensionTestContext(root: java.nio.file.Path): JsonObject =

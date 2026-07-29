@@ -116,6 +116,7 @@ class RpcRuntime(
     private val pendingBashMessages = mutableListOf<BashExecutionMessage>()
     private val pendingExtensionUiRequests = ConcurrentHashMap<String, (JsonObject) -> Unit>()
     private val closing = AtomicBoolean(false)
+    private val extensionActionLock = Any()
     private var promptResources: PromptResources? = null
     private var extensionHost: ExtensionHost? = null
     private val extensionProviders = ExtensionProviderRegistry(models, extensionHost = { extensionHost })
@@ -160,6 +161,9 @@ class RpcRuntime(
     }
 
     suspend fun handle(command: JsonObject): JsonObject? {
+        synchronized(extensionActionLock) {
+            // Establish visibility for background extension registration updates.
+        }
         val id = command.string("id")
         val type = command.string("type") ?: return errorResponse(id, "unknown", "Command type is required")
         return try {
@@ -1159,6 +1163,7 @@ class RpcRuntime(
                 ),
             )
         createdRef = created
+        host?.bindBackgroundActions { applyExtensionActions(it) }
         agentUnsubscribe =
             created.subscribe { event ->
                 emitExtensionAgentEvent(
@@ -1254,14 +1259,15 @@ class RpcRuntime(
                 ),
             )
         }
-        extensionProviders.reset()
         host.close()
+        extensionProviders.reset()
         extensionHost = null
     }
 
     private fun applyExtensionActions(actions: List<ExtensionAction>) {
-        actions.forEach { action ->
-            when (action.type) {
+        synchronized(extensionActionLock) {
+            actions.forEach { action ->
+                when (action.type) {
                 "ui" ->
                     emit(
                         JsonObject(
@@ -1401,6 +1407,7 @@ class RpcRuntime(
                             error = "Extension action is not available in the Kotlin runtime yet",
                         ),
                     )
+                }
             }
         }
     }

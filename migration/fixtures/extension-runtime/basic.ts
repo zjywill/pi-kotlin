@@ -316,6 +316,54 @@ export default function extensionRuntimeFixture(pi: ExtensionAPI) {
 		},
 	});
 
+	pi.registerCommand("schedule-background", {
+		description: "Register extension features after the command returns",
+		handler() {
+			setTimeout(() => {
+				pi.registerTool(
+					defineTool({
+						name: "background_echo",
+						label: "Background echo",
+						description: "Registered outside an extension invocation",
+						parameters: Type.Object({ text: Type.String() }),
+						async execute(_toolCallId, params) {
+							return {
+								content: [{ type: "text", text: `background:${params.text}` }],
+								details: {},
+							};
+						},
+					}),
+				);
+				pi.registerCommand("background-command", {
+					description: "Registered outside an extension invocation",
+					handler(_args, ctx) {
+						ctx.ui.notify("background-command", "info");
+					},
+				});
+				pi.registerFlag("background-flag", {
+					type: "boolean",
+					description: "Registered outside an extension invocation",
+					default: true,
+				});
+				pi.registerProvider("background-provider", {
+					name: "Background Provider",
+					baseUrl: "https://background.invalid/v1",
+					apiKey: "background-key",
+					api: "openai-completions",
+					models: [{
+						id: "background-model",
+						name: "Background Model",
+						reasoning: false,
+						input: ["text"],
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						contextWindow: 8192,
+						maxTokens: 1024,
+					}],
+				});
+			}, 0);
+		},
+	});
+
 	pi.on("session_start", (_event, ctx) => {
 		ctx.ui.setStatus("fixture", "started");
 	});

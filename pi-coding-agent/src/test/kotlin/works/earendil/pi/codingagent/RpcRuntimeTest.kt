@@ -7,6 +7,7 @@ import java.io.PipedOutputStream
 import java.io.PrintWriter
 import java.nio.file.Files
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -983,6 +984,172 @@ class RpcRuntimeTest {
 
             assertEquals(2, provider.state.callCount)
             runtime.close()
+        }
+
+    @Test
+    fun `background extension registrations reach commands tools and providers without another invocation`() =
+        runTest {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                nodeAvailable(),
+                "Node.js 22+ is required for extension runtime tests",
+            )
+            val root = Files.createTempDirectory("pi-kotlin-rpc-background-extension")
+            val extension =
+                root.resolve("background.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        import { Type } from "typebox";
+                        export default function(pi) {
+                          pi.registerCommand("schedule-background", {
+                            handler() {
+                              setTimeout(() => {
+                                pi.registerTool({
+                                  name: "background_echo",
+                                  label: "Background echo",
+                                  description: "Registered after the command response",
+                                  parameters: Type.Object({ text: Type.String() }),
+                                  async execute(_id, params) {
+                                    return {
+                                      content: [{ type: "text", text: `background:${'$'}{params.text}` }],
+                                      details: {},
+                                    };
+                                  },
+                                });
+                                pi.registerCommand("background-command", {
+                                  handler(_args, ctx) {
+                                    ctx.ui.notify("background-command-ready", "info");
+                                  },
+                                });
+                                pi.registerProvider("background-provider", {
+                                  name: "Background Provider",
+                                  baseUrl: "https://background.invalid/v1",
+                                  apiKey: "background-key",
+                                  api: "openai-completions",
+                                  models: [{
+                                    id: "background-model",
+                                    name: "Background Model",
+                                    reasoning: false,
+                                    input: ["text"],
+                                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                                    contextWindow: 8192,
+                                    maxTokens: 1024,
+                                  }],
+                                });
+                              }, 0);
+                            },
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val provider = FauxProvider()
+            provider.setResponses(
+                listOf(
+                    FauxResponseStep.Factory { context, _, _, _ ->
+                        assertTrue(context.tools.any { it.name == "background_echo" })
+                        assertTrue(context.systemPrompt.orEmpty().contains("background_echo"))
+                        fauxAssistantMessage(
+                            content =
+                                listOf(
+                                    fauxToolCall(
+                                        name = "background_echo",
+                                        arguments = buildJsonObject { put("text", "ready") },
+                                        id = "background-call",
+                                    ),
+                                ),
+                            stopReason = StopReason.TOOL_USE,
+                        )
+                    },
+                    FauxResponseStep.Factory { context, _, _, _ ->
+                        val result = context.messages.filterIsInstance<ToolResultMessage>().last()
+                        assertEquals("background:ready", works.earendil.pi.ai.contentText(result.content))
+                        fauxAssistantMessage("background complete")
+                    },
+                ),
+            )
+            val runtime =
+                RpcRuntime(
+                    Models(listOf(provider)),
+                    RpcRuntimeOptions(
+                        cwd = root,
+                        agentDir = Files.createDirectories(root.resolve("agent")),
+                        noSession = true,
+                        provider = "faux",
+                        model = "faux-1",
+                        extensionPaths = listOf(extension.toString()),
+                    ),
+                )
+            val events = CopyOnWriteArrayList<JsonObject>()
+            runtime.subscribe(events::add)
+
+            try {
+                assertSuccess(
+                    runtime.handle(
+                        buildJsonObject {
+                            put("type", "prompt")
+                            put("message", "/schedule-background")
+                        },
+                    ),
+                )
+                withContext(Dispatchers.IO) {
+                    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+                    while (true) {
+                        val commands =
+                            requireNotNull(runtime.handle(buildJsonObject { put("type", "get_commands") }))
+                                .data()["commands"]
+                                ?.jsonArray
+                                .orEmpty()
+                        val models =
+                            requireNotNull(runtime.handle(buildJsonObject { put("type", "get_available_models") }))
+                                .data()["models"]
+                                ?.jsonArray
+                                .orEmpty()
+                        if (
+                            commands.any {
+                                it.jsonObject["name"]?.jsonPrimitive?.content == "background-command"
+                            } &&
+                            models.any {
+                                it.jsonObject["provider"]?.jsonPrimitive?.content == "background-provider" &&
+                                    it.jsonObject["id"]?.jsonPrimitive?.content == "background-model"
+                            }
+                        ) {
+                            break
+                        }
+                        check(System.nanoTime() < deadline) {
+                            "Timed out waiting for background extension registrations"
+                        }
+                        Thread.sleep(20)
+                    }
+                }
+
+                assertSuccess(
+                    runtime.handle(
+                        buildJsonObject {
+                            put("type", "prompt")
+                            put("message", "/background-command")
+                        },
+                    ),
+                )
+                assertTrue(
+                    events.any {
+                        it.eventType() == "extension_ui_request" &&
+                            it["message"]?.jsonPrimitive?.content == "background-command-ready"
+                    },
+                )
+                assertSuccess(
+                    runtime.handle(
+                        buildJsonObject {
+                            put("type", "prompt")
+                            put("message", "use the background tool")
+                        },
+                    ),
+                )
+                runtime.waitForIdle()
+                assertEquals(2, provider.state.callCount)
+            } finally {
+                runtime.close()
+            }
         }
 
     @Test

@@ -93,6 +93,7 @@ class CliRuntime(
         var selectedTools: List<AgentTool> = initialBuiltInTools
         var extensionHost: ExtensionHost? = null
         val providerRegistry = ExtensionProviderRegistry(models, extensionHost = { extensionHost })
+        val extensionActionLock = Any()
         var promptResourcesRef: PromptResources? = null
         var baseSystemPrompt = ""
         var refreshExtensionRegistrations: () -> Unit = {}
@@ -124,8 +125,9 @@ class CliRuntime(
         }
 
         fun applyExtensionActions(actions: List<ExtensionAction>) {
-            actions.forEach { action ->
-                when (action.type) {
+            synchronized(extensionActionLock) {
+                actions.forEach { action ->
+                    when (action.type) {
                     "ui" -> {
                         if (action.data.stringValue("method") == "notify") {
                             stderr.println(action.data.stringValue("message").orEmpty())
@@ -213,6 +215,7 @@ class CliRuntime(
                             "Warning: Extension UI method ${action.data.stringValue("method").orEmpty()} " +
                                 "is not available in print mode.",
                         )
+                    }
                 }
             }
         }
@@ -418,6 +421,7 @@ class CliRuntime(
                 agent.state.systemPrompt = baseSystemPrompt
             }
         }
+        extensionHost?.bindBackgroundActions(::applyExtensionActions)
         if (args.mode == OutputMode.JSON) {
             sessionManager.getHeader()?.let { header ->
                 stdout.println(protocolJson.encodeToString(JsonObject.serializer(), encodeEntry(header)))
@@ -544,8 +548,8 @@ class CliRuntime(
                     onActions = ::applyExtensionActions,
                 )
             }
-            providerRegistry.reset()
             extensionHost?.close()
+            providerRegistry.reset()
         }
     }
 

@@ -5,7 +5,7 @@ Last reviewed: July 29, 2026
 ## Completion gate
 
 - Source repository: `/Users/junyizhang/Git/pi`
-- Reviewed source commit: `cced6a21da273b26ee4a23a803680614bbe8dd1e`
+- Reviewed source commit: `4f0437e2d58d651dd934119ecabea2893975f62f`
 - Target repository: `/Users/junyizhang/Git/pi-kotlin`
 - The migration is complete only when:
 
@@ -65,8 +65,10 @@ Last reviewed: July 29, 2026
         request-scoped `ctx.env()` and `ctx.fileExists()`
   - [x] Function-valued `refreshModels(context.store)` with provider-scoped
         `read`, `write`, and `delete`
+  - [x] Unsolicited background registration updates after the originating
+        extension invocation has returned
   - [x] Provider cancellation and extension-host lifecycle cleanup
-- [x] Upstream coding-agent synchronization through `cced6a21`
+- [x] Upstream coding-agent synchronization through `4f0437e2`
   - [x] Preserve package and extension metadata across resource reloads
   - [x] Route RPC `user_bash` through extension direct-result interception
   - [x] Track and cancel concurrent user bash executions independently
@@ -74,25 +76,26 @@ Last reviewed: July 29, 2026
   - [x] Detach stale Agent subscriptions during session replacement
   - [x] Avoid duplicate context files in nested linked worktrees
   - [x] Accept nullable array schemas with `items`
+  - [x] Classify the AgentHarness v2 design document as documentation-only
 
-The latest implementation stage completes the native provider callback surface.
-The Node host now bridges direct `Provider` registration, both stream methods,
-API-key login/check/resolve, auth context lookups, filtering, and provider-scoped
-model-store operations. Named providers can also publish models from
-`refreshModels(context.store)` without Kotlin implicitly persisting the returned
-set. `./gradlew clean test installDist` passes with 351 tests, all 17
-deterministic migration oracles pass, and the focused upstream suites pass 94
-provider-registry/auth tests plus all 28 `models-runtime` tests. Installed CLI
-and server smokes exercise the native provider from the distributions. The sync
-audit reaches `cced6a21`; the full audit remains nonzero on the seven partial
-areas listed below.
+The latest implementation stage carries extension registrations across the
+out-of-process boundary even when they occur after the originating command has
+returned. The Node host queues out-of-band actions and registration versions;
+the Kotlin host receives them through a dedicated stdout reader, applies
+provider mutations in order, and refreshes tool, command, and flag metadata. A
+shared fixture schedules tool, command, flag, and provider registration from
+`setTimeout`, then invokes the new tool and command on both runtimes.
+`./gradlew clean test installDist` passes with 353 tests, all 17 deterministic
+migration oracles pass, and the installed CLI/server distributions expose the
+background command and provider. The sync audit reaches `4f0437e2`; the full
+audit remains nonzero on the seven partial areas listed below.
 
 ## Remaining
 
 ### 1. Upstream synchronization
 
 - [x] Review and classify every commit in
-      `027a5847901b5dde30270abaa1041046cd2b4b55..cced6a21da273b26ee4a23a803680614bbe8dd1e`
+      `027a5847901b5dde30270abaa1041046cd2b4b55..4f0437e2d58d651dd934119ecabea2893975f62f`
 - [x] OAuth five-minute refresh window and credential print commands
 - [x] OpenRouter manual redirect URL fallback
 - [x] Pending stop reason while streaming
@@ -154,7 +157,7 @@ areas listed below.
 - [ ] Extension shortcuts
 - [ ] Message and session-entry renderers
 - [ ] Custom extension UI components
-- [ ] Unsolicited background registration updates
+- [x] Unsolicited background registration updates
 - [x] Function-valued `user_bash` `BashOperations` over the JSON extension
       host, including streaming updates and cancellation
 
@@ -186,30 +189,29 @@ areas listed below.
 
 ## Next stage
 
-Close the remaining extension-host loading and registration gaps:
-jiti-complete TypeScript transpilation/import compatibility and unsolicited
-background registration updates. Keep blocking TUI interruption,
+Close the remaining extension-host loading gap: jiti-complete TypeScript
+transpilation and import compatibility. Keep blocking TUI interruption,
 shortcuts/renderers/custom UI, and the other six global partial areas as
 separately audited slices.
 
-Evidence for the completed native provider stage:
+Evidence for the completed background registration stage:
 
-- [x] Direct native `Provider` metadata, model registration, filtering,
-      `stream`, and `streamSimple`
-- [x] API-key login/check/resolve with credential, environment, file-existence,
-      base-URL, header, and environment projection
-- [x] Provider-scoped `context.store.read/write/delete`
-- [x] Named `refreshModels` publication without implicit Kotlin persistence
+- [x] Tool, command, flag, and provider registration after the scheduling
+      command response has completed
+- [x] Ordered background provider action delivery before registration refresh
+- [x] Invocation of the asynchronously registered tool and command
+- [x] RPC discovery of the asynchronously registered command and provider
+- [x] New tool activation and system-prompt refresh before the next prompt
 - [x] Updated extension-runtime TypeScript/Kotlin oracle
-- [x] 94 focused upstream provider-registry, auth, and `modifyModels` tests
-- [x] All 28 focused upstream `models-runtime` tests
-- [x] `./gradlew clean test installDist` with 351 tests and no failures,
+- [x] Three repeated race-focused background test runs
+- [x] `pi-coding-agent` with 130 tests and no failures, errors, or skips
+- [x] `./gradlew clean test installDist` with 353 tests and no failures,
       errors, or skips
 - [x] All 17 deterministic migration oracles
-- [x] Installed `pi` native-provider smoke:
-      `simple:native-initial:native-key`
-- [x] Installed `pi-server` native provider discovery, model selection, state
-      read-back, RPC stream, and lifecycle smoke
-- [x] `./migration/audit-migration.sh sync` through `cced6a21`
+- [x] Installed `pi` discovers `background-command` and
+      `background-provider/background-model` after `/schedule-background`
+- [x] Installed `pi-server` spawn, background registration discovery, command
+      invocation, status, stop, and removed-instance read-back
+- [x] `./migration/audit-migration.sh sync` through `4f0437e2`
 - [x] `./migration/audit-migration.sh full` confirms exactly seven remaining
       partial areas

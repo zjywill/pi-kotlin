@@ -317,6 +317,8 @@ let providers = new Map();
 let attemptedPaths = new Set();
 let registrationVersion = 0;
 let currentActions = null;
+let pendingBackgroundActions = [];
+let backgroundPushScheduled = false;
 let currentProtocolRequestId = null;
 const pendingUiRequests = new Map();
 const activeBashOperations = new Map();
@@ -460,7 +462,35 @@ function registerNativeProvider(provider, extensionPath) {
 }
 
 function action(type, payload = {}) {
-	if (currentActions) currentActions.push({ type, ...jsonValue(payload) });
+	const value = { type, ...jsonValue(payload) };
+	if (currentActions) {
+		currentActions.push(value);
+	} else {
+		pendingBackgroundActions.push(value);
+		scheduleBackgroundActions();
+	}
+}
+
+function scheduleBackgroundActions() {
+	if (currentActions || backgroundPushScheduled) return;
+	backgroundPushScheduled = true;
+	queueMicrotask(() => {
+		backgroundPushScheduled = false;
+		if (currentActions) return;
+		protocolWrite(
+			`${JSON.stringify({
+				type: "background_actions",
+				actions: pendingBackgroundActions.splice(0),
+				registrations: registrationMetadata(),
+				registrationVersion,
+			})}\n`,
+		);
+	});
+}
+
+function registrationChanged() {
+	registrationVersion++;
+	scheduleBackgroundActions();
 }
 
 function updateState(context = {}) {
@@ -735,22 +765,22 @@ function createAPI(extension) {
 			const list = extension.handlers.get(event) ?? [];
 			list.push(handler);
 			extension.handlers.set(event, list);
-			registrationVersion++;
+			registrationChanged();
 		},
 		registerTool(tool) {
 			const id = `${extension.index}:tool:${tool.name}`;
 			extension.tools.set(tool.name, { id, definition: tool });
 			if (!tools.has(tool.name)) tools.set(tool.name, { id, extension, definition: tool });
-			registrationVersion++;
+			registrationChanged();
 		},
 		registerCommand(name, options) {
 			const id = `${extension.index}:command:${name}:${extension.commands.size}`;
 			extension.commands.set(id, { id, name, options });
-			registrationVersion++;
+			registrationChanged();
 		},
 		registerShortcut(shortcut, options) {
 			extension.shortcuts.set(shortcut, { shortcut, ...options });
-			registrationVersion++;
+			registrationChanged();
 		},
 		registerFlag(name, options) {
 			const registration = { name, extensionPath: extension.path, ...options };
@@ -759,15 +789,15 @@ function createAPI(extension) {
 				flags.set(name, registration);
 				if (!state.flags.has(name) && options.default !== undefined) state.flags.set(name, options.default);
 			}
-			registrationVersion++;
+			registrationChanged();
 		},
 		registerMessageRenderer(customType, renderer) {
 			extension.messageRenderers.set(customType, renderer);
-			registrationVersion++;
+			registrationChanged();
 		},
 		registerEntryRenderer(customType, renderer) {
 			extension.entryRenderers.set(customType, renderer);
-			registrationVersion++;
+			registrationChanged();
 		},
 		getFlag(name) {
 			return extension.flags.has(name) ? state.flags.get(name) : undefined;
@@ -824,14 +854,14 @@ function createAPI(extension) {
 					? registerProviderConfig(providerOrName, config, extension.path)
 					: registerNativeProvider(providerOrName, extension.path);
 			action("register_provider", providerRegistrationMetadata(registration));
-			registrationVersion++;
+			registrationChanged();
 		},
 		unregisterProvider(name) {
 			const registration = providers.get(name);
 			if (registration?.callbackToken) providerCallbacks.delete(registration.callbackToken);
 			providers.delete(name);
 			action("unregister_provider", { name });
-			registrationVersion++;
+			registrationChanged();
 		},
 		events: sharedEventBus,
 	};
@@ -919,6 +949,8 @@ async function loadExtensions(request) {
 	providerCallbacks = new Map();
 	attemptedPaths = new Set();
 	registrationVersion = 0;
+	pendingBackgroundActions = [];
+	backgroundPushScheduled = false;
 	state.flags = new Map(Object.entries(request.flags ?? {}));
 	updateState(request.context);
 	const errors = await loadExtensionPaths(request.paths ?? []);
@@ -1606,7 +1638,7 @@ async function invokeCommand(request) {
 }
 
 async function handle(request) {
-	currentActions = [];
+	currentActions = pendingBackgroundActions.splice(0);
 	try {
 		let response;
 		switch (request.type) {
@@ -1640,12 +1672,16 @@ async function handle(request) {
 			default:
 				throw new Error(`Unknown request type: ${request.type}`);
 		}
+		const registrationsChanged =
+			Number.isInteger(request.knownRegistrationVersion) &&
+			request.knownRegistrationVersion !== registrationVersion;
 		return {
 			id: request.id,
 			ok: true,
 			...response,
 			actions: currentActions,
 			registrationVersion,
+			...(registrationsChanged ? { registrations: registrationMetadata() } : {}),
 		};
 	} catch (error) {
 		return {

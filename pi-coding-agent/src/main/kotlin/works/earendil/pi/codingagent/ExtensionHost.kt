@@ -8,6 +8,7 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
@@ -133,6 +134,16 @@ internal data class ExtensionResourcePaths(
     val themePaths: List<ExtensionResourcePath> = emptyList(),
 )
 
+private sealed interface ExtensionHostRead {
+    data class Message(
+        val value: JsonObject,
+    ) : ExtensionHostRead
+
+    data class Failure(
+        val error: Throwable,
+    ) : ExtensionHostRead
+}
+
 internal class ExtensionHost private constructor(
     private val process: Process,
     private val input: BufferedReader,
@@ -152,7 +163,21 @@ internal class ExtensionHost private constructor(
     private var closed = false
     @Volatile
     private var closing = false
+    private val registrationLock = Any()
+    private val backgroundActionLock = Any()
+    private val pendingBackgroundActions = ArrayDeque<ExtensionAction>()
+    private val responseQueue = LinkedBlockingQueue<ExtensionHostRead>()
+    @Volatile
+    private var backgroundActionHandler: ((List<ExtensionAction>) -> Unit)? = null
+    private val stdoutThread =
+        thread(
+            name = "pi-extension-host-stdout",
+            isDaemon = true,
+        ) {
+            readHostOutput()
+        }
 
+    @Volatile
     lateinit var registrations: ExtensionRegistrations
         private set
 
@@ -338,12 +363,26 @@ internal class ExtensionHost private constructor(
                     put("type", "registrations")
                 },
             )
-        registrations = parseRegistrations(response["result"]?.jsonObject ?: JsonObject(emptyMap()))
+        updateRegistrations(
+            parseRegistrations(response["result"]?.jsonObject ?: JsonObject(emptyMap())),
+        )
         return registrations
     }
 
     fun drainStartupActions(): List<ExtensionAction> =
         startupActions.toList().also { startupActions.clear() }
+
+    fun bindBackgroundActions(handler: (List<ExtensionAction>) -> Unit) {
+        check(!closed) { "Extension host is closed" }
+        val pending =
+            synchronized(backgroundActionLock) {
+                backgroundActionHandler = handler
+                pendingBackgroundActions.toList().also { pendingBackgroundActions.clear() }
+            }
+        if (pending.isNotEmpty()) {
+            deliverBackgroundActions(handler, pending)
+        }
+    }
 
     fun loadAdditional(
         sources: List<ExtensionSource>,
@@ -376,10 +415,11 @@ internal class ExtensionHost private constructor(
             .mapNotNull(::parseDiagnostic)
             .forEach(onDiagnostic)
         startupActions += parseActions(response)
-        registrations =
+        updateRegistrations(
             parseRegistrations(
                 response["registrations"]?.jsonObject ?: JsonObject(emptyMap()),
-            )
+            ),
+        )
         return registrations
     }
 
@@ -411,6 +451,7 @@ internal class ExtensionHost private constructor(
         }
         output.close()
         input.close()
+        stdoutThread.join(1_000)
         stderrThread.join(1_000)
     }
 
@@ -454,8 +495,79 @@ internal class ExtensionHost private constructor(
         if (responseVersion == registrations.version) {
             return false
         }
-        refreshRegistrations()
+        response["registrations"]
+            ?.jsonObject
+            ?.let(::parseRegistrations)
+            ?.let(::updateRegistrations)
+            ?: refreshRegistrations()
         return true
+    }
+
+    private fun handleBackgroundActions(message: JsonObject) {
+        val previousVersion =
+            synchronized(registrationLock) {
+                if (this::registrations.isInitialized) registrations.version else null
+            }
+        message["registrations"]
+            ?.jsonObject
+            ?.let(::parseRegistrations)
+            ?.let(::updateRegistrations)
+        val actions =
+            buildList {
+                addAll(parseActions(message))
+                val responseVersion =
+                    message["registrationVersion"]
+                        ?.jsonPrimitive
+                        ?.contentOrNull
+                        ?.toIntOrNull()
+                if (responseVersion != null && responseVersion != previousVersion) {
+                    add(
+                        ExtensionAction(
+                            type = "registrations_changed",
+                            data = buildJsonObject { put("version", responseVersion) },
+                        ),
+                    )
+                }
+            }
+        if (actions.isEmpty()) {
+            return
+        }
+        val handler =
+            synchronized(backgroundActionLock) {
+                backgroundActionHandler
+                    ?: run {
+                        pendingBackgroundActions.addAll(actions)
+                        null
+                    }
+            }
+        if (handler != null) {
+            deliverBackgroundActions(handler, actions)
+        }
+    }
+
+    private fun deliverBackgroundActions(
+        handler: (List<ExtensionAction>) -> Unit,
+        actions: List<ExtensionAction>,
+    ) {
+        runCatching {
+            handler(actions)
+        }.onFailure { error ->
+            onDiagnostic(
+                ExtensionDiagnostic(
+                    extensionPath = "<host>",
+                    event = "background_actions",
+                    error = error.message ?: "Extension background action failed",
+                ),
+            )
+        }
+    }
+
+    private fun updateRegistrations(candidate: ExtensionRegistrations) {
+        synchronized(registrationLock) {
+            if (!this::registrations.isInitialized || candidate.version >= registrations.version) {
+                registrations = candidate
+            }
+        }
     }
 
     private fun parseActions(response: JsonObject): List<ExtensionAction> =
@@ -498,6 +610,9 @@ internal class ExtensionHost private constructor(
         val payload =
             buildJsonObject {
                 request.forEach { (name, value) -> put(name, value) }
+                if (this@ExtensionHost::registrations.isInitialized) {
+                    put("knownRegistrationVersion", registrations.version)
+                }
                 put("id", id)
             }
         writePayload(payload)
@@ -770,25 +885,51 @@ internal class ExtensionHost private constructor(
         }
     }
 
-    private fun readResponse(): JsonObject {
-        val line =
-            input.readLine()
-                ?: error(
-                    buildString {
-                        append("Extension host exited unexpectedly")
-                        val stderr = synchronized(stderrLines) { stderrLines.joinToString("\n") }
-                        if (stderr.isNotBlank()) {
-                            append(": ")
-                            append(stderr)
-                        }
-                    },
-                )
-        return try {
-            protocolJson.parseToJsonElement(line).jsonObject
-        } catch (error: Exception) {
-            throw IllegalStateException("Extension host returned invalid JSON: $line", error)
+    private fun readHostOutput() {
+        try {
+            while (true) {
+                val line = input.readLine() ?: break
+                val message =
+                    try {
+                        protocolJson.parseToJsonElement(line).jsonObject
+                    } catch (error: Exception) {
+                        responseQueue.put(
+                            ExtensionHostRead.Failure(
+                                IllegalStateException("Extension host returned invalid JSON: $line", error),
+                            ),
+                        )
+                        continue
+                    }
+                if (message.string("type") == "background_actions") {
+                    handleBackgroundActions(message)
+                } else {
+                    responseQueue.put(ExtensionHostRead.Message(message))
+                }
+            }
+            responseQueue.put(
+                ExtensionHostRead.Failure(
+                    IllegalStateException(
+                        buildString {
+                            append("Extension host exited unexpectedly")
+                            val stderr = synchronized(stderrLines) { stderrLines.joinToString("\n") }
+                            if (stderr.isNotBlank()) {
+                                append(": ")
+                                append(stderr)
+                            }
+                        },
+                    ),
+                ),
+            )
+        } catch (error: Throwable) {
+            responseQueue.offer(ExtensionHostRead.Failure(error))
         }
     }
+
+    private fun readResponse(): JsonObject =
+        when (val read = responseQueue.take()) {
+            is ExtensionHostRead.Message -> read.value
+            is ExtensionHostRead.Failure -> throw read.error
+        }
 
     private fun parseRegistrations(value: JsonObject): ExtensionRegistrations {
         val extensions =
@@ -994,10 +1135,11 @@ internal class ExtensionHost private constructor(
                     .mapNotNull(::parseDiagnostic)
                     .forEach(onDiagnostic)
                 host.startupActions += host.parseActions(response)
-                host.registrations =
+                host.updateRegistrations(
                     host.parseRegistrations(
                         response["registrations"]?.jsonObject ?: JsonObject(emptyMap()),
-                    )
+                    ),
+                )
                 host
             } catch (error: Exception) {
                 onDiagnostic(
