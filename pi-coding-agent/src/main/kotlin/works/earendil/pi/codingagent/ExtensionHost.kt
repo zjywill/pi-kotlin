@@ -33,12 +33,15 @@ import works.earendil.pi.agent.AgentTool
 import works.earendil.pi.agent.AgentToolResult
 import works.earendil.pi.agent.AgentToolUpdateCallback
 import works.earendil.pi.agent.ToolExecutionMode
+import works.earendil.pi.ai.AuthContext
 import works.earendil.pi.ai.AuthEvent
 import works.earendil.pi.ai.AuthInteraction
 import works.earendil.pi.ai.AuthOption
 import works.earendil.pi.ai.AuthPrompt
 import works.earendil.pi.ai.ContentBlock
 import works.earendil.pi.ai.Model
+import works.earendil.pi.ai.ModelsStoreEntry
+import works.earendil.pi.ai.ProviderModelsStore
 import works.earendil.pi.ai.Usage
 
 enum class ExtensionMode(
@@ -203,6 +206,7 @@ internal class ExtensionHost private constructor(
 
     fun streamProvider(
         callbackToken: String,
+        method: String,
         model: JsonObject,
         context: JsonObject,
         options: JsonObject,
@@ -215,6 +219,7 @@ internal class ExtensionHost private constructor(
                 buildJsonObject {
                     put("type", "provider_stream")
                     put("callbackToken", callbackToken)
+                    put("method", method)
                     put("model", model)
                     put("context", context)
                     put("options", options)
@@ -243,6 +248,8 @@ internal class ExtensionHost private constructor(
         method: String,
         arguments: JsonObject = JsonObject(emptyMap()),
         interaction: AuthInteraction? = null,
+        authContext: AuthContext? = null,
+        store: ProviderModelsStore? = null,
         onOperationStart: (String) -> Unit = {},
     ): JsonElement? {
         var operationId: String? = null
@@ -256,7 +263,14 @@ internal class ExtensionHost private constructor(
                         put("arguments", arguments)
                     },
                     onIntermediate = { message ->
-                        if (!handleProviderAuthIntermediate(message, interaction)) {
+                        if (
+                            !handleProviderIntermediate(
+                                message = message,
+                                interaction = interaction,
+                                authContext = authContext,
+                                store = store,
+                            )
+                        ) {
                             error("Unexpected extension provider callback message: $message")
                         }
                     },
@@ -380,18 +394,23 @@ internal class ExtensionHost private constructor(
                 return
             }
             runCatching {
-                request(buildJsonObject { put("type", "close") })
+                writePayload(
+                    buildJsonObject {
+                        put("type", "close")
+                        put("id", requestIds.incrementAndGet().toString())
+                    },
+                )
             }
             closed = true
         }
-        output.close()
-        input.close()
         if (!process.waitFor(1, java.util.concurrent.TimeUnit.SECONDS)) {
             process.destroy()
         }
         if (!process.waitFor(1, java.util.concurrent.TimeUnit.SECONDS)) {
             process.destroyForcibly()
         }
+        output.close()
+        input.close()
         stderrThread.join(1_000)
     }
 
@@ -520,9 +539,11 @@ internal class ExtensionHost private constructor(
         }
     }
 
-    private fun handleProviderAuthIntermediate(
+    private fun handleProviderIntermediate(
         message: JsonObject,
         interaction: AuthInteraction?,
+        authContext: AuthContext?,
+        store: ProviderModelsStore?,
     ): Boolean =
         when (message.string("type")) {
             "provider_auth_event" -> {
@@ -579,10 +600,13 @@ internal class ExtensionHost private constructor(
                     }
                 val prompt =
                     when (message.string("method")) {
-                        "text" ->
+                        "text",
+                        "secret",
+                        ->
                             AuthPrompt.Text(
                                 message = requireNotNull(message.string("message")),
                                 placeholder = message.string("placeholder"),
+                                secret = message.string("method") == "secret",
                             )
 
                         "manual_code" ->
@@ -626,8 +650,118 @@ internal class ExtensionHost private constructor(
                 true
             }
 
+            "provider_context_request" -> {
+                val requestId = message.string("requestId")
+                    ?: error("Extension provider context request is missing requestId")
+                val context =
+                    requireNotNull(authContext) {
+                        "Extension provider requested auth context outside API-key auth"
+                    }
+                val result =
+                    runCatching {
+                        runBlocking {
+                            when (message.string("method")) {
+                                "env" ->
+                                    context.env(
+                                        requireNotNull(message.string("name")) {
+                                            "Extension provider env request is missing name"
+                                        },
+                                    )
+
+                                "file_exists" ->
+                                    context.fileExists(
+                                        requireNotNull(message.string("path")) {
+                                            "Extension provider fileExists request is missing path"
+                                        },
+                                    )
+
+                                else -> error("Unknown extension provider context request: $message")
+                            }
+                        }
+                    }
+                writeProviderBridgeResponse(
+                    type = "provider_context_response",
+                    requestId = requestId,
+                    result = result,
+                )
+                true
+            }
+
+            "provider_store_request" -> {
+                val requestId = message.string("requestId")
+                    ?: error("Extension provider store request is missing requestId")
+                val providerStore =
+                    requireNotNull(store) {
+                        "Extension provider requested model storage outside refreshModels"
+                    }
+                val result =
+                    runCatching {
+                        runBlocking {
+                            when (message.string("method")) {
+                                "read" ->
+                                    providerStore.read()?.let { entry ->
+                                        protocolJson.encodeToJsonElement(
+                                            ModelsStoreEntry.serializer(),
+                                            entry,
+                                        )
+                                    }
+
+                                "write" -> {
+                                    val entry =
+                                        message["entry"]?.let { value ->
+                                            protocolJson.decodeFromJsonElement(
+                                                ModelsStoreEntry.serializer(),
+                                                value,
+                                            )
+                                        } ?: error("Extension provider store write is missing entry")
+                                    providerStore.write(entry)
+                                    null
+                                }
+
+                                "delete" -> {
+                                    providerStore.delete()
+                                    null
+                                }
+
+                                else -> error("Unknown extension provider store request: $message")
+                            }
+                        }
+                    }
+                writeProviderBridgeResponse(
+                    type = "provider_store_response",
+                    requestId = requestId,
+                    result = result,
+                )
+                true
+            }
+
             else -> false
         }
+
+    private fun writeProviderBridgeResponse(
+        type: String,
+        requestId: String,
+        result: Result<Any?>,
+    ) {
+        writePayload(
+            buildJsonObject {
+                put("type", type)
+                put("requestId", requestId)
+                result
+                    .onSuccess { value ->
+                        when (value) {
+                            null -> put("value", JsonNull)
+                            is Boolean -> put("value", value)
+                            is Number -> put("value", value.toString())
+                            is JsonElement -> put("value", value)
+                            else -> put("value", value.toString())
+                        }
+                    }.onFailure { error ->
+                        put("error", error.message ?: "Extension provider bridge request failed")
+                    }
+            },
+        )
+    }
 
     private fun writePayload(payload: JsonObject) {
         synchronized(outputLock) {

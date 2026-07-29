@@ -59,6 +59,12 @@ Last reviewed: July 29, 2026
   - [x] Function-valued provider `streamSimple` with live event forwarding
   - [x] Legacy extension OAuth `login`, `refreshToken`, `getApiKey`, and `modifyModels`
   - [x] Arbitrary top-level extension OAuth credential fields
+  - [x] Direct native `Provider` registration with `getModels`, `filterModels`,
+        `stream`, and `streamSimple`
+  - [x] Native provider API-key `login`, `check`, and `resolve` callbacks with
+        request-scoped `ctx.env()` and `ctx.fileExists()`
+  - [x] Function-valued `refreshModels(context.store)` with provider-scoped
+        `read`, `write`, and `delete`
   - [x] Provider cancellation and extension-host lifecycle cleanup
 - [x] Upstream coding-agent synchronization through `cced6a21`
   - [x] Preserve package and extension metadata across resource reloads
@@ -69,18 +75,17 @@ Last reviewed: July 29, 2026
   - [x] Avoid duplicate context files in nested linked worktrees
   - [x] Accept nullable array schemas with `items`
 
-The latest implementation stage added a Node/Kotlin callback protocol for
-function-valued custom-provider streams and legacy extension OAuth. Kotlin
-returns streams immediately while Node forwards live events; model, context,
-stream options, auth interaction, refreshed credentials, derived API keys, and
-credential-based model projection cross the bridge. Cancellation and
-host/runtime shutdown release callbacks even when extension code ignores
-`AbortSignal`, and arbitrary OAuth fields retain the TypeScript top-level
-`auth.json` shape. `./gradlew clean test installDist` passes with 348 tests,
-all 17 deterministic migration oracles pass, and 94 focused upstream provider
-tests pass. Installed CLI and server smokes exercise the callback provider from
-the distributions. The sync audit reaches `cced6a21`; the full audit remains
-nonzero on the seven partial areas listed below.
+The latest implementation stage completes the native provider callback surface.
+The Node host now bridges direct `Provider` registration, both stream methods,
+API-key login/check/resolve, auth context lookups, filtering, and provider-scoped
+model-store operations. Named providers can also publish models from
+`refreshModels(context.store)` without Kotlin implicitly persisting the returned
+set. `./gradlew clean test installDist` passes with 351 tests, all 17
+deterministic migration oracles pass, and the focused upstream suites pass 94
+provider-registry/auth tests plus all 28 `models-runtime` tests. Installed CLI
+and server smokes exercise the native provider from the distributions. The sync
+audit reaches `cced6a21`; the full audit remains nonzero on the seven partial
+areas listed below.
 
 ## Remaining
 
@@ -143,9 +148,9 @@ nonzero on the seven partial areas listed below.
 - [ ] Interrupt a blocking TUI dialog when its extension timeout or
       `AbortSignal` fires
 - [ ] jiti-complete TypeScript transpilation and module-loading compatibility
-- [ ] Direct registration of a complete native `Provider`
-- [ ] Native provider API-key `login`, `check`, and `resolve` callbacks
-- [ ] Function-valued `refreshModels(context.store)`
+- [x] Direct registration of a complete native `Provider`
+- [x] Native provider API-key `login`, `check`, and `resolve` callbacks
+- [x] Function-valued `refreshModels(context.store)`
 - [ ] Extension shortcuts
 - [ ] Message and session-entry renderers
 - [ ] Unsolicited background registration updates
@@ -180,24 +185,30 @@ nonzero on the seven partial areas listed below.
 
 ## Next stage
 
-Complete the remaining provider function surface: direct native `Provider`
-registration, native API-key auth callbacks, and
-`refreshModels(context.store)`. Keep full jiti compatibility and extension UI
-features as separately audited gaps unless that slice requires them.
+Close the remaining extension-host loading and registration gaps:
+jiti-complete TypeScript transpilation/import compatibility and unsolicited
+background registration updates. Keep blocking TUI interruption,
+shortcuts/renderers/custom UI, and the other six global partial areas as
+separately audited slices.
 
-Required evidence for the completed provider callback stage:
+Evidence for the completed native provider stage:
 
-- [x] Live callback stream ordering, terminal events, context, and options
-- [x] Caller cancellation, ignored `AbortSignal`, host close, and runtime cleanup
-- [x] OAuth interaction, refresh, API-key derivation, and model projection
-- [x] Flat arbitrary OAuth field persistence and TypeScript auth-file reads
+- [x] Direct native `Provider` metadata, model registration, filtering,
+      `stream`, and `streamSimple`
+- [x] API-key login/check/resolve with credential, environment, file-existence,
+      base-URL, header, and environment projection
+- [x] Provider-scoped `context.store.read/write/delete`
+- [x] Named `refreshModels` publication without implicit Kotlin persistence
 - [x] Updated extension-runtime TypeScript/Kotlin oracle
-- [x] 94 focused upstream provider registry, auth, and `modifyModels` tests
-- [x] `./gradlew clean test installDist` with 348 tests and no failures,
+- [x] 94 focused upstream provider-registry, auth, and `modifyModels` tests
+- [x] All 28 focused upstream `models-runtime` tests
+- [x] `./gradlew clean test installDist` with 351 tests and no failures,
       errors, or skips
 - [x] All 17 deterministic migration oracles
-- [x] Installed `pi` callback-provider stream smoke
-- [x] Installed `pi-server` callback registration, RPC stream, and lifecycle smoke
+- [x] Installed `pi` native-provider smoke:
+      `simple:native-initial:native-key`
+- [x] Installed `pi-server` native provider discovery, model selection, state
+      read-back, RPC stream, and lifecycle smoke
 - [x] `./migration/audit-migration.sh sync` through `cced6a21`
 - [x] `./migration/audit-migration.sh full` confirms exactly seven remaining
       partial areas

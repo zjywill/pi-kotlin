@@ -129,6 +129,127 @@ export default function extensionRuntimeFixture(pi: ExtensionAPI) {
 		},
 	});
 
+	const nativeModel = {
+		id: "native-initial",
+		name: "Native Initial",
+		api: "native-api",
+		provider: "native-provider",
+		baseUrl: "https://native.invalid/v1",
+		reasoning: false,
+		input: ["text"] as const,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 8192,
+		maxTokens: 1024,
+	};
+	let nativeModels = [nativeModel];
+	const nativeStream = (kind: string, model: typeof nativeModel, options?: { apiKey?: string }) => {
+		const stream = createAssistantMessageEventStream();
+		const text = `${kind}:${model.id}:${options?.apiKey}`;
+		const usage = {
+			input: 1,
+			output: 1,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 2,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		};
+		const partial = {
+			role: "assistant" as const,
+			content: [{ type: "text" as const, text }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage,
+			stopReason: "pending" as const,
+			timestamp: 123,
+		};
+		stream.push({ type: "start", partial });
+		stream.push({ type: "text_start", contentIndex: 0, partial });
+		stream.push({ type: "text_delta", contentIndex: 0, delta: text, partial });
+		stream.push({ type: "text_end", contentIndex: 0, content: text, partial });
+		stream.push({
+			type: "done",
+			reason: "stop",
+			message: { ...partial, stopReason: "stop" },
+		});
+		return stream;
+	};
+	pi.registerProvider({
+		id: "native-provider",
+		name: "Native Provider",
+		baseUrl: "https://native.invalid/v1",
+		headers: { "X-Native": "metadata" },
+		auth: {
+			apiKey: {
+				name: "Native setup",
+				async login(interaction) {
+					return {
+						type: "api_key",
+						key: await interaction.prompt({ type: "secret", message: "Native API key" }),
+					};
+				},
+				async check({ ctx, credential }) {
+					const key = credential?.key ?? await ctx.env("NATIVE_API_KEY");
+					return key
+						? { type: "api_key", source: "native stored key" }
+						: undefined;
+				},
+				async resolve({ ctx, credential }) {
+					const key = credential?.key ?? await ctx.env("NATIVE_API_KEY");
+					const account = credential?.env?.NATIVE_ACCOUNT ?? await ctx.env("NATIVE_ACCOUNT");
+					if (!key || !account || !await ctx.fileExists(".")) return undefined;
+					return {
+						auth: {
+							apiKey: key,
+							baseUrl: `https://native.invalid/${account}`,
+						},
+						env: { NATIVE_ACCOUNT: account },
+						source: "native resolve",
+					};
+				},
+			},
+		},
+		getModels() {
+			return nativeModels;
+		},
+		async refreshModels(context) {
+			const stored = await context.store.read();
+			nativeModels = [{
+				...nativeModel,
+				id: `native-${stored?.models?.[0]?.id ?? "empty"}`,
+			}];
+			await context.store.write({ models: nativeModels, checkedAt: 321 });
+		},
+		filterModels(models) {
+			return models;
+		},
+		stream(model, _context, options) {
+			return nativeStream("stream", model as typeof nativeModel, options);
+		},
+		streamSimple(model, _context, options) {
+			return nativeStream("simple", model as typeof nativeModel, options);
+		},
+	});
+
+	pi.registerProvider("dynamic-provider", {
+		name: "Dynamic Provider",
+		baseUrl: "https://dynamic.invalid/v1",
+		apiKey: "dynamic-key",
+		api: "openai-completions",
+		async refreshModels(context) {
+			const stored = await context.store.read();
+			return [{
+				id: `dynamic-${stored?.models?.[0]?.id ?? "empty"}`,
+				name: "Dynamic model",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 8192,
+				maxTokens: 1024,
+			}];
+		},
+	});
+
 	pi.registerTool(
 		defineTool({
 			name: "extension_echo",

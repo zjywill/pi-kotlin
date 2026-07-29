@@ -79,7 +79,7 @@ features outside that slice remain migration work.
 | CLI argument contract | Partial | Parser tests and byte-for-byte `--help` oracle against the pinned TypeScript CLI; provider-prefixed and slash-containing model IDs, thinking suffixes, package install/remove/update/list, and interactive `/login`/`/logout` for OAuth providers are covered |
 | Context, skill, and prompt resources | Functional slice | Global and ancestor `AGENTS.md`/`CLAUDE.md`, nested linked-worktree context deduplication, `SYSTEM.md`/`APPEND_SYSTEM.md`, recursive `.pi`/`.agents` skills, prompt templates, YAML frontmatter, collisions, manual skill commands, template arguments, trusted project precedence, persisted trust inheritance, CLI/RPC commands, and interactive reload have an independent resource-loading oracle |
 | Package settings and resources | Functional slice | User/project `settings.json`, local/npm/git package identities and managed paths, install/remove/package-update/list commands, package manifests, autoload filters, top-level resource overrides, project precedence, package-sourced skills/prompts, source metadata, and failed new-checkout cleanup have an independent package-resources oracle and package tests; config TUI, self-update, legacy lookup, available-update checks, and remaining recovery paths remain |
-| JavaScript/TypeScript extensions | Partial | A bundled Node 22 JSONL host loads `.js`/`.ts` extensions and common pi/TypeBox virtual imports; tools, commands, flags, package discovery, lifecycle/tool hooks, command actions, project trust, resource composition, serializable provider registration, dynamic registration refresh, live `ctx.scopedModels`, awaited `select`/`confirm`/`input`/`editor` dialogs, RPC and server UI responses, `user_bash` direct results, function-valued `BashOperations`, callback-provider `streamSimple`, legacy extension OAuth `login`/`refreshToken`/`getApiKey`/`modifyModels`, cancellation/lifecycle cleanup, and fire-and-forget UI events run through CLI/RPC/interactive paths with an independent extension-runtime oracle. Full jiti syntax/import compatibility, direct native `Provider` registration, native API-key `login`/`check`/`resolve`, function-valued `refreshModels(context.store)`, blocking TUI timeout interruption, shortcuts/renderers, custom UI components, and unsolicited background registration remain |
+| JavaScript/TypeScript extensions | Partial | A bundled Node 22 JSONL host loads `.js`/`.ts` extensions and common pi/TypeBox virtual imports; tools, commands, flags, package discovery, lifecycle/tool hooks, command actions, project trust, resource composition, serializable and direct native provider registration, dynamic registration refresh, live `ctx.scopedModels`, awaited `select`/`confirm`/`input`/`editor` dialogs, RPC and server UI responses, `user_bash` direct results, function-valued `BashOperations`, native `stream`/`streamSimple`, legacy extension OAuth, native API-key `login`/`check`/`resolve`, function-valued `refreshModels(context.store)`, cancellation/lifecycle cleanup, and fire-and-forget UI events run through CLI/RPC/interactive paths with an independent extension-runtime oracle. Full jiti syntax/import compatibility, blocking TUI timeout interruption, shortcuts/renderers, custom UI components, and unsolicited background registration remain |
 | Session JSONL compatibility | Functional slice | Independent TypeScript/Kotlin JSONL parity covers current/v1/v2 parsing, rewrite, migration, branching, compaction, model/thinking state, custom/tool/bash messages, and explicit empty-leaf context |
 | Built-in coding tools | Functional slice | Read, write, edit, bash, grep, find, and ls behavior tests with path and truncation handling |
 | Interactive terminal UI | Partial | Installed JLine process enters a PTY; initial `@text-file`/`@image` prompts, `/help`, session/model/thinking commands, shell commands, and `/exit` are covered; full-screen upstream UI is not ported |
@@ -94,7 +94,7 @@ features outside that slice remain migration work.
 Verified on July 29, 2026 against source commit
 `cced6a21da273b26ee4a23a803680614bbe8dd1e`:
 
-- `./gradlew clean test installDist`: passed, 348 tests, 0 failures, 0 errors,
+- `./gradlew clean test installDist`: passed, 351 tests, 0 failures, 0 errors,
   and 0 skipped.
 - `./migration/oracle/compare-cli-help.sh`: passed with byte-for-byte CLI help
   parity.
@@ -115,8 +115,10 @@ Verified on July 29, 2026 against source commit
   registration metadata, tool execution and partial updates, command/UI
   actions, lifecycle hooks, tool-call blocking, tool-result chaining, and
   resource-discovery event results, awaited dialog answers, function-valued
-  `user_bash` execution, callback-provider stream events, and legacy extension
-  OAuth callback behavior.
+  `user_bash` execution, callback-provider stream events, legacy extension
+  OAuth callback behavior, direct native provider registration, native API-key
+  auth context, provider-store access, filtering, both native stream methods,
+  and named-provider `refreshModels`.
 - The installed `bin/pi` loaded a TypeScript extension from an installed local
   package, exposed `package-extension-smoke` before package prompt/skill
   commands in RPC `get_commands`, executed the slash command, emitted its
@@ -438,20 +440,33 @@ Verified on July 29, 2026 against source commit
   isolated instance loaded the callback extension, exposed 1,112 models
   including `callback-provider/callback-model`, and emitted `rpc_ready` then
   `response` before a clean half-close and lifecycle shutdown.
+- The direct native provider bridge now exposes `getModels`, `filterModels`,
+  `stream`, and `streamSimple`; native API-key login/check/resolve can call
+  correlated `ctx.env()` and `ctx.fileExists()` operations and project
+  provider-specific keys, headers, environment, and base URLs.
+- Function-valued `refreshModels` receives a provider-scoped store with
+  `read`, `write`, and `delete`. Native providers can update their published
+  model set after refresh, while named providers publish returned models
+  without implicit Kotlin persistence.
+- Focused upstream verification passed 94 provider-registry/auth cases and all
+  28 `models-runtime` cases. The installed `pi` native-provider smoke returned
+  `simple:native-initial:native-key`.
+- The installed `pi-server` discovered `native-provider/native-initial`, set it
+  as the active model, preserved `provider=native-provider` and
+  `api=native-api` on state read-back, streamed a response, and shut down
+  cleanly.
 
 ## Remaining major gaps
 
 - Finish extension parity beyond the migrated Node host: jiti-complete
-  transpilation/imports, direct native `Provider` registration, native
-  API-key `login`/`check`/`resolve`, function-valued
-  `refreshModels(context.store)`, interrupting blocking TUI dialogs on
+  transpilation/imports, interrupting blocking TUI dialogs on
   timeout/AbortSignal, shortcuts, custom renderers/components, and unsolicited
   registration updates. Theme parsing/rendering, the package config selector,
   self-update, and remaining package recovery paths also remain. Core package
   manifests/filters/settings, skills, prompt templates, persisted trust
   lookup, extension resource composition, awaited RPC/TUI dialogs,
-  function-valued `user_bash`, callback-provider streaming, legacy extension
-  OAuth, and interactive resource reload are migrated.
+  function-valued `user_bash`, direct native and named provider callbacks,
+  legacy extension OAuth, and interactive resource reload are migrated.
 - Port the full-screen terminal component and rendering model, then compare
   terminal transcripts at multiple widths.
 - Close CLI behavior gaps for options that are parsed or documented but do not

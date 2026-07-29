@@ -1,5 +1,7 @@
 package works.earendil.pi.ai
 
+import java.nio.file.Files
+import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
@@ -24,6 +26,8 @@ interface Provider {
     val headers: Map<String, String?>
         get() = emptyMap()
     val oauth: OAuthAuth?
+        get() = null
+    val apiKey: ApiKeyAuth?
         get() = null
 
     fun resolveAmbientAuth(environment: (String) -> String?): AuthResult? = null
@@ -83,9 +87,30 @@ class Models(
     private val modelsStore: ModelsStore = InMemoryModelsStore(),
     private val credentials: CredentialStore = InMemoryCredentialStore(),
     private val environment: (String) -> String? = System::getenv,
+    authContext: AuthContext? = null,
     private val currentTimeMillis: () -> Long = System::currentTimeMillis,
 ) {
     private val providersById = ConcurrentHashMap<String, Provider>()
+    private val authContext =
+        authContext
+            ?: object : AuthContext {
+                override suspend fun env(name: String): String? = environment(name)
+
+                override suspend fun fileExists(path: String): Boolean {
+                    val expanded =
+                        when {
+                            path == "~" -> System.getProperty("user.home")
+                            path.startsWith("~/") ->
+                                Path
+                                    .of(System.getProperty("user.home"))
+                                    .resolve(path.removePrefix("~/"))
+                                    .toString()
+
+                            else -> path
+                        }
+                    return Files.exists(Path.of(expanded))
+                }
+            }
 
     init {
         providers.forEach(::setProvider)
@@ -130,10 +155,18 @@ class Models(
             }
         return providers.flatMap { provider ->
             val credential = readStoredCredential(provider.id)
+            if (checkProviderAuth(provider, credential) == null) {
+                return@flatMap emptyList()
+            }
             val providerModels =
                 runCatching(provider::getModels).getOrDefault(emptyList())
             provider.filterModels(providerModels, credential)
         }
+    }
+
+    suspend fun checkAuth(providerId: String): AuthCheck? {
+        val provider = providersById[providerId] ?: return null
+        return checkProviderAuth(provider, readStoredCredential(providerId))
     }
 
     suspend fun getAuth(
@@ -142,10 +175,46 @@ class Models(
     ): AuthResult? {
         val provider = providersById[providerId] ?: return null
         val stored = readStoredCredential(provider.id)
+        val context = overlayAuthContext(overrides.env)
+        val apiKeyMethod = provider.apiKey
+        if (
+            overrides.apiKey != null &&
+            apiKeyMethod != null &&
+            stored !is OAuthCredential
+        ) {
+            return resolveApiKey(
+                provider = provider,
+                method = apiKeyMethod,
+                context = context,
+                credential =
+                    ApiKeyCredential(
+                        key = overrides.apiKey,
+                        env = overrides.env,
+                    ),
+            )
+        }
         return if (stored == null) {
-            provider.resolveAmbientAuth(environment)
+            provider.apiKey
+                ?.let { method ->
+                    resolveApiKey(
+                        provider = provider,
+                        method = method,
+                        context = context,
+                        credential = null,
+                    )
+                }
+                ?: provider.resolveAmbientAuth { name ->
+                    overrides.env[name]?.takeIf(String::isNotBlank)
+                        ?: environment(name)?.takeIf(String::isNotBlank)
+                }
         } else {
-            resolveStoredAuth(provider, stored, overrides.minOAuthValidityMs)
+            resolveStoredAuth(
+                provider = provider,
+                stored = stored,
+                context = context,
+                minOAuthValidityMs = overrides.minOAuthValidityMs,
+                overrideEnvironment = overrides.env,
+            )
         }
     }
 
@@ -180,10 +249,13 @@ class Models(
                         )
 
                 AuthType.API_KEY ->
-                    throw ModelsAuthException(
-                        "auth",
-                        "${provider.name} does not support api_key login",
-                    )
+                    provider.apiKey
+                        ?.takeIf(ApiKeyAuth::supportsLogin)
+                        ?.login(interaction)
+                        ?: throw ModelsAuthException(
+                            "auth",
+                            "${provider.name} does not support api_key login",
+                        )
             }
         try {
             credentials.modify(providerId) { credential }
@@ -263,6 +335,12 @@ class Models(
                                         stored = stored,
                                         allowNetwork = options.allowNetwork,
                                     )
+                                if (
+                                    credential == null &&
+                                    (provider.apiKey != null || provider.oauth != null)
+                                ) {
+                                    return@withPermit
+                                }
                                 provider.refreshModels(
                                     RefreshModelsContext(
                                         credential = credential,
@@ -308,7 +386,23 @@ class Models(
         allowNetwork: Boolean,
     ): Credential? =
         when (stored) {
-            is ApiKeyCredential -> stored
+            is ApiKeyCredential ->
+                provider.apiKey
+                    ?.let { method ->
+                        resolveApiKey(
+                            provider = provider,
+                            method = method,
+                            context = authContext,
+                            credential = stored,
+                        )
+                    }?.let { result ->
+                        ApiKeyCredential(
+                            key = result.auth.apiKey,
+                            env = result.env,
+                        )
+                    }
+                    ?: stored
+
             is OAuthCredential -> {
                 val oauth = provider.oauth
                 when {
@@ -318,7 +412,31 @@ class Models(
                 }
             }
 
-            null -> null
+            null ->
+                provider.apiKey
+                    ?.let { method ->
+                        resolveApiKey(
+                            provider = provider,
+                            method = method,
+                            context = authContext,
+                            credential = null,
+                        )
+                    }?.let { result ->
+                        ApiKeyCredential(
+                            key = result.auth.apiKey,
+                            env = result.env,
+                        )
+                    }
+                    ?: if (provider.apiKey == null) {
+                        provider.resolveAmbientAuth(environment)?.let { result ->
+                            ApiKeyCredential(
+                                key = result.auth.apiKey,
+                                env = result.env,
+                            )
+                        }
+                    } else {
+                        null
+                    }
         }
 
     suspend fun stream(
@@ -378,22 +496,21 @@ class Models(
         provider: Provider,
         options: StreamOptions,
     ): PreparedRequest {
-        val stored = readStoredCredential(provider.id)
-        if (stored == null && !options.apiKey.isNullOrBlank()) {
+        if (
+            !options.apiKey.isNullOrBlank() &&
+            provider.apiKey == null &&
+            readStoredCredential(provider.id) == null
+        ) {
             return PreparedRequest(model, options)
         }
         val resolution =
-            stored
-                ?.let {
-                    if (!options.apiKey.isNullOrBlank() && stored !is OAuthCredential) {
-                        return PreparedRequest(model, options)
-                    }
-                    resolveStoredAuth(provider, stored)
-                }
-                ?: provider.resolveAmbientAuth { name ->
-                    options.env[name]?.takeIf(String::isNotBlank)
-                        ?: environment(name)?.takeIf(String::isNotBlank)
-                }
+            getAuth(
+                provider.id,
+                AuthResolutionOverrides(
+                    apiKey = options.apiKey,
+                    env = options.env,
+                ),
+            )
                 ?: return PreparedRequest(model, options)
         return PreparedRequest(
             model =
@@ -426,17 +543,32 @@ class Models(
     private suspend fun resolveStoredAuth(
         provider: Provider,
         stored: Credential,
+        context: AuthContext = authContext,
         minOAuthValidityMs: Long? = null,
+        overrideEnvironment: Map<String, String> = emptyMap(),
     ): AuthResult? {
         return when (stored) {
             is ApiKeyCredential ->
-                AuthResult(
-                    auth =
-                        ModelAuth(
-                            apiKey = stored.key,
-                        ),
-                    source = "Stored API key",
-                )
+                provider.apiKey
+                    ?.let { method ->
+                        resolveApiKey(
+                            provider = provider,
+                            method = method,
+                            context = context,
+                            credential =
+                                stored.copy(
+                                    env = stored.env + overrideEnvironment,
+                                ),
+                        )
+                    }
+                    ?: AuthResult(
+                        auth =
+                            ModelAuth(
+                                apiKey = stored.key,
+                            ),
+                        source = "Stored API key",
+                        env = stored.env + overrideEnvironment,
+                    )
 
             is OAuthCredential ->
                 provider.oauth?.let {
@@ -453,6 +585,89 @@ class Models(
                     )
         }
     }
+
+    private suspend fun checkProviderAuth(
+        provider: Provider,
+        credential: Credential?,
+    ): AuthCheck? {
+        if (credential is OAuthCredential) {
+            return provider.oauth?.let {
+                AuthCheck(
+                    source = "OAuth",
+                    type = AuthType.OAUTH,
+                )
+            }
+        }
+        val method = provider.apiKey
+        if (method != null) {
+            return try {
+                method.check(authContext, credential as? ApiKeyCredential)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                throw ModelsAuthException(
+                    code = "auth",
+                    message = "API key auth check failed for provider ${provider.id}",
+                    cause = error,
+                )
+            }
+        }
+        if (credential is ApiKeyCredential) {
+            return credential.key
+                ?.takeIf(String::isNotBlank)
+                ?.let {
+                    AuthCheck(
+                        source = "Stored API key",
+                        type = AuthType.API_KEY,
+                    )
+                }
+        }
+        return provider.resolveAmbientAuth(environment)?.let { result ->
+            AuthCheck(
+                source = result.source,
+                type = AuthType.API_KEY,
+            )
+        } ?: if (provider.oauth == null) {
+            AuthCheck(
+                source = provider.name,
+                type = AuthType.API_KEY,
+            )
+        } else {
+            null
+        }
+    }
+
+    private suspend fun resolveApiKey(
+        provider: Provider,
+        method: ApiKeyAuth,
+        context: AuthContext,
+        credential: ApiKeyCredential?,
+    ): AuthResult? =
+        try {
+            method.resolve(context, credential)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            throw ModelsAuthException(
+                code = "auth",
+                message = "API key auth failed for provider ${provider.id}",
+                cause = error,
+            )
+        }
+
+    private fun overlayAuthContext(overrides: Map<String, String>): AuthContext =
+        if (overrides.isEmpty()) {
+            authContext
+        } else {
+            object : AuthContext {
+                override suspend fun env(name: String): String? =
+                    overrides[name]?.takeIf(String::isNotBlank)
+                        ?: authContext.env(name)
+
+                override suspend fun fileExists(path: String): Boolean =
+                    authContext.fileExists(path)
+            }
+        }
 
     private suspend fun resolveStoredOAuth(
         provider: Provider,

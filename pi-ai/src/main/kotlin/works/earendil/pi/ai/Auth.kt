@@ -105,7 +105,14 @@ data class AuthResult(
     val env: Map<String, String> = emptyMap(),
 )
 
+data class AuthCheck(
+    val source: String? = null,
+    val type: AuthType,
+)
+
 data class AuthResolutionOverrides(
+    val apiKey: String? = null,
+    val env: Map<String, String> = emptyMap(),
     val minOAuthValidityMs: Long? = null,
 )
 
@@ -167,6 +174,38 @@ interface AuthInteraction {
     suspend fun prompt(prompt: AuthPrompt): String
 
     fun notify(event: AuthEvent)
+}
+
+interface AuthContext {
+    suspend fun env(name: String): String?
+
+    suspend fun fileExists(path: String): Boolean
+}
+
+interface ApiKeyAuth {
+    val name: String
+
+    val supportsLogin: Boolean
+        get() = false
+
+    suspend fun login(interaction: AuthInteraction): ApiKeyCredential =
+        throw ModelsAuthException("auth", "$name does not support api_key login")
+
+    suspend fun check(
+        context: AuthContext,
+        credential: ApiKeyCredential?,
+    ): AuthCheck? =
+        resolve(context, credential)?.let { result ->
+            AuthCheck(
+                source = result.source,
+                type = AuthType.API_KEY,
+            )
+        }
+
+    suspend fun resolve(
+        context: AuthContext,
+        credential: ApiKeyCredential?,
+    ): AuthResult?
 }
 
 interface OAuthAuth {

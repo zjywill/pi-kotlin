@@ -41,6 +41,21 @@ class FauxProvider(
             ),
         ),
 ) : Provider {
+    override val apiKey: ApiKeyAuth =
+        object : ApiKeyAuth {
+            override val name: String = "Faux"
+
+            override suspend fun resolve(
+                context: AuthContext,
+                credential: ApiKeyCredential?,
+            ): AuthResult =
+                AuthResult(
+                    auth = ModelAuth(apiKey = credential?.key),
+                    source = "Faux",
+                    env = credential?.env.orEmpty(),
+                )
+        }
+
     private val responses = ArrayDeque<FauxResponseStep>()
     private val promptCache = mutableMapOf<String, String>()
     private val models =

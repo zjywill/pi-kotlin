@@ -21,9 +21,11 @@ import works.earendil.pi.ai.AuthInteraction
 import works.earendil.pi.ai.AuthPrompt
 import works.earendil.pi.ai.AuthType
 import works.earendil.pi.ai.Context
+import works.earendil.pi.ai.InMemoryModelsStore
 import works.earendil.pi.ai.InMemoryCredentialStore
 import works.earendil.pi.ai.Models
 import works.earendil.pi.ai.ModelsRefreshOptions
+import works.earendil.pi.ai.ModelsStoreEntry
 import works.earendil.pi.ai.OAuthCredential
 import works.earendil.pi.ai.SimpleStreamOptions
 import works.earendil.pi.ai.StreamOptions
@@ -89,10 +91,15 @@ fun main(args: Array<String>) =
             ),
         )
     val credentials = InMemoryCredentialStore()
+    val modelsStore = InMemoryModelsStore()
     val models =
         Models(
             providers = emptyList(),
+            modelsStore = modelsStore,
             credentials = credentials,
+            environment = { name ->
+                if (name == "NATIVE_ACCOUNT") "oracle" else null
+            },
             currentTimeMillis = { 1_000 },
         )
     val providerRegistry = ExtensionProviderRegistry(models, extensionHost = { host })
@@ -227,6 +234,29 @@ fun main(args: Array<String>) =
                 resolvedPackageResources = discoveredResources,
             )
         providerRegistry.apply(registration.providers) { error(it) }
+        val nativeInitial = checkNotNull(models.getModel("native-provider", "native-initial"))
+        val cachedNative = nativeInitial.copy(id = "cached", name = "Cached")
+        val cachedDynamic =
+            nativeInitial.copy(
+                id = "cached",
+                name = "Cached",
+                api = "openai-completions",
+                provider = "dynamic-provider",
+                baseUrl = "https://dynamic.invalid/v1",
+            )
+        modelsStore.write(
+            "native-provider",
+            ModelsStoreEntry(
+                models = listOf(cachedNative),
+                checkedAt = 123,
+            ),
+        )
+        val dynamicStored =
+            ModelsStoreEntry(
+                models = listOf(cachedDynamic),
+                checkedAt = 123,
+            )
+        modelsStore.write("dynamic-provider", dynamicStored)
         val registeredModel = checkNotNull(models.getModel("fixture-provider", "fixture-model"))
         val providerConfig =
             registration.providers
@@ -356,6 +386,37 @@ fun main(args: Array<String>) =
             models
                 .getModels("callback-provider")
                 .map(Model::id)
+        check(models.checkAuth("native-provider") == null)
+        models.login(
+            "native-provider",
+            AuthType.API_KEY,
+            object : AuthInteraction {
+                override suspend fun prompt(prompt: AuthPrompt): String = "native-key"
+
+                override fun notify(event: AuthEvent) = Unit
+            },
+        )
+        val nativeCheck = checkNotNull(models.checkAuth("native-provider"))
+        val nativeAuth = checkNotNull(models.getAuth("native-provider"))
+        val nativeRefresh =
+            models.refresh(
+                ModelsRefreshOptions(
+                    allowNetwork = false,
+                    force = true,
+                ),
+            )
+        check(nativeRefresh.errors.isEmpty())
+        val nativeModels = models.getModels("native-provider")
+        val nativeFiltered = models.getAvailable("native-provider")
+        val nativeModel = nativeModels.single()
+        val nativeStream = models.stream(nativeModel, Context(), StreamOptions())
+        val nativeStreamEvents = nativeStream.events.toList()
+        val nativeStreamResult = nativeStream.result()
+        val nativeSimpleStream = models.streamSimple(nativeModel, Context(), SimpleStreamOptions())
+        nativeSimpleStream.events.toList()
+        val nativeSimpleResult = nativeSimpleStream.result()
+        val nativeWritten = checkNotNull(modelsStore.read("native-provider"))
+        val dynamicModels = models.getModels("dynamic-provider")
 
         val output =
             buildJsonObject {
@@ -427,7 +488,10 @@ fun main(args: Array<String>) =
                         put(
                             "providers",
                             JsonArray(
-                                registration.providers.map { provider ->
+                                registration.providers
+                                    .sortedBy { provider ->
+                                        provider.getValue("name").jsonPrimitive.content
+                                    }.map { provider ->
                                     buildJsonObject {
                                         put("name", provider.getValue("name"))
                                         put(
@@ -581,6 +645,75 @@ fun main(args: Array<String>) =
                                 )
                             },
                         )
+                        put(
+                            "native",
+                            buildJsonObject {
+                                put(
+                                    "check",
+                                    buildJsonObject {
+                                        put("type", nativeCheck.type.name.lowercase())
+                                    },
+                                )
+                                put(
+                                    "auth",
+                                    buildJsonObject {
+                                        put(
+                                            "auth",
+                                            buildJsonObject {
+                                                nativeAuth.auth.apiKey?.let { put("apiKey", it) }
+                                                nativeAuth.auth.baseUrl?.let { put("baseUrl", it) }
+                                            },
+                                        )
+                                        put(
+                                            "env",
+                                            JsonObject(
+                                                nativeAuth.env.mapValues { (_, value) ->
+                                                    JsonPrimitive(value)
+                                                },
+                                            ),
+                                        )
+                                        put("source", nativeAuth.source)
+                                    },
+                                )
+                                put("modelIds", JsonArray(nativeModels.map { JsonPrimitive(it.id) }))
+                                put(
+                                    "filteredModelIds",
+                                    JsonArray(nativeFiltered.map { JsonPrimitive(it.id) }),
+                                )
+                                put(
+                                    "written",
+                                    oracleStoreEntry(nativeWritten),
+                                )
+                                put(
+                                    "streamEventTypes",
+                                    JsonArray(
+                                        nativeStreamEvents.map { event ->
+                                            protocolJson
+                                                .encodeToJsonElement(
+                                                    works.earendil.pi.ai.AssistantMessageEvent.serializer(),
+                                                    event,
+                                                ).jsonObject
+                                                .getValue("type")
+                                        },
+                                    ),
+                                )
+                                put("streamText", contentText(nativeStreamResult.content))
+                                put("simpleText", contentText(nativeSimpleResult.content))
+                            },
+                        )
+                        put(
+                            "refreshModels",
+                            buildJsonObject {
+                                put(
+                                    "modelIds",
+                                    JsonArray(dynamicModels.map { JsonPrimitive(it.id) }),
+                                )
+                                put(
+                                    "storeUnchanged",
+                                    oracleStoreEntry(dynamicStored),
+                                )
+                            },
+                        )
                     },
                 )
             }
@@ -626,6 +759,14 @@ private fun providerModelJson(model: Model): JsonObject =
         )
         put("contextWindow", model.contextWindow)
         put("maxTokens", model.maxTokens)
+    }
+
+private fun oracleStoreEntry(entry: ModelsStoreEntry): JsonObject =
+    buildJsonObject {
+        put("models", JsonArray(entry.models.map(::providerModelJson)))
+        entry.lastModified?.let { put("lastModified", it) }
+        entry.checkedAt?.let { put("checkedAt", it) }
+        entry.etag?.let { put("etag", it) }
     }
 
 private fun oracleExtensionContext(cwd: Path): JsonObject =

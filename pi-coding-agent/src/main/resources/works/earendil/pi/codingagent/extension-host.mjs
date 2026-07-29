@@ -323,6 +323,7 @@ const activeBashOperations = new Map();
 let providerCallbacks = new Map();
 const activeProviderOperations = new Map();
 const pendingProviderAuthRequests = new Map();
+const pendingProviderBridgeRequests = new Map();
 
 function jsonValue(value) {
 	if (value === undefined) return null;
@@ -335,34 +336,85 @@ function jsonValue(value) {
 	);
 }
 
-function providerCallbackCapabilities(config) {
-	const oauth = config?.oauth;
+function providerCallbackCapabilities(config, native = false) {
+	const apiKey = native ? config?.auth?.apiKey : undefined;
+	const oauth = native ? config?.auth?.oauth : config?.oauth;
 	return {
+		native,
+		getModels: native && typeof config?.getModels === "function",
+		stream: native && typeof config?.stream === "function",
 		streamSimple: typeof config?.streamSimple === "function",
-		oauth: oauth && typeof oauth === "object"
+		refreshModels: typeof config?.refreshModels === "function",
+		filterModels: native && typeof config?.filterModels === "function",
+		apiKey: apiKey && typeof apiKey === "object"
 			? {
-					login: typeof oauth.login === "function",
-					refreshToken: typeof oauth.refreshToken === "function",
-					getApiKey: typeof oauth.getApiKey === "function",
-					modifyModels: typeof oauth.modifyModels === "function",
+					login: typeof apiKey.login === "function",
+					check: typeof apiKey.check === "function",
+					resolve: typeof apiKey.resolve === "function",
 				}
+			: undefined,
+		oauth: oauth && typeof oauth === "object"
+			? native
+				? {
+						login: typeof oauth.login === "function",
+						refresh: typeof oauth.refresh === "function",
+						toAuth: typeof oauth.toAuth === "function",
+					}
+				: {
+						login: typeof oauth.login === "function",
+						refreshToken: typeof oauth.refreshToken === "function",
+						getApiKey: typeof oauth.getApiKey === "function",
+						modifyModels: typeof oauth.modifyModels === "function",
+					}
 			: undefined,
 	};
 }
 
 function hasProviderCallbacks(capabilities) {
-	return capabilities.streamSimple ||
+	return capabilities.getModels ||
+		capabilities.stream ||
+		capabilities.streamSimple ||
+		capabilities.refreshModels ||
+		capabilities.filterModels ||
+		Object.values(capabilities.apiKey ?? {}).some(Boolean) ||
 		Object.values(capabilities.oauth ?? {}).some(Boolean);
 }
 
+function nativeProviderMetadata(provider) {
+	let models = [];
+	try {
+		models = typeof provider?.getModels === "function" ? provider.getModels() : [];
+	} catch {
+		models = [];
+	}
+	return jsonValue({
+		__piNative: true,
+		name: provider?.name,
+		baseUrl: provider?.baseUrl,
+		headers: provider?.headers,
+		auth: {
+			apiKey: provider?.auth?.apiKey
+				? { name: provider.auth.apiKey.name }
+				: undefined,
+			oauth: provider?.auth?.oauth
+				? {
+						name: provider.auth.oauth.name,
+						loginLabel: provider.auth.oauth.loginLabel,
+					}
+				: undefined,
+		},
+		models,
+	});
+}
+
 function providerRegistrationMetadata(registration) {
-	const config = jsonValue(registration.config) ?? {};
-	if (!registration.native) {
-		const capabilities = providerCallbackCapabilities(registration.config);
-		if (hasProviderCallbacks(capabilities)) {
-			config.__piCallbackToken = registration.callbackToken;
-			config.__piCallbacks = capabilities;
-		}
+	const config = registration.native
+		? nativeProviderMetadata(registration.config)
+		: (jsonValue(registration.config) ?? {});
+	const capabilities = providerCallbackCapabilities(registration.config, registration.native);
+	if (hasProviderCallbacks(capabilities)) {
+		config.__piCallbackToken = registration.callbackToken;
+		config.__piCallbacks = capabilities;
 	}
 	return {
 		name: registration.name,
@@ -394,14 +446,16 @@ function registerProviderConfig(name, config, extensionPath) {
 function registerNativeProvider(provider, extensionPath) {
 	const previous = providers.get(provider.id);
 	if (previous?.callbackToken) providerCallbacks.delete(previous.callbackToken);
+	const callbackToken = randomUUID();
 	const registration = {
 		name: provider.id,
 		config: provider,
 		extensionPath,
-		callbackToken: undefined,
+		callbackToken,
 		native: true,
 	};
 	providers.set(provider.id, registration);
+	providerCallbacks.set(callbackToken, registration);
 	return registration;
 }
 
@@ -1127,7 +1181,43 @@ function requestProviderAuthInput(parentId, method, payload, signal, optional = 
 		});
 		protocolWrite(
 			`${JSON.stringify({
+				...jsonValue(payload),
 				type: "provider_auth_request",
+				id: parentId,
+				requestId,
+				method,
+			})}\n`,
+		);
+	});
+}
+
+function requestProviderBridge(parentId, type, method, payload, signal) {
+	if (signal?.aborted) return Promise.reject(providerAbortError());
+	const requestId = randomUUID();
+	return new Promise((resolve, reject) => {
+		const cleanup = () => {
+			signal?.removeEventListener("abort", onAbort);
+			pendingProviderBridgeRequests.delete(requestId);
+		};
+		const onAbort = () => {
+			cleanup();
+			reject(providerAbortError());
+		};
+		signal?.addEventListener("abort", onAbort, { once: true });
+		pendingProviderBridgeRequests.set(requestId, {
+			resolve: response => {
+				cleanup();
+				if (response.error) {
+					reject(new Error(response.error));
+					return;
+				}
+				resolve(response.value);
+			},
+			cancel: onAbort,
+		});
+		protocolWrite(
+			`${JSON.stringify({
+				type,
 				id: parentId,
 				requestId,
 				method,
@@ -1135,6 +1225,19 @@ function requestProviderAuthInput(parentId, method, payload, signal, optional = 
 			})}\n`,
 		);
 	});
+}
+
+function extensionAuthInteraction(parentId, signal) {
+	return {
+		signal,
+		prompt(prompt) {
+			const method = prompt?.type ?? "text";
+			return requestProviderAuthInput(parentId, method, prompt ?? {}, signal);
+		},
+		notify(event) {
+			providerAuthEvent(parentId, event);
+		},
+	};
 }
 
 function extensionOAuthCallbacks(parentId, signal) {
@@ -1166,6 +1269,43 @@ function extensionOAuthCallbacks(parentId, signal) {
 	};
 }
 
+function extensionAuthContext(parentId, signal) {
+	return {
+		env(name) {
+			return requestProviderBridge(
+				parentId,
+				"provider_context_request",
+				"env",
+				{ name },
+				signal,
+			);
+		},
+		fileExists(path) {
+			return requestProviderBridge(
+				parentId,
+				"provider_context_request",
+				"file_exists",
+				{ path },
+				signal,
+			);
+		},
+	};
+}
+
+function extensionProviderStore(parentId, signal) {
+	return {
+		read() {
+			return requestProviderBridge(parentId, "provider_store_request", "read", {}, signal);
+		},
+		write(entry) {
+			return requestProviderBridge(parentId, "provider_store_request", "write", { entry }, signal);
+		},
+		delete() {
+			return requestProviderBridge(parentId, "provider_store_request", "delete", {}, signal);
+		},
+	};
+}
+
 async function invokeProviderCallback(request) {
 	const registration = providerRegistration(request.callbackToken);
 	const config = registration.config;
@@ -1173,6 +1313,126 @@ async function invokeProviderCallback(request) {
 	activeProviderOperations.set(request.id, controller);
 	try {
 		switch (request.method) {
+			case "get_models":
+				if (typeof config.getModels !== "function") {
+					throw new Error(`Provider ${registration.name} does not define getModels`);
+				}
+				return { result: jsonValue(config.getModels()) };
+			case "filter_models":
+				if (typeof config.filterModels !== "function") {
+					throw new Error(`Provider ${registration.name} does not define filterModels`);
+				}
+				return {
+					result: jsonValue(
+						await awaitProviderOperation(
+							config.filterModels(
+								request.arguments?.models ?? [],
+								request.arguments?.credential,
+							),
+							controller.signal,
+						),
+					),
+				};
+			case "refresh_models": {
+				if (typeof config.refreshModels !== "function") {
+					throw new Error(`Provider ${registration.name} does not define refreshModels`);
+				}
+				const context = request.arguments?.context ?? {};
+				const returned = await awaitProviderOperation(
+					config.refreshModels({
+						...context,
+						store: extensionProviderStore(request.id, controller.signal),
+						signal: controller.signal,
+					}),
+					controller.signal,
+				);
+				return {
+					result: {
+						returned: jsonValue(returned),
+						models: registration.native && typeof config.getModels === "function"
+							? jsonValue(config.getModels())
+							: undefined,
+					},
+				};
+			}
+			case "api_key_login":
+				if (typeof config.auth?.apiKey?.login !== "function") {
+					throw new Error(`Provider ${registration.name} does not define auth.apiKey.login`);
+				}
+				return {
+					result: jsonValue(
+						await awaitProviderOperation(
+							config.auth.apiKey.login(extensionAuthInteraction(request.id, controller.signal)),
+							controller.signal,
+						),
+					),
+				};
+			case "api_key_check":
+				if (typeof config.auth?.apiKey?.check !== "function") {
+					throw new Error(`Provider ${registration.name} does not define auth.apiKey.check`);
+				}
+				return {
+					result: jsonValue(
+						await awaitProviderOperation(
+							config.auth.apiKey.check({
+								ctx: extensionAuthContext(request.id, controller.signal),
+								credential: request.arguments?.credential,
+							}),
+							controller.signal,
+						),
+					),
+				};
+			case "api_key_resolve":
+				if (typeof config.auth?.apiKey?.resolve !== "function") {
+					throw new Error(`Provider ${registration.name} does not define auth.apiKey.resolve`);
+				}
+				return {
+					result: jsonValue(
+						await awaitProviderOperation(
+							config.auth.apiKey.resolve({
+								ctx: extensionAuthContext(request.id, controller.signal),
+								credential: request.arguments?.credential,
+							}),
+							controller.signal,
+						),
+					),
+				};
+			case "native_oauth_login":
+				if (typeof config.auth?.oauth?.login !== "function") {
+					throw new Error(`Provider ${registration.name} does not define auth.oauth.login`);
+				}
+				return {
+					result: jsonValue(
+						await awaitProviderOperation(
+							config.auth.oauth.login(extensionAuthInteraction(request.id, controller.signal)),
+							controller.signal,
+						),
+					),
+				};
+			case "native_oauth_refresh":
+				if (typeof config.auth?.oauth?.refresh !== "function") {
+					throw new Error(`Provider ${registration.name} does not define auth.oauth.refresh`);
+				}
+				return {
+					result: jsonValue(
+						await awaitProviderOperation(
+							config.auth.oauth.refresh(request.arguments?.credential, controller.signal),
+							controller.signal,
+						),
+					),
+				};
+			case "native_oauth_to_auth":
+				if (typeof config.auth?.oauth?.toAuth !== "function") {
+					throw new Error(`Provider ${registration.name} does not define auth.oauth.toAuth`);
+				}
+				return {
+					result: jsonValue(
+						await awaitProviderOperation(
+							config.auth.oauth.toAuth(request.arguments?.credential),
+							controller.signal,
+						),
+					),
+				};
 			case "oauth_login":
 				if (typeof config.oauth?.login !== "function") {
 					throw new Error(`Provider ${registration.name} does not define oauth.login`);
@@ -1258,26 +1518,28 @@ function nextProviderStreamEvent(iterator, signal) {
 function cancelAllProviderOperations() {
 	for (const operation of activeProviderOperations.values()) operation.abort();
 	for (const pending of [...pendingProviderAuthRequests.values()]) pending.cancel();
+	for (const pending of [...pendingProviderBridgeRequests.values()]) pending.cancel();
 }
 
 async function invokeProviderStream(request) {
 	const registration = providerRegistration(request.callbackToken);
-	const streamSimple = registration.config?.streamSimple;
-	if (typeof streamSimple !== "function") {
-		throw new Error(`Provider ${registration.name} does not define streamSimple`);
+	const method = request.method === "stream" ? "stream" : "streamSimple";
+	const streamMethod = registration.config?.[method];
+	if (typeof streamMethod !== "function") {
+		throw new Error(`Provider ${registration.name} does not define ${method}`);
 	}
 	const controller = new AbortController();
 	activeProviderOperations.set(request.id, controller);
 	let iterator;
 	let terminal = false;
 	try {
-		const providerStream = await streamSimple(
+		const providerStream = await streamMethod(
 			request.model,
 			request.context,
 			{ ...(request.options ?? {}), signal: controller.signal },
 		);
 		if (!providerStream || typeof providerStream[Symbol.asyncIterator] !== "function") {
-			throw new Error(`Provider ${registration.name} streamSimple did not return an async event stream`);
+			throw new Error(`Provider ${registration.name} ${method} did not return an async event stream`);
 		}
 		iterator = providerStream[Symbol.asyncIterator]();
 		while (true) {
@@ -1428,6 +1690,10 @@ input.on("line", line => {
 	}
 	if (request.type === "provider_auth_response") {
 		pendingProviderAuthRequests.get(request.requestId)?.resolve(request);
+		return;
+	}
+	if (request.type === "provider_context_response" || request.type === "provider_store_response") {
+		pendingProviderBridgeRequests.get(request.requestId)?.resolve(request);
 		return;
 	}
 	if (request.type === "provider_abort") {

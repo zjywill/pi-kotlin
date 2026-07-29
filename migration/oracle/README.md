@@ -97,14 +97,17 @@ replacement, tool-call blocking, tool-result chaining, and
 `project_trust` decisions, `resources_discover` composition, and serializable
 provider model validation. It also compares awaited dialog answers and
 function-valued `user_bash` output/exit status, live custom-provider stream
-events, and legacy extension OAuth login, refresh, API-key derivation, and
-credential-based model projection. Command-time tool, command, and flag
+events, legacy extension OAuth login/refresh/API-key derivation/model
+projection, direct native provider registration, native API-key auth context,
+provider-scoped store access, model filtering, both native stream methods, and
+named-provider `refreshModels`. Command-time tool, command, and flag
 registrations are compared after the host refreshes its live registration
 metadata. Kotlin runtime tests additionally cover registration, model
 selection, interactive trust choices, UI timeout/EOF/shutdown behavior, server
 stream routing, bash and provider cancellation, arbitrary top-level OAuth
-credential fields, immediate active-tool refresh, host lifecycle cleanup, and
-invalid re-registration rollback.
+credential fields, native auth `env`/`fileExists` correlation, model-store
+`read`/`write`/`delete`, immediate active-tool refresh, host lifecycle cleanup,
+and invalid re-registration rollback.
 
 The model catalog runtime comparison covers bundled-versus-remote timestamp
 selection, a newer persisted overlay restored without network access, and

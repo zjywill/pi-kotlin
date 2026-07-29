@@ -317,6 +317,105 @@ const refreshed = await oauth.refreshToken(loggedIn);
 const callbackApiKey = oauth.getApiKey(refreshed);
 const modifiedModels = oauth.modifyModels?.([callbackModel as never], refreshed) ?? [callbackModel];
 
+const nativeRegistration = runtime.pendingNativeProviderRegistrations.find(
+	value => value.provider.id === "native-provider",
+);
+if (!nativeRegistration) throw new Error("native provider was not registered");
+const nativeProvider = nativeRegistration.provider;
+const nativeRegistrationModels = nativeProvider.getModels();
+await nativeProvider.auth.apiKey?.check?.({
+	ctx: {
+		env: async () => undefined,
+		fileExists: async () => true,
+	},
+	credential: undefined,
+});
+const nativeCredential = await nativeProvider.auth.apiKey?.login?.({
+	prompt: async () => "native-key",
+	notify: () => {},
+});
+if (!nativeCredential) throw new Error("native API-key login was not registered");
+const nativeAuthContext = {
+	env: async (name: string) => name === "NATIVE_ACCOUNT" ? "oracle" : undefined,
+	fileExists: async () => true,
+};
+const nativeCheck = await nativeProvider.auth.apiKey?.check?.({
+	ctx: nativeAuthContext,
+	credential: nativeCredential,
+});
+const nativeAuth = await nativeProvider.auth.apiKey?.resolve({
+	ctx: nativeAuthContext,
+	credential: nativeCredential,
+});
+const nativeStored = {
+	models: [{
+		...nativeProvider.getModels()[0],
+		id: "cached",
+		name: "Cached",
+	}],
+	checkedAt: 123,
+};
+let nativeWritten: unknown;
+await nativeProvider.refreshModels?.({
+	credential: { ...nativeCredential, env: { NATIVE_ACCOUNT: "oracle" } },
+	store: {
+		read: async () => nativeStored,
+		write: async entry => {
+			nativeWritten = entry;
+		},
+		delete: async () => {},
+	},
+	allowNetwork: false,
+	force: true,
+});
+const nativeModels = nativeProvider.getModels();
+const nativeFiltered = nativeProvider.filterModels?.(nativeModels, nativeCredential) ?? nativeModels;
+const nativeStream = nativeProvider.stream(
+	nativeModels[0] as never,
+	{ messages: [], tools: [] },
+	{ apiKey: "native-key" } as never,
+);
+const nativeStreamEvents: unknown[] = [];
+for await (const event of nativeStream) nativeStreamEvents.push(event);
+const nativeStreamResult = await nativeStream.result();
+const nativeSimpleStream = nativeProvider.streamSimple(
+	nativeModels[0] as never,
+	{ messages: [], tools: [] },
+	{ apiKey: "native-key" },
+);
+for await (const _event of nativeSimpleStream) {
+	// Drain the provider stream before reading its result.
+}
+const nativeSimpleResult = await nativeSimpleStream.result();
+
+const dynamicRegistration = runtime.pendingProviderRegistrations.find(value => value.name === "dynamic-provider");
+if (!dynamicRegistration?.config.refreshModels) throw new Error("dynamic refreshModels was not registered");
+const dynamicStored = {
+	models: [{
+		id: "cached",
+		name: "Cached",
+		api: "openai-completions",
+		provider: "dynamic-provider",
+		baseUrl: "https://dynamic.invalid/v1",
+		reasoning: false,
+		input: ["text"] as const,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 8192,
+		maxTokens: 1024,
+	}],
+	checkedAt: 123,
+};
+const dynamicModels = await dynamicRegistration.config.refreshModels({
+	credential: { type: "api_key", key: "dynamic-key" },
+	store: {
+		read: async () => dynamicStored,
+		write: async () => {},
+		delete: async () => {},
+	},
+	allowNetwork: false,
+	force: true,
+});
+
 const output = {
 	errors: loaded.errors,
 	registrations: {
@@ -338,10 +437,34 @@ const output = {
 			default: value.default ?? null,
 			value: runtime.flagValues.get(value.name) ?? null,
 		})),
-		providers: runtime.pendingProviderRegistrations.map(value => ({
-			name: value.name,
-			config: value.config,
-		})),
+		providers: [
+			...runtime.pendingProviderRegistrations.map(value => ({
+				name: value.name,
+				config: value.config,
+			})),
+			...runtime.pendingNativeProviderRegistrations.map(value => ({
+				name: value.provider.id,
+				config: {
+					name: value.provider.name,
+					baseUrl: value.provider.baseUrl,
+					headers: value.provider.headers,
+					auth: {
+						apiKey: value.provider.auth.apiKey
+							? { name: value.provider.auth.apiKey.name }
+							: undefined,
+						oauth: value.provider.auth.oauth
+							? {
+									name: value.provider.auth.oauth.name,
+									loginLabel: value.provider.auth.oauth.loginLabel,
+								}
+							: undefined,
+					},
+					models: value.provider.id === "native-provider"
+						? nativeRegistrationModels
+						: value.provider.getModels(),
+				},
+			})),
+		].sort((a, b) => a.name.localeCompare(b.name)),
 		events: [...extension.handlers.keys()].sort(),
 	},
 	dynamicRegistrations: {
@@ -411,6 +534,26 @@ const output = {
 			},
 			apiKey: callbackApiKey,
 			modelIds: modifiedModels.map(model => model.id),
+		},
+		native: {
+			check: { type: nativeCheck?.type },
+			auth: nativeAuth,
+			modelIds: nativeModels.map(model => model.id),
+			filteredModelIds: nativeFiltered.map(model => model.id),
+			written: nativeWritten,
+			streamEventTypes: nativeStreamEvents.map(event => (event as { type: string }).type),
+			streamText: nativeStreamResult.content
+				.filter(content => content.type === "text")
+				.map(content => content.text)
+				.join(""),
+			simpleText: nativeSimpleResult.content
+				.filter(content => content.type === "text")
+				.map(content => content.text)
+				.join(""),
+		},
+		refreshModels: {
+			modelIds: dynamicModels.map(model => model.id),
+			storeUnchanged: dynamicStored,
 		},
 	},
 };

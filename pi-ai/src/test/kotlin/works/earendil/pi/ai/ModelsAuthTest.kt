@@ -9,6 +9,8 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 
 class ModelsAuthTest {
     @Test
@@ -275,6 +277,127 @@ class ModelsAuthTest {
             assertEquals("OAuth refresh failed for faux: invalid_grant", result.errorMessage)
             assertEquals(0, provider.state.callCount)
             assertIs<OAuthCredential>(store.read("faux"))
+        }
+
+    @Test
+    fun `provider API key login check and resolve own stored and request scoped auth`() =
+        runTest {
+            val credentialStore = InMemoryCredentialStore()
+            val delegate = FauxProvider(id = "native")
+            val prompts = mutableListOf<AuthPrompt>()
+            val apiKey =
+                object : ApiKeyAuth {
+                    override val name: String = "Native setup"
+                    override val supportsLogin: Boolean = true
+
+                    override suspend fun login(interaction: AuthInteraction): ApiKeyCredential =
+                        ApiKeyCredential(
+                            key =
+                                interaction.prompt(
+                                    AuthPrompt.Text(
+                                        message = "API key",
+                                        secret = true,
+                                    ),
+                                ),
+                        )
+
+                    override suspend fun check(
+                        context: AuthContext,
+                        credential: ApiKeyCredential?,
+                    ): AuthCheck? =
+                        credential?.key?.let {
+                            AuthCheck(
+                                source = "stored native key",
+                                type = AuthType.API_KEY,
+                            )
+                        }
+
+                    override suspend fun resolve(
+                        context: AuthContext,
+                        credential: ApiKeyCredential?,
+                    ): AuthResult? {
+                        val key = credential?.key ?: return null
+                        val account = credential.env["ACCOUNT"] ?: context.env("ACCOUNT") ?: return null
+                        if (!context.fileExists("~/native-auth")) {
+                            return null
+                        }
+                        return AuthResult(
+                            auth =
+                                ModelAuth(
+                                    apiKey = key,
+                                    headers = mapOf("X-Account" to account),
+                                    baseUrl = "https://native.invalid/$account",
+                                ),
+                            source = "stored native key",
+                            env = mapOf("ACCOUNT" to account),
+                        )
+                    }
+                }
+            val provider =
+                object : Provider by delegate {
+                    override val apiKey: ApiKeyAuth = apiKey
+                }
+            val context =
+                object : AuthContext {
+                    override suspend fun env(name: String): String? =
+                        if (name == "ACCOUNT") "ambient-account" else null
+
+                    override suspend fun fileExists(path: String): Boolean =
+                        path == "~/native-auth"
+                }
+            val models =
+                Models(
+                    providers = listOf(provider),
+                    credentials = credentialStore,
+                    authContext = context,
+                )
+
+            assertNull(models.checkAuth("native"))
+            assertEquals(emptyList(), models.getAvailable("native"))
+
+            val loggedIn =
+                models.login(
+                    "native",
+                    AuthType.API_KEY,
+                    object : AuthInteraction {
+                        override suspend fun prompt(prompt: AuthPrompt): String {
+                            prompts += prompt
+                            return "stored-secret"
+                        }
+
+                        override fun notify(event: AuthEvent) = Unit
+                    },
+                )
+
+            assertEquals(ApiKeyCredential("stored-secret"), loggedIn)
+            assertEquals(true, (prompts.single() as AuthPrompt.Text).secret)
+            assertEquals(
+                AuthCheck(
+                    source = "stored native key",
+                    type = AuthType.API_KEY,
+                ),
+                models.checkAuth("native"),
+            )
+            assertEquals(listOf("faux-1"), models.getAvailable("native").map(Model::id))
+
+            val stored = assertNotNull(models.getAuth("native"))
+            assertEquals("stored-secret", stored.auth.apiKey)
+            assertEquals("https://native.invalid/ambient-account", stored.auth.baseUrl)
+            assertEquals("ambient-account", stored.auth.headers["X-Account"])
+
+            val explicit =
+                assertNotNull(
+                    models.getAuth(
+                        "native",
+                        AuthResolutionOverrides(
+                            apiKey = "request-secret",
+                            env = mapOf("ACCOUNT" to "request-account"),
+                        ),
+                    ),
+                )
+            assertEquals("request-secret", explicit.auth.apiKey)
+            assertEquals("https://native.invalid/request-account", explicit.auth.baseUrl)
+            assertEquals(mapOf("ACCOUNT" to "request-account"), explicit.env)
         }
 
     private fun staticOAuth(

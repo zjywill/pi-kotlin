@@ -22,9 +22,11 @@ import works.earendil.pi.ai.AuthPrompt
 import works.earendil.pi.ai.AuthType
 import works.earendil.pi.ai.Context
 import works.earendil.pi.ai.InMemoryCredentialStore
+import works.earendil.pi.ai.InMemoryModelsStore
 import works.earendil.pi.ai.Model
 import works.earendil.pi.ai.Models
 import works.earendil.pi.ai.ModelsRefreshOptions
+import works.earendil.pi.ai.ModelsStoreEntry
 import works.earendil.pi.ai.OAuthCredential
 import works.earendil.pi.ai.SimpleStreamOptions
 import works.earendil.pi.ai.StopReason
@@ -426,6 +428,352 @@ class ExtensionProviderCallbacksTest {
                         .orEmpty()
                         .contains("Environment variable TENANT_HEADER is not set"),
                 )
+            } finally {
+                registry.reset()
+                host.close()
+            }
+        }
+
+    @Test
+    fun `native provider bridges API key auth refresh store filtering and both stream methods`() =
+        runBlocking {
+            assumeTrue(nodeAvailable(), "Node.js 22+ is required for extension runtime tests")
+            val root = Files.createTempDirectory("pi-kotlin-extension-native-provider")
+            val contextFile = root.resolve("native-context").also { Files.writeString(it, "ready") }
+            val extension =
+                root.resolve("native-provider.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+
+                        const usage = {
+                          input: 1,
+                          output: 1,
+                          cacheRead: 0,
+                          cacheWrite: 0,
+                          totalTokens: 2,
+                          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                        };
+                        const initialModel = {
+                          id: "native-initial",
+                          name: "Native Initial",
+                          api: "native-api",
+                          provider: "native-provider",
+                          baseUrl: "https://fallback.invalid/v1",
+                          reasoning: false,
+                          input: ["text"],
+                          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                          contextWindow: 8192,
+                          maxTokens: 1024,
+                        };
+                        let providerModels = [initialModel];
+
+                        function response(kind, model, options) {
+                          const stream = createAssistantMessageEventStream();
+                          const text = [
+                            kind,
+                            model.id,
+                            options?.apiKey,
+                            options?.env?.NATIVE_ACCOUNT,
+                            model.baseUrl,
+                          ].join("|");
+                          const partial = {
+                            role: "assistant",
+                            content: [{ type: "text", text }],
+                            api: model.api,
+                            provider: model.provider,
+                            model: model.id,
+                            usage,
+                            stopReason: "pending",
+                            timestamp: 123,
+                          };
+                          stream.push({ type: "start", partial });
+                          stream.push({ type: "text_start", contentIndex: 0, partial });
+                          stream.push({ type: "text_delta", contentIndex: 0, delta: text, partial });
+                          stream.push({ type: "text_end", contentIndex: 0, content: text, partial });
+                          stream.push({
+                            type: "done",
+                            reason: "stop",
+                            message: { ...partial, stopReason: "stop" },
+                          });
+                          return stream;
+                        }
+
+                        export default function(pi) {
+                          pi.registerProvider({
+                            id: "native-provider",
+                            name: "Native Provider",
+                            baseUrl: "https://native.invalid/v1",
+                            headers: { "X-Native": "metadata" },
+                            auth: {
+                              apiKey: {
+                                name: "Native setup",
+                                async login(interaction) {
+                                  const key = await interaction.prompt({
+                                    type: "secret",
+                                    message: "Native API key",
+                                    placeholder: "secret",
+                                  });
+                                  return { type: "api_key", key, env: { LOGIN: "yes" } };
+                                },
+                                async check({ credential }) {
+                                  return credential?.key
+                                    ? { type: "api_key", source: `native-${'$'}{credential.env?.LOGIN}` }
+                                    : undefined;
+                                },
+                                async resolve({ ctx, credential }) {
+                                  const account = credential?.env?.NATIVE_ACCOUNT
+                                    ?? await ctx.env("NATIVE_ACCOUNT");
+                                  const exists = await ctx.fileExists(process.env.NATIVE_CONTEXT_FILE);
+                                  if (!credential?.key || !account || !exists) return undefined;
+                                  return {
+                                    auth: {
+                                      apiKey: credential.key,
+                                      headers: { "X-Account": account },
+                                      baseUrl: `https://resolved.invalid/${'$'}{account}`,
+                                    },
+                                    env: { NATIVE_ACCOUNT: account },
+                                    source: "native resolve",
+                                  };
+                                },
+                              },
+                            },
+                            getModels() {
+                              return providerModels;
+                            },
+                            async refreshModels(context) {
+                              const cached = await context.store.read();
+                              const suffix = cached?.models?.[0]?.id ?? "empty";
+                              providerModels = [{
+                                ...initialModel,
+                                id: `native-${'$'}{suffix}`,
+                                name: [
+                                  context.credential?.key,
+                                  context.allowNetwork,
+                                  context.force,
+                                ].join("|"),
+                              }];
+                              await context.store.delete();
+                              await context.store.write({
+                                models: providerModels,
+                                checkedAt: 321,
+                              });
+                            },
+                            filterModels(models, credential) {
+                              return credential?.key ? models : [];
+                            },
+                            stream(model, context, options) {
+                              return response("stream", model, options);
+                            },
+                            streamSimple(model, context, options) {
+                              return response("simple", model, options);
+                            },
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val host =
+                startHost(
+                    root = root,
+                    extension = extension,
+                    environment =
+                        System.getenv() +
+                            mapOf("NATIVE_CONTEXT_FILE" to contextFile.toString()),
+                )
+            val credentials = InMemoryCredentialStore()
+            val modelsStore = InMemoryModelsStore()
+            modelsStore.write(
+                "native-provider",
+                ModelsStoreEntry(
+                    models =
+                        listOf(
+                            Model(
+                                id = "cached",
+                                name = "Cached",
+                                api = "native-api",
+                                provider = "native-provider",
+                                baseUrl = "https://cached.invalid/v1",
+                                reasoning = false,
+                                input = listOf(works.earendil.pi.ai.ModelInput.TEXT),
+                                cost = works.earendil.pi.ai.ModelCost(0.0, 0.0, 0.0, 0.0),
+                                contextWindow = 8_192,
+                                maxTokens = 1_024,
+                            ),
+                        ),
+                    checkedAt = 100,
+                ),
+            )
+            val models =
+                Models(
+                    providers = emptyList(),
+                    modelsStore = modelsStore,
+                    credentials = credentials,
+                    environment = { name ->
+                        if (name == "NATIVE_ACCOUNT") "ambient-account" else null
+                    },
+                )
+            val registry = ExtensionProviderRegistry(models, extensionHost = { host })
+            registry.apply(host.registrations.providers) { error(it) }
+            val prompts = mutableListOf<AuthPrompt>()
+
+            try {
+                val initial = assertNotNull(models.getModel("native-provider", "native-initial"))
+                assertEquals("https://fallback.invalid/v1", initial.baseUrl)
+                assertEquals("metadata", models.getProvider("native-provider")?.headers?.get("X-Native"))
+                assertEquals(null, models.checkAuth("native-provider"))
+                assertEquals(emptyList(), models.getAvailable("native-provider"))
+
+                models.login(
+                    "native-provider",
+                    AuthType.API_KEY,
+                    object : AuthInteraction {
+                        override suspend fun prompt(prompt: AuthPrompt): String {
+                            prompts += prompt
+                            return "native-secret"
+                        }
+
+                        override fun notify(event: AuthEvent) = Unit
+                    },
+                )
+                assertTrue(assertIs<AuthPrompt.Text>(prompts.single()).secret)
+                assertEquals(
+                    "native-yes",
+                    models.checkAuth("native-provider")?.source,
+                )
+                val auth = assertNotNull(models.getAuth("native-provider"))
+                assertEquals("native-secret", auth.auth.apiKey)
+                assertEquals("ambient-account", auth.auth.headers["X-Account"])
+                assertEquals("https://resolved.invalid/ambient-account", auth.auth.baseUrl)
+
+                val refresh =
+                    models.refresh(
+                        ModelsRefreshOptions(
+                            allowNetwork = true,
+                            force = true,
+                        ),
+                    )
+                assertTrue(refresh.errors.isEmpty())
+                val refreshed = assertNotNull(models.getModel("native-provider", "native-cached"))
+                assertEquals("native-secret|true|true", refreshed.name)
+                assertEquals(
+                    listOf("native-cached"),
+                    models.getAvailable("native-provider").map(Model::id),
+                )
+                assertEquals(321, modelsStore.read("native-provider")?.checkedAt)
+
+                val streamed =
+                    models.complete(
+                        refreshed,
+                        Context(),
+                        StreamOptions(),
+                    )
+                assertEquals(
+                    "stream|native-cached|native-secret|ambient-account|" +
+                        "https://resolved.invalid/ambient-account",
+                    contentText(streamed.content),
+                )
+                val simple =
+                    models.completeSimple(
+                        refreshed,
+                        Context(),
+                        SimpleStreamOptions(),
+                    )
+                assertEquals(
+                    "simple|native-cached|native-secret|ambient-account|" +
+                        "https://resolved.invalid/ambient-account",
+                    contentText(simple.content),
+                )
+
+                registry.unregister("native-provider")
+                assertEquals(null, models.getProvider("native-provider"))
+            } finally {
+                registry.reset()
+                host.close()
+            }
+        }
+
+    @Test
+    fun `named provider refreshModels receives scoped store and publishes without implicit persistence`() =
+        runBlocking {
+            assumeTrue(nodeAvailable(), "Node.js 22+ is required for extension runtime tests")
+            val root = Files.createTempDirectory("pi-kotlin-extension-refresh-models")
+            val extension =
+                root.resolve("refresh-models.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          pi.registerProvider("dynamic-provider", {
+                            name: "Dynamic Provider",
+                            baseUrl: "https://dynamic.invalid/v1",
+                            apiKey: "local-key",
+                            api: "openai-completions",
+                            async refreshModels(context) {
+                              const cached = await context.store.read();
+                              return [{
+                                id: `live-${'$'}{cached?.models?.[0]?.id ?? "empty"}`,
+                                name: [
+                                  context.credential?.key,
+                                  context.allowNetwork,
+                                  context.force,
+                                ].join("|"),
+                                reasoning: false,
+                                input: ["text"],
+                                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                                contextWindow: 8192,
+                                maxTokens: 1024,
+                              }];
+                            },
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val host = startHost(root, extension)
+            val modelsStore = InMemoryModelsStore()
+            val cached =
+                ModelsStoreEntry(
+                    models =
+                        listOf(
+                            Model(
+                                id = "cached",
+                                name = "Cached",
+                                api = "openai-completions",
+                                provider = "dynamic-provider",
+                                baseUrl = "https://cached.invalid/v1",
+                                reasoning = false,
+                                input = listOf(works.earendil.pi.ai.ModelInput.TEXT),
+                                cost = works.earendil.pi.ai.ModelCost(0.0, 0.0, 0.0, 0.0),
+                                contextWindow = 8_192,
+                                maxTokens = 1_024,
+                            ),
+                        ),
+                    checkedAt = 123,
+                )
+            modelsStore.write("dynamic-provider", cached)
+            val models =
+                Models(
+                    providers = emptyList(),
+                    modelsStore = modelsStore,
+                )
+            val registry = ExtensionProviderRegistry(models, extensionHost = { host })
+            registry.apply(host.registrations.providers) { error(it) }
+
+            try {
+                assertEquals(emptyList(), models.getModels("dynamic-provider"))
+                val refresh =
+                    models.refresh(
+                        ModelsRefreshOptions(
+                            allowNetwork = false,
+                            force = true,
+                        ),
+                    )
+                assertTrue(refresh.errors.isEmpty())
+                val live = assertNotNull(models.getModel("dynamic-provider", "live-cached"))
+                assertEquals("local-key|false|true", live.name)
+                assertEquals(cached, modelsStore.read("dynamic-provider"))
             } finally {
                 registry.reset()
                 host.close()
