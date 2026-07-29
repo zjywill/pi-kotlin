@@ -68,6 +68,7 @@ internal data class SettingsSnapshot(
     val skills: List<String> = emptyList(),
     val prompts: List<String> = emptyList(),
     val themes: List<String> = emptyList(),
+    val enabledModels: List<String>? = null,
     val npmCommand: List<String>? = null,
 ) {
     fun resourceEntries(type: PackageResourceType): List<String> =
@@ -147,6 +148,7 @@ internal class SettingsStore(
             skills = raw.stringList("skills", path),
             prompts = raw.stringList("prompts", path),
             themes = raw.stringList("themes", path),
+            enabledModels = raw.optionalSettingStringList("enabledModels", path),
             npmCommand =
                 raw["npmCommand"]?.let { value ->
                     runCatching { value.jsonArray.map { it.jsonPrimitive.content } }
@@ -214,6 +216,16 @@ internal class SettingsStore(
                 .onFailure { onWarning("Invalid $key setting in $path: ${it.message}") }
                 .getOrDefault(emptyList())
         }.orEmpty()
+
+    private fun JsonObject.optionalSettingStringList(
+        key: String,
+        path: Path,
+    ): List<String>? =
+        this[key]?.let { value ->
+            runCatching { value.jsonArray.map { it.jsonPrimitive.content } }
+                .onFailure { onWarning("Invalid $key setting in $path: ${it.message}") }
+                .getOrNull()
+        }
 }
 
 private fun parsePackageSource(value: JsonElement): PackageSourceConfig? =

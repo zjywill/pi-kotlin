@@ -78,7 +78,7 @@ class CliRuntime(
         val runtimeCwd = sessionManager.getCwd()
         val requestedThinking =
             args.thinking ?: parseModelReference(args.provider, args.model).thinking
-        val initialThinking =
+        var initialThinking =
             (requestedThinking ?: initialContext.thinkingLevel.toCliThinkingLevel())
                 .toAgentThinkingLevel()
         val initialBuiltInTools =
@@ -97,6 +97,7 @@ class CliRuntime(
         var baseSystemPrompt = ""
         var refreshExtensionRegistrations: () -> Unit = {}
         var projectTrusted = false
+        var scopedModels: List<ScopedModel> = emptyList()
         var modelRef: Model? =
             initialContext.model?.let { models.getModel(it.provider, it.modelId) }
                 ?: models.getModels().firstOrNull()
@@ -118,6 +119,7 @@ class CliRuntime(
                 isIdle = state?.isStreaming != true,
                 hasPendingMessages = agentRef?.hasQueuedMessages() == true,
                 flagValues = args.unknownFlags,
+                scopedModels = scopedModels,
             )
         }
 
@@ -241,6 +243,14 @@ class CliRuntime(
                             isIdle = true,
                             hasPendingMessages = false,
                             flagValues = args.unknownFlags,
+                            scopedModels =
+                                resolveConfiguredModelScope(
+                                    explicitPatterns = args.models,
+                                    availableModels = models.getModels(),
+                                    cwd = runtimeCwd,
+                                    agentDir = agentDir,
+                                    projectTrusted = trusted,
+                                ).scopedModels,
                         )
                     },
                     onWarning = { stderr.println("Warning: $it") },
@@ -259,8 +269,29 @@ class CliRuntime(
         projectTrusted = bootstrap.projectTrusted
         extensionHost = bootstrap.host
         applyExtensionActions(extensionHost?.drainStartupActions().orEmpty())
+        val scopeResolution =
+            resolveConfiguredModelScope(
+                explicitPatterns = args.models,
+                availableModels = models.getAvailable(),
+                cwd = runtimeCwd,
+                agentDir = agentDir,
+                projectTrusted = projectTrusted,
+            )
+        scopedModels = scopeResolution.scopedModels
+        scopeResolution.diagnostics.forEach { diagnostic ->
+            stderr.println("Warning: ${diagnostic.message}")
+        }
+        if (
+            args.thinking == null &&
+            args.model == null &&
+            initialContext.model == null
+        ) {
+            scopedModels.firstOrNull()?.thinkingLevel?.let { scopedThinking ->
+                initialThinking = scopedThinking.toAgentThinkingLevel()
+            }
+        }
         val model =
-            resolveModel(args, initialContext.model)
+            resolveModel(args, initialContext.model, scopedModels)
                 ?: run {
                     stderr.println("Error: No model matched the requested provider/model.")
                     extensionHost?.close()
@@ -536,11 +567,15 @@ class CliRuntime(
     private suspend fun resolveModel(
         args: Args,
         sessionModel: SessionModel?,
+        scopedModels: List<ScopedModel>,
     ): Model? {
         if (args.provider == null && args.model == null && sessionModel != null) {
             return models
                 .getAvailable(sessionModel.provider)
                 .firstOrNull { it.id == sessionModel.modelId }
+        }
+        if (args.provider == null && args.model == null && scopedModels.isNotEmpty()) {
+            return scopedModels.first().model
         }
         val reference = parseModelReference(args.provider, args.model)
         val providerName = reference.provider ?: "google"

@@ -2,7 +2,11 @@ package works.earendil.pi.codingagent
 
 import java.nio.file.Files
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.boolean
@@ -11,6 +15,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import works.earendil.pi.agent.Agent
 import works.earendil.pi.ai.FauxModelDefinition
 import works.earendil.pi.ai.FauxProvider
 import works.earendil.pi.ai.FauxResponseStep
@@ -19,6 +24,7 @@ import works.earendil.pi.ai.Models
 import works.earendil.pi.ai.OAuthCredential
 import works.earendil.pi.ai.StopReason
 import works.earendil.pi.ai.ToolResultMessage
+import works.earendil.pi.ai.UserMessage
 import works.earendil.pi.ai.fauxAssistantMessage
 import works.earendil.pi.ai.fauxToolCall
 import works.earendil.pi.ai.providers.builtInModels
@@ -29,6 +35,278 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class RpcRuntimeTest {
+    @Test
+    fun `TUI extension context includes resolved scoped models`() =
+        runTest {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                nodeAvailable(),
+                "Node.js 22+ is required for extension runtime tests",
+            )
+            val root = Files.createTempDirectory("pi-kotlin-rpc-tui-scoped-models")
+            val extension =
+                root.resolve("scoped-models.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          pi.on("session_start", (_event, ctx) => {
+                            const scoped = ctx.scopedModels.map(entry =>
+                              `${'$'}{entry.model.provider}/${'$'}{entry.model.id}:${'$'}{entry.thinkingLevel ?? "default"}`
+                            );
+                            ctx.ui.notify(`${'$'}{ctx.mode}|${'$'}{scoped.join(",")}`, "info");
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val provider =
+                FauxProvider(
+                    definitions =
+                        listOf(
+                            FauxModelDefinition("faux-1", reasoning = true),
+                            FauxModelDefinition("faux-2", reasoning = true),
+                        ),
+                )
+            val runtime =
+                RpcRuntime(
+                    Models(listOf(provider)),
+                    RpcRuntimeOptions(
+                        cwd = root,
+                        agentDir = Files.createDirectories(root.resolve("agent")),
+                        noSession = true,
+                        extensionPaths = listOf(extension.toString()),
+                        extensionMode = ExtensionMode.TUI,
+                        modelPatterns = listOf("faux/faux-2:high"),
+                    ),
+                )
+            val events = mutableListOf<JsonObject>()
+            runtime.subscribe(events::add)
+
+            val notification =
+                events.single {
+                    it.eventType() == "extension_ui_request" &&
+                        it["method"]?.jsonPrimitive?.content == "notify"
+                }
+            val state = requireNotNull(runtime.handle(buildJsonObject { put("type", "get_state") }))
+
+            assertEquals("tui|faux/faux-2:high", notification["message"]?.jsonPrimitive?.content)
+            assertEquals("faux-2", state.data()["model"]?.jsonObject?.get("id")?.jsonPrimitive?.content)
+            assertEquals("high", state.data()["thinkingLevel"]?.jsonPrimitive?.content)
+            runtime.close()
+        }
+
+    @Test
+    fun `RPC bash is intercepted by user bash and records replacement results`() =
+        runTest {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                nodeAvailable(),
+                "Node.js 22+ is required for extension runtime tests",
+            )
+            val root = Files.createTempDirectory("pi-kotlin-rpc-user-bash")
+            val extension =
+                root.resolve("user-bash.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          pi.on("user_bash", event => ({
+                            result: {
+                              output: `handled:${'$'}{event.command}:${'$'}{event.excludeFromContext}:${'$'}{event.cwd}`,
+                              exitCode: 0,
+                              cancelled: false,
+                              truncated: false,
+                            },
+                          }));
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val runtime =
+                RpcRuntime(
+                    Models(listOf(FauxProvider())),
+                    RpcRuntimeOptions(
+                        cwd = root,
+                        agentDir = Files.createDirectories(root.resolve("agent")),
+                        noSession = true,
+                        provider = "faux",
+                        model = "faux-1",
+                        extensionPaths = listOf(extension.toString()),
+                    ),
+                )
+
+            val response =
+                requireNotNull(
+                    runtime.handle(
+                        buildJsonObject {
+                            put("id", "bash-extension")
+                            put("type", "bash")
+                            put("command", "do-not-run")
+                            put("excludeFromContext", true)
+                        },
+                    ),
+                )
+            assertSuccess(
+                runtime.handle(
+                    buildJsonObject {
+                        put("id", "bash-extension-false")
+                        put("type", "bash")
+                        put("command", "do-not-run-false")
+                        put("excludeFromContext", false)
+                    },
+                ),
+            )
+            val entries =
+                requireNotNull(runtime.handle(buildJsonObject { put("type", "get_entries") }))
+                    .data()["entries"]
+                    ?.jsonArray
+                    .orEmpty()
+            val messages = entries.mapNotNull { it.jsonObject["message"] as? JsonObject }
+
+            assertEquals("handled:do-not-run:true:$root", response.data()["output"]?.jsonPrimitive?.content)
+            assertEquals(listOf("bashExecution", "bashExecution"), messages.map { it["role"]?.jsonPrimitive?.content })
+            assertEquals(
+                listOf(true, false),
+                messages.map { it["excludeFromContext"]?.jsonPrimitive?.boolean },
+            )
+            runtime.close()
+        }
+
+    @Test
+    fun `older bash completion keeps newer execution tracked and cancellable`() =
+        runBlocking {
+            val root = Files.createTempDirectory("pi-kotlin-rpc-concurrent-bash")
+            val runtime =
+                RpcRuntime(
+                    Models(listOf(FauxProvider())),
+                    RpcRuntimeOptions(
+                        cwd = root,
+                        noSession = true,
+                        provider = "faux",
+                        model = "faux-1",
+                    ),
+                )
+            val first =
+                async {
+                    runtime.handle(
+                        buildJsonObject {
+                            put("id", "first")
+                            put("type", "bash")
+                            put("command", "sleep 0.2; printf first")
+                        },
+                    )
+                }
+            val second =
+                async {
+                    runtime.handle(
+                        buildJsonObject {
+                            put("id", "second")
+                            put("type", "bash")
+                            put("command", "sleep 5; printf second")
+                        },
+                    )
+                }
+            withTimeout(5_000) {
+                while (runtime.activeBashCount < 2) {
+                    delay(10)
+                }
+            }
+
+            val firstResult = requireNotNull(first.await())
+            assertEquals("first", firstResult.data()["output"]?.jsonPrimitive?.content)
+            assertEquals(1, runtime.activeBashCount)
+
+            runtime.handle(buildJsonObject { put("type", "abort_bash") })
+            val secondResult = requireNotNull(second.await())
+            assertTrue(secondResult.data()["cancelled"]?.jsonPrimitive?.boolean ?: false)
+            assertEquals(0, runtime.activeBashCount)
+            runtime.close()
+        }
+
+    @Test
+    fun `abort bash cancels every concurrent execution`() =
+        runBlocking {
+            val root = Files.createTempDirectory("pi-kotlin-rpc-abort-all-bash")
+            val runtime =
+                RpcRuntime(
+                    Models(listOf(FauxProvider())),
+                    RpcRuntimeOptions(
+                        cwd = root,
+                        noSession = true,
+                        provider = "faux",
+                        model = "faux-1",
+                    ),
+                )
+            val executions =
+                listOf("first", "second").map { id ->
+                    async {
+                        runtime.handle(
+                            buildJsonObject {
+                                put("id", id)
+                                put("type", "bash")
+                                put("command", "sleep 5")
+                            },
+                        )
+                    }
+                }
+            withTimeout(5_000) {
+                while (runtime.activeBashCount < executions.size) {
+                    delay(10)
+                }
+            }
+
+            runtime.handle(buildJsonObject { put("type", "abort_bash") })
+            val results = executions.map { requireNotNull(it.await()) }
+
+            assertTrue(results.all { it.data()["cancelled"]?.jsonPrimitive?.boolean == true })
+            assertEquals(0, runtime.activeBashCount)
+            runtime.close()
+        }
+
+    @Test
+    fun `session replacement detaches the old agent event subscription`() =
+        runTest {
+            val provider = FauxProvider()
+            provider.setResponses(listOf(FauxResponseStep.Message(fauxAssistantMessage("stale"))))
+            val runtime =
+                RpcRuntime(
+                    Models(listOf(provider)),
+                    RpcRuntimeOptions(
+                        cwd = Files.createTempDirectory("pi-kotlin-rpc-session-subscription"),
+                        noSession = true,
+                        provider = "faux",
+                        model = "faux-1",
+                    ),
+                )
+            val events = mutableListOf<JsonObject>()
+            runtime.subscribe(events::add)
+            val agentField =
+                RpcRuntime::class.java.getDeclaredField("agent").apply {
+                    isAccessible = true
+                }
+            val oldAgent = agentField.get(runtime) as Agent
+
+            assertSuccess(runtime.handle(buildJsonObject { put("type", "new_session") }))
+            events.clear()
+            val entryCountBefore =
+                requireNotNull(runtime.handle(buildJsonObject { put("type", "get_entries") }))
+                    .data()["entries"]
+                    ?.jsonArray
+                    .orEmpty()
+                    .size
+
+            oldAgent.prompt(UserMessage("stale event"))
+
+            val entryCountAfter =
+                requireNotNull(runtime.handle(buildJsonObject { put("type", "get_entries") }))
+                    .data()["entries"]
+                    ?.jsonArray
+                    .orEmpty()
+                    .size
+            assertTrue(events.isEmpty())
+            assertEquals(entryCountBefore, entryCountAfter)
+            runtime.close()
+        }
+
     @Test
     fun `extensions contribute rpc commands tools flags and lifecycle hooks`() =
         runTest {
@@ -601,7 +879,19 @@ class RpcRuntimeTest {
             assertEquals("all", state.data()["steeringMode"]?.jsonPrimitive?.content)
             assertEquals("all", state.data()["followUpMode"]?.jsonPrimitive?.content)
             assertEquals("RPC Session", state.data()["sessionName"]?.jsonPrimitive?.content)
-            assertEquals(3, entries.data()["entries"]?.jsonArray?.size)
+            assertEquals(4, entries.data()["entries"]?.jsonArray?.size)
+            assertEquals(
+                "bashExecution",
+                entries.data()["entries"]
+                    ?.jsonArray
+                    ?.last()
+                    ?.jsonObject
+                    ?.get("message")
+                    ?.jsonObject
+                    ?.get("role")
+                    ?.jsonPrimitive
+                    ?.content,
+            )
             runtime.close()
         }
 

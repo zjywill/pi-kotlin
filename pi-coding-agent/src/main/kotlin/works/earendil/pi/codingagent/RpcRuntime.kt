@@ -6,13 +6,16 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonArray
@@ -37,6 +40,7 @@ import works.earendil.pi.agent.AgentThinkingLevel
 import works.earendil.pi.agent.AgentTool
 import works.earendil.pi.agent.QueueMode
 import works.earendil.pi.ai.AssistantMessage
+import works.earendil.pi.ai.BashExecutionMessage
 import works.earendil.pi.ai.Context
 import works.earendil.pi.ai.ImageContent
 import works.earendil.pi.ai.Message
@@ -69,6 +73,7 @@ data class RpcRuntimeOptions(
     val continueRecent: Boolean = false,
     val provider: String? = null,
     val model: String? = null,
+    val modelPatterns: List<String>? = null,
     val apiKey: String? = null,
     val systemPrompt: String? = null,
     val appendSystemPrompt: List<String> = emptyList(),
@@ -104,13 +109,16 @@ class RpcRuntime(
     private var autoCompactionEnabled = true
     private var autoRetryEnabled = true
     private var promptJob: Job? = null
-    private var bashProcess: Process? = null
+    private val activeBashes = ConcurrentHashMap.newKeySet<RunningBash>()
+    private val pendingBashMessages = mutableListOf<BashExecutionMessage>()
     private var promptResources: PromptResources? = null
     private var extensionHost: ExtensionHost? = null
     private val extensionProviders = ExtensionProviderRegistry(models)
     private var extensionContextProvider: () -> JsonObject = { JsonObject(emptyMap()) }
     private var baseSystemPrompt: String = ""
     private var availableTools: List<AgentTool> = emptyList()
+    private var scopedModels: List<ScopedModel> = emptyList()
+    private var agentUnsubscribe: (() -> Unit)? = null
     private var agent = createAgent()
 
     init {
@@ -129,6 +137,9 @@ class RpcRuntime(
     }
 
     internal fun currentCwd(): Path = sessionManager.getCwd()
+
+    internal val activeBashCount: Int
+        get() = activeBashes.size
 
     suspend fun handleLine(line: String): JsonObject? {
         val command =
@@ -247,7 +258,7 @@ class RpcRuntime(
                 "abort_retry" -> successResponse(id, type)
                 "bash" -> handleBash(command, id)
                 "abort_bash" -> {
-                    bashProcess?.destroyForcibly()
+                    abortBashes()
                     successResponse(id, type)
                 }
 
@@ -363,7 +374,8 @@ class RpcRuntime(
 
     suspend fun close() {
         promptJob?.cancel()
-        bashProcess?.destroyForcibly()
+        abortBashes()
+        detachAgent()
         runCatching {
             emitExtensionEvent(
                 host = extensionHost,
@@ -385,6 +397,7 @@ class RpcRuntime(
 
     fun reloadResources() {
         ensureIdle("reload")
+        detachAgent()
         shutdownExtensionSession()
         agent = createAgent()
         activateExtensionSession("reload")
@@ -437,6 +450,7 @@ class RpcRuntime(
                     agent.state.systemPrompt = before?.systemPrompt ?: baseSystemPrompt
                     agent.prompt(prompt)
                 } finally {
+                    flushPendingBashMessages()
                     emit(buildJsonObject { put("type", "agent_settled") })
                     promptJob = null
                 }
@@ -465,16 +479,26 @@ class RpcRuntime(
     }
 
     private suspend fun handleCycleModel(id: String?): JsonObject {
+        val scoped = scopedModels
         val available =
-            models
-                .getAvailable()
-                .sortedWith(compareBy<Model> { it.provider }.thenBy { it.id })
+            if (scoped.isNotEmpty()) {
+                scoped.map(ScopedModel::model)
+            } else {
+                models
+                    .getAvailable()
+                    .sortedWith(compareBy<Model> { it.provider }.thenBy { it.id })
+            }
         if (available.size <= 1) {
             return successResponse(id, "cycle_model", JsonNull)
         }
         val currentIndex = available.indexOfFirst { it.provider == agent.state.model.provider && it.id == agent.state.model.id }
         val next = available[(currentIndex + 1).mod(available.size)]
         agent.state.model = next
+        scoped
+            .firstOrNull { it.model.provider == next.provider && it.model.id == next.id }
+            ?.thinkingLevel
+            ?.toCoreThinking()
+            ?.let { agent.state.thinkingLevel = it }
         sessionManager.appendModelChange(next.provider, next.id)
         return successResponse(
             id,
@@ -482,7 +506,7 @@ class RpcRuntime(
             buildJsonObject {
                 put("model", protocolJson.encodeToJsonElement(Model.serializer(), next))
                 put("thinkingLevel", agent.state.thinkingLevel.toProtocolValue())
-                put("isScoped", false)
+                put("isScoped", scoped.isNotEmpty())
             },
         )
     }
@@ -568,6 +592,36 @@ class RpcRuntime(
     ): JsonObject {
         val shellCommand = command.string("command")
             ?: return errorResponse(id, "bash", "Command is required")
+        val excludeFromContext =
+            command["excludeFromContext"]?.jsonPrimitive?.booleanOrNull
+        val extensionResult =
+            emitExtensionEvent(
+                host = extensionHost,
+                event =
+                    buildJsonObject {
+                        put("type", "user_bash")
+                        put("command", shellCommand)
+                        put("excludeFromContext", excludeFromContext ?: false)
+                        put("cwd", sessionManager.getCwd().toString())
+                    },
+                context = extensionContextProvider,
+                onActions = { applyExtensionActions(it) },
+            ) as? JsonObject
+        val replacement = extensionResult?.get("result") as? JsonObject
+        if (replacement != null) {
+            val result = normalizeBashResult(replacement)
+            recordBashResult(shellCommand, result, excludeFromContext)
+            return successResponse(id, "bash", result)
+        }
+        if (extensionResult?.containsKey("operations") == true) {
+            emitExtensionError(
+                ExtensionDiagnostic(
+                    extensionPath = "<user_bash>",
+                    event = "user_bash",
+                    error = "Extension-provided BashOperations are not available over the Kotlin JSON host yet",
+                ),
+            )
+        }
         val result =
             withContext(Dispatchers.IO) {
                 val shell =
@@ -581,7 +635,8 @@ class RpcRuntime(
                         .directory(sessionManager.getCwd().toFile())
                         .redirectErrorStream(true)
                         .start()
-                bashProcess = process
+                val running = RunningBash(process)
+                activeBashes += running
                 try {
                     val output = StringBuilder()
                     process.inputStream.reader(StandardCharsets.UTF_8).use { reader ->
@@ -606,14 +661,19 @@ class RpcRuntime(
                     val truncated = truncateTail(output.toString())
                     buildJsonObject {
                         put("output", truncated.content)
-                        put("exitCode", exitCode)
-                        put("cancelled", false)
+                        if (running.cancelled.get()) {
+                            put("exitCode", JsonNull)
+                        } else {
+                            put("exitCode", exitCode)
+                        }
+                        put("cancelled", running.cancelled.get())
                         put("truncated", truncated.truncated)
                     }
                 } finally {
-                    bashProcess = null
+                    activeBashes -= running
                 }
             }
+        recordBashResult(shellCommand, result, excludeFromContext)
         return successResponse(id, "bash", result)
     }
 
@@ -799,11 +859,12 @@ class RpcRuntime(
         }
 
     private fun createAgent(): Agent {
+        detachAgent()
         extensionHost?.close()
         extensionHost = null
         extensionProviders.reset()
         val context = sessionManager.buildSessionContext()
-        val thinking =
+        var thinking =
             (options.thinking ?: parseModelReference(options.provider, options.model).thinking)?.toCoreThinking()
                 ?: context.thinkingLevel.toAgentThinking()
                 ?: AgentThinkingLevel.OFF
@@ -818,6 +879,7 @@ class RpcRuntime(
         var createdRef: Agent? = null
         var selectedTools: List<AgentTool> = initialBuiltInTools
         var projectTrusted = false
+        var sessionScopedModels: List<ScopedModel> = emptyList()
         var modelRef: Model? =
             context.model?.let { models.getModel(it.provider, it.modelId) }
                 ?: models.getModels().firstOrNull()
@@ -839,6 +901,7 @@ class RpcRuntime(
                 isIdle = state?.isStreaming != true,
                 hasPendingMessages = createdRef?.hasQueuedMessages() == true,
                 flagValues = options.extensionFlagValues,
+                scopedModels = sessionScopedModels,
             )
         }
 
@@ -867,6 +930,14 @@ class RpcRuntime(
                         isIdle = true,
                         hasPendingMessages = false,
                         flagValues = options.extensionFlagValues,
+                        scopedModels =
+                            resolveConfiguredModelScope(
+                                explicitPatterns = options.modelPatterns,
+                                availableModels = models.getModels(),
+                                cwd = sessionManager.getCwd(),
+                                agentDir = options.agentDir,
+                                projectTrusted = trusted,
+                            ).scopedModels,
                     )
                 },
                 onWarning = { warning ->
@@ -897,8 +968,34 @@ class RpcRuntime(
         extensionHost = host
         extensionContextProvider = ::currentExtensionContext
         applyBootstrapExtensionActions(host?.drainStartupActions().orEmpty())
+        val scopeResolution =
+            resolveConfiguredModelScope(
+                explicitPatterns = options.modelPatterns,
+                availableModels = runBlocking { models.getAvailable() },
+                cwd = sessionManager.getCwd(),
+                agentDir = options.agentDir,
+                projectTrusted = projectTrusted,
+            )
+        sessionScopedModels = scopeResolution.scopedModels
+        scopedModels = sessionScopedModels
+        scopeResolution.diagnostics.forEach { diagnostic ->
+            emit(
+                buildJsonObject {
+                    put("type", "model_scope_warning")
+                    put("pattern", diagnostic.pattern)
+                    put("message", diagnostic.message)
+                },
+            )
+        }
+        if (
+            options.thinking == null &&
+            options.model == null &&
+            context.model == null
+        ) {
+            sessionScopedModels.firstOrNull()?.thinkingLevel?.toCoreThinking()?.let { thinking = it }
+        }
         val model =
-            resolveModel(context.model?.provider, context.model?.modelId)
+            resolveModel(context.model?.provider, context.model?.modelId, sessionScopedModels)
                 ?: error("No model is available")
         modelRef = model
         val promptResources =
@@ -986,18 +1083,22 @@ class RpcRuntime(
                 ),
             )
         createdRef = created
-        created.subscribe { event ->
-            emitExtensionAgentEvent(
-                host = host,
-                event = event,
-                context = ::currentExtensionContext,
-                onActions = { applyExtensionActions(it) },
-            )
-            emit(encodeAgentEvent(event))
-            if (event is AgentEvent.MessageEnd) {
-                sessionManager.appendMessage(event.message)
+        agentUnsubscribe =
+            created.subscribe { event ->
+                emitExtensionAgentEvent(
+                    host = host,
+                    event = event,
+                    context = ::currentExtensionContext,
+                    onActions = { applyExtensionActions(it) },
+                )
+                emit(encodeAgentEvent(event))
+                if (event is AgentEvent.MessageEnd) {
+                    sessionManager.appendMessage(event.message)
+                }
+                if (event is AgentEvent.AgentEnd) {
+                    flushPendingBashMessages()
+                }
             }
-        }
         return created
     }
 
@@ -1328,6 +1429,7 @@ class RpcRuntime(
     private fun resolveModel(
         sessionProvider: String?,
         sessionModel: String?,
+        sessionScopedModels: List<ScopedModel>,
     ): Model? {
         if (options.provider != null || options.model != null) {
             val reference = parseModelReference(options.provider, options.model)
@@ -1343,6 +1445,7 @@ class RpcRuntime(
         if (sessionProvider != null && sessionModel != null) {
             models.getModel(sessionProvider, sessionModel)?.let { return it }
         }
+        sessionScopedModels.firstOrNull()?.model?.let { return it }
         val googleModels = models.getModels("google")
         return googleModels.firstOrNull { it.id == defaultModelId("google") }
             ?: googleModels.firstOrNull()
@@ -1350,6 +1453,7 @@ class RpcRuntime(
     }
 
     private fun replaceSession(session: SessionManager) {
+        detachAgent()
         shutdownExtensionSession()
         sessionManager = session
         agent = createAgent()
@@ -1358,6 +1462,67 @@ class RpcRuntime(
 
     private fun ensureIdle(command: String) {
         check(!agent.state.isStreaming) { "$command is not available while the agent is streaming" }
+    }
+
+    private fun abortBashes() {
+        activeBashes.toList().forEach(RunningBash::cancel)
+    }
+
+    private fun detachAgent() {
+        agentUnsubscribe?.invoke()
+        agentUnsubscribe = null
+    }
+
+    private fun normalizeBashResult(result: JsonObject): JsonObject =
+        buildJsonObject {
+            put("output", result.stringValue("output").orEmpty())
+            val exitCode = result["exitCode"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+            if (exitCode == null) {
+                put("exitCode", JsonNull)
+            } else {
+                put("exitCode", exitCode)
+            }
+            put("cancelled", result["cancelled"]?.jsonPrimitive?.booleanOrNull ?: false)
+            put("truncated", result["truncated"]?.jsonPrimitive?.booleanOrNull ?: false)
+            result.stringValue("fullOutputPath")?.let { put("fullOutputPath", it) }
+        }
+
+    private fun recordBashResult(
+        command: String,
+        result: JsonObject,
+        excludeFromContext: Boolean?,
+    ) {
+        val message =
+            BashExecutionMessage(
+                command = command,
+                output = result.stringValue("output").orEmpty(),
+                exitCode = result["exitCode"]?.jsonPrimitive?.contentOrNull?.toIntOrNull(),
+                cancelled = result["cancelled"]?.jsonPrimitive?.booleanOrNull ?: false,
+                truncated = result["truncated"]?.jsonPrimitive?.booleanOrNull ?: false,
+                fullOutputPath = result.stringValue("fullOutputPath"),
+                excludeFromContext = excludeFromContext,
+            )
+        synchronized(pendingBashMessages) {
+            if (agent.state.isStreaming) {
+                pendingBashMessages += message
+                return
+            }
+        }
+        appendBashMessage(message)
+    }
+
+    private fun flushPendingBashMessages() {
+        val pending =
+            synchronized(pendingBashMessages) {
+                pendingBashMessages.toList().also { pendingBashMessages.clear() }
+            }
+        pending.forEach(::appendBashMessage)
+    }
+
+    @Synchronized
+    private fun appendBashMessage(message: BashExecutionMessage) {
+        sessionManager.appendMessage(message)
+        agent.state.messages = agent.state.messages + message
     }
 
     private fun userMessage(command: JsonObject): UserMessage {
@@ -1425,6 +1590,27 @@ class RpcRuntime(
             put("origin", sourceInfo.origin)
             sourceInfo.baseDir?.let { put("baseDir", it.toString()) }
         }
+}
+
+private class RunningBash(
+    private val process: Process,
+) {
+    val cancelled = AtomicBoolean(false)
+
+    fun cancel() {
+        if (!cancelled.compareAndSet(false, true)) {
+            return
+        }
+        runCatching {
+            process
+                .toHandle()
+                .descendants()
+                .toList()
+                .asReversed()
+                .forEach { handle -> handle.destroyForcibly() }
+        }
+        runCatching { process.destroyForcibly() }
+    }
 }
 
 suspend fun runRpcJsonLines(

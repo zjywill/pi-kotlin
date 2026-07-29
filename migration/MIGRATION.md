@@ -13,7 +13,7 @@ The source commit is immutable for the first migration pass. Upstream changes
 land in a later synchronization pass so that parity failures have one cause.
 
 The latest reviewed synchronization pass reaches
-`cee5ff7520d8828bed9955ef00419e995d1f91e0` (July 26, 2026). The original
+`027a5847901b5dde30270abaa1041046cd2b4b55` (July 29, 2026). The original
 baseline remains recorded so regressions can be attributed either to the first
 translation or to a later upstream sync.
 
@@ -78,8 +78,8 @@ features outside that slice remain migration work.
 | Agent loop | Functional slice | Streaming, tool calls, parallel execution, steering, follow-up, abort, and session tests using the faux provider; coding-message projection has independent parity for bash/custom/branch/compaction messages |
 | CLI argument contract | Partial | Parser tests and byte-for-byte `--help` oracle against the pinned TypeScript CLI; provider-prefixed and slash-containing model IDs, thinking suffixes, package install/remove/update/list, and interactive `/login`/`/logout` for OAuth providers are covered |
 | Context, skill, and prompt resources | Functional slice | Global and ancestor `AGENTS.md`/`CLAUDE.md`, `SYSTEM.md`/`APPEND_SYSTEM.md`, recursive `.pi`/`.agents` skills, prompt templates, YAML frontmatter, collisions, manual skill commands, template arguments, trusted project precedence, persisted trust inheritance, CLI/RPC commands, and interactive reload have an independent resource-loading oracle |
-| Package settings and resources | Functional slice | User/project `settings.json`, local/npm/git package identities and managed paths, install/remove/package-update/list commands, package manifests, autoload filters, top-level resource overrides, project precedence, package-sourced skills/prompts, and source metadata have an independent package-resources oracle; config TUI, self-update, and legacy package recovery remain |
-| JavaScript/TypeScript extensions | Partial | A bundled Node 22 JSONL host loads `.js`/`.ts` extensions and common pi/TypeBox virtual imports; tools, commands, flags, package discovery, lifecycle/tool hooks, command actions, and RPC fire-and-forget UI events run through CLI/RPC/interactive paths with an independent extension-runtime oracle. Full jiti syntax/import compatibility, blocking UI dialogs, shortcuts/renderers, extension resource composition, project trust handlers, live provider registration, and dynamic registration refresh remain |
+| Package settings and resources | Functional slice | User/project `settings.json`, local/npm/git package identities and managed paths, install/remove/package-update/list commands, package manifests, autoload filters, top-level resource overrides, project precedence, package-sourced skills/prompts, source metadata, and failed new-checkout cleanup have an independent package-resources oracle and package tests; config TUI, self-update, legacy lookup, available-update checks, and remaining recovery paths remain |
+| JavaScript/TypeScript extensions | Partial | A bundled Node 22 JSONL host loads `.js`/`.ts` extensions and common pi/TypeBox virtual imports; tools, commands, flags, package discovery, lifecycle/tool hooks, command actions, project trust, resource composition, serializable provider registration, dynamic registration refresh, live `ctx.scopedModels`, RPC `user_bash` direct-result interception, and fire-and-forget UI events run through CLI/RPC/interactive paths with an independent extension-runtime oracle. Full jiti syntax/import compatibility, blocking UI dialogs, function-valued callbacks including `BashOperations`, shortcuts/renderers, and unsolicited background registration remain |
 | Session JSONL compatibility | Functional slice | Independent TypeScript/Kotlin JSONL parity covers current/v1/v2 parsing, rewrite, migration, branching, compaction, model/thinking state, custom/tool/bash messages, and explicit empty-leaf context |
 | Built-in coding tools | Functional slice | Read, write, edit, bash, grep, find, and ls behavior tests with path and truncation handling |
 | Interactive terminal UI | Partial | Installed JLine process enters a PTY; initial `@text-file`/`@image` prompts, `/help`, session/model/thinking commands, shell commands, and `/exit` are covered; full-screen upstream UI is not ported |
@@ -87,7 +87,7 @@ features outside that slice remain migration work.
 | Compaction | Functional slice | Token estimation, safe cut points, split turns, tool-result truncation, standalone summaries, events, persistence, and reload tests |
 | HTML export | Partial | Standalone export, strict escaping, whitespace, and validated image data are covered; upstream theme/Markdown/highlighting parity remains |
 | SQLite storage | Functional slice | Schema migration, session CRUD, ordering, filtering, stats, and codec tests |
-| Server/RPC | Functional slice | Supervisor lifecycle, Unix socket request/response, streaming events, persistence, and piped EOF half-close tests |
+| Server/RPC | Functional slice | Supervisor lifecycle, Unix socket request/response, streaming events, persistence, piped EOF half-close, user bash persistence, concurrent bash cancellation, and stale Agent subscription ownership tests |
 
 ## Verification snapshot
 
@@ -383,17 +383,35 @@ range is classified:
   isolated home directory. The tracked source checkout remains clean; its
   checked-in schema-v2 model data requires hydration because current source
   code expects schema 3.
+- The July 29, 2026 synchronization pass reviewed and classified every audited
+  source commit through `027a5847901b5dde30270abaa1041046cd2b4b55`.
+  `./gradlew clean test installDist` passed with 331 tests and zero failures,
+  errors, or skips, and all 17 deterministic migration oracles passed.
+- Installed `pi` RPC mode resolved
+  `--models google/gemini-3-flash-preview:high` to the requested model and
+  thinking level. Installed `pi-server` completed `serve`, `spawn`, `status`,
+  `rpc get_available_models`, `rpc get_state`, and `stop`; the isolated
+  instance exposed 1,110 available models.
+- The source coding-agent Vitest suite reached 1,640 passing tests and 48 skips,
+  with two full-suite-only reftable filesystem-watcher timeouts in
+  `footer-data-provider.test.ts`. That file predates the synchronized range,
+  the source worktree remained clean, and an isolated rerun of the whole file
+  passed all 8 tests.
+- `./migration/audit-migration.sh sync` passes through `027a584`.
+  `./migration/audit-migration.sh full` intentionally remains nonzero on seven
+  partial areas: CLI workflows, package management, extension runtime, themes,
+  interactive terminal, HTML export, and RPC/server parity.
 
 ## Remaining major gaps
 
 - Finish extension parity beyond the migrated Node host: jiti-complete
   transpilation/imports, blocking interactive/RPC dialogs, shortcuts and custom
-  renderers, extension-provided resource composition, `project_trust`, live
-  provider registration, and dynamic registration refresh. Theme
-  parsing/rendering, interactive trust selection, the package config selector,
-  self-update, and remaining package recovery paths also remain. Core package
-  manifests/filters/settings, skills, prompt templates, persisted trust lookup,
-  and interactive resource reload are migrated.
+  renderers, function-valued custom provider/OAuth callbacks, function-valued
+  `user_bash` operations, and unsolicited registration updates. Theme
+  parsing/rendering, the package config selector, self-update, and remaining
+  package recovery paths also remain. Core package manifests/filters/settings,
+  skills, prompt templates, persisted trust lookup, extension resource
+  composition, and interactive resource reload are migrated.
 - Port the full-screen terminal component and rendering model, then compare
   terminal transcripts at multiple widths.
 - Close CLI behavior gaps for options that are parsed or documented but do not

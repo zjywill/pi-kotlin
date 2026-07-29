@@ -105,6 +105,7 @@ class InteractiveRuntime(
                         continueRecent = args.continueSession,
                         provider = args.provider,
                         model = args.model,
+                        modelPatterns = args.models,
                         apiKey = args.apiKey,
                         systemPrompt = args.systemPrompt,
                         appendSystemPrompt = args.appendSystemPrompt,

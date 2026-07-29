@@ -239,6 +239,7 @@ const state = {
 	projectTrusted: false,
 	sessionName: undefined,
 	model: undefined,
+	scopedModels: [],
 	thinkingLevel: "off",
 	systemPrompt: "",
 	activeTools: [],
@@ -277,6 +278,7 @@ function updateState(context = {}) {
 		"projectTrusted",
 		"sessionName",
 		"model",
+		"scopedModels",
 		"thinkingLevel",
 		"systemPrompt",
 		"activeTools",
@@ -403,6 +405,7 @@ function contextFor(overrides = {}) {
 		hasUI: state.hasUI,
 		ui: createUI(),
 		model: state.model,
+		scopedModels: state.scopedModels,
 		signal: undefined,
 		sessionManager: {
 			getSessionFile: () => overrides.sessionFile,
@@ -720,7 +723,7 @@ async function emitEvent(event, context) {
 	let resources;
 	let currentEvent = jsonValue(event);
 
-	for (const { extension, handler } of handlersFor(event.type)) {
+	handlerLoop: for (const { extension, handler } of handlersFor(event.type)) {
 		try {
 			if (event.type === "before_agent_start") {
 				currentEvent.systemPrompt = state.systemPrompt;
@@ -766,6 +769,9 @@ async function emitEvent(event, context) {
 					result = value;
 					break;
 				}
+			} else if (event.type === "user_bash") {
+				result = value;
+				break handlerLoop;
 			} else if (event.type === "message_end" && value?.message) {
 				currentEvent.message = value.message;
 				result = { message: value.message };

@@ -11,6 +11,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -248,6 +249,81 @@ class PackageManagerTest {
     }
 
     @Test
+    fun `failed git clone removes partial checkout and empty parents`() {
+        val root = Files.createTempDirectory("pi-kotlin-package-git-clone-cleanup")
+        val cwd = Files.createDirectories(root.resolve("project"))
+        val agentDir = Files.createDirectories(root.resolve("agent"))
+        var target: Path? = null
+        val runner =
+            RecordingPackageRunner { command, _ ->
+                if (command.take(2) == listOf("git", "clone")) {
+                    Files.createDirectories(requireNotNull(target))
+                    error("simulated git clone failure")
+                }
+            }
+        val manager =
+            PackageManager(
+                cwd = cwd,
+                agentDir = agentDir,
+                settings = SettingsStore(cwd, agentDir, projectTrusted = true),
+                projectTrusted = true,
+                commandRunner = runner,
+            )
+        target = manager.plannedInstallPath("git:github.com/user/repo", PackageScope.USER)
+
+        val error =
+            assertFailsWith<IllegalStateException> {
+                manager.installAndPersist("git:github.com/user/repo")
+            }
+
+        assertTrue(error.message.orEmpty().contains("simulated git clone failure"))
+        assertFalse(Files.exists(target))
+        assertFalse(Files.exists(agentDir.resolve("git").resolve("github.com")))
+    }
+
+    @Test
+    fun `failed git dependency install removes newly cloned checkout`() {
+        val root = Files.createTempDirectory("pi-kotlin-package-git-dependency-cleanup")
+        val cwd = Files.createDirectories(root.resolve("project"))
+        val agentDir = Files.createDirectories(root.resolve("agent"))
+        var target: Path? = null
+        val runner =
+            RecordingPackageRunner { command, _ ->
+                when {
+                    command.take(2) == listOf("git", "clone") -> {
+                        val checkout = requireNotNull(target)
+                        Files.createDirectories(checkout.resolve(".git"))
+                        Files.writeString(
+                            checkout.resolve("package.json"),
+                            """{"name":"repo","version":"1.0.0"}""",
+                        )
+                    }
+
+                    command.firstOrNull() == "npm" ->
+                        error("simulated dependency install failure")
+                }
+            }
+        val manager =
+            PackageManager(
+                cwd = cwd,
+                agentDir = agentDir,
+                settings = SettingsStore(cwd, agentDir, projectTrusted = true),
+                projectTrusted = true,
+                commandRunner = runner,
+            )
+        target = manager.plannedInstallPath("git:github.com/user/repo", PackageScope.USER)
+
+        val error =
+            assertFailsWith<IllegalStateException> {
+                manager.installAndPersist("git:github.com/user/repo")
+            }
+
+        assertTrue(error.message.orEmpty().contains("simulated dependency install failure"))
+        assertFalse(Files.exists(target))
+        assertFalse(Files.exists(agentDir.resolve("git").resolve("github.com")))
+    }
+
+    @Test
     fun `package CLI installs lists and removes local sources`() {
         val root = Files.createTempDirectory("pi-kotlin-package-cli")
         val cwd = Files.createDirectories(root.resolve("project"))
@@ -346,7 +422,9 @@ private data class RecordedPackageCommand(
     val cwd: Path?,
 )
 
-private class RecordingPackageRunner : PackageCommandRunner {
+private class RecordingPackageRunner(
+    private val behavior: (List<String>, Path?) -> Unit = { _, _ -> },
+) : PackageCommandRunner {
     val commands = mutableListOf<RecordedPackageCommand>()
 
     override fun run(
@@ -356,6 +434,7 @@ private class RecordingPackageRunner : PackageCommandRunner {
         timeoutSeconds: Long,
     ): String {
         commands += RecordedPackageCommand(command, cwd)
+        behavior(command, cwd)
         return ""
     }
 }

@@ -5,9 +5,7 @@ Last reviewed: July 29, 2026
 ## Completion gate
 
 - Source repository: `/Users/junyizhang/Git/pi`
-- Reviewed source commit: `cee5ff7520d8828bed9955ef00419e995d1f91e0`
-- Current source HEAD pending full review:
-  `027a5847901b5dde30270abaa1041046cd2b4b55`
+- Reviewed source commit: `027a5847901b5dde30270abaa1041046cd2b4b55`
 - Target repository: `/Users/junyizhang/Git/pi-kotlin`
 - The migration is complete only when:
 
@@ -55,21 +53,28 @@ Last reviewed: July 29, 2026
   - [x] Serializable provider registration
   - [x] Request-bound dynamic tool, command, flag, and provider refresh
   - [x] Fire-and-forget extension UI notifications and status actions
+  - [x] Live `ctx.scopedModels` in print, RPC, and TUI contexts
+- [x] Upstream coding-agent synchronization through `027a584`
+  - [x] Preserve package and extension metadata across resource reloads
+  - [x] Route RPC `user_bash` through extension direct-result interception
+  - [x] Track and cancel concurrent user bash executions independently
+  - [x] Remove partial git checkouts after clone or dependency failures
+  - [x] Detach stale Agent subscriptions during session replacement
 
-The latest implementation stage synchronized pending stream stop reasons,
-GitHub Copilot Claude Opus 5 metadata, Bedrock profile precedence, Z.AI
-`max_tokens`, and per-request HTTP transport injection. `./gradlew clean test
-installDist` passes with 321 tests and zero failures, errors, or skips. All 17
-cross-language migration oracles pass, including the GitHub Copilot catalog
-oracle. Both migration audits still stop at source drift because the full
-upstream range has not yet been classified and entered in the synchronization
-manifests.
+The latest implementation stage synchronized extension scoped-model contexts,
+resource metadata reloads, RPC `user_bash` direct-result routing, concurrent
+bash cancellation, failed git-install cleanup, and session replacement
+subscription ownership. `./gradlew clean test installDist` passes with 331
+tests and zero failures, errors, or skips; all 17 deterministic migration
+oracles pass. Installed `pi` and `pi-server` process smokes pass. The sync audit
+passes through `027a584`; the full audit now reaches the inventory and reports
+the seven partial areas listed below.
 
 ## Remaining
 
 ### 1. Upstream synchronization
 
-- [ ] Review and classify every commit in
+- [x] Review and classify every commit in
       `cee5ff7520d8828bed9955ef00419e995d1f91e0..027a5847901b5dde30270abaa1041046cd2b4b55`
 - [x] OAuth five-minute refresh window and credential print commands
 - [x] OpenRouter manual redirect URL fallback
@@ -78,16 +83,16 @@ manifests.
 - [x] Configured Bedrock profile precedence over ambient AWS keys
 - [x] Z.AI `max_tokens` request field
 - [x] Per-request fetch injection
-- [ ] Extension `ctx.scopedModels` in base and TUI contexts
-- [ ] Preserve resource metadata after extension reload
-- [ ] Route RPC bash through `user_bash`
-- [ ] Concurrent bash cancellation
-- [ ] Failed git-install cleanup
-- [ ] Session replacement subscription fix
-- [ ] Classify eval, documentation, test-only, and known-TUI-gap commits
-- [ ] Update `migration/upstream-sync.tsv` only after the whole range is
+- [x] Extension `ctx.scopedModels` in base and TUI contexts
+- [x] Preserve resource metadata after extension reload
+- [x] Route RPC bash through `user_bash` for direct replacement results
+- [x] Concurrent bash cancellation
+- [x] Failed git-install cleanup
+- [x] Session replacement subscription fix
+- [x] Classify eval, documentation, test-only, and known-TUI-gap commits
+- [x] Update `migration/upstream-sync.tsv` only after the whole range is
       classified
-- [ ] Advance `migration/sync-state.tsv` only after all required ports and
+- [x] Advance `migration/sync-state.tsv` only after all required ports and
       classifications are complete
 
 ### 2. CLI argument and print modes
@@ -123,6 +128,8 @@ manifests.
 - [ ] Extension shortcuts
 - [ ] Message and session-entry renderers
 - [ ] Unsolicited background registration updates
+- [ ] Function-valued `user_bash` `BashOperations` over the JSON extension
+      host, including streaming updates and cancellation
 
 ### 5. Themes and resource composition
 
@@ -152,22 +159,21 @@ manifests.
 
 ## Next stage
 
-Finish the upstream synchronization range before returning to bidirectional
-extension dialogs. The next coherent implementation slice is the coding-agent
-synchronization batch: extension `ctx.scopedModels`, TUI scoped-model context,
-resource metadata preservation, RPC `user_bash` routing, concurrent bash
-cancellation, failed git-install cleanup, and session replacement subscription
-repair.
+Return to bidirectional extension dialogs and the extension-host callback
+protocol. The next coherent slice should carry interactive UI requests and
+function-valued `user_bash` operations over JSONL with stable IDs, streaming
+updates, cancellation, timeout, EOF, and shutdown behavior.
 
-Required evidence for that stage:
+Required evidence for the completed synchronization stage:
 
-- [ ] Focused tests for base and TUI `ctx.scopedModels`
-- [ ] Resource reload tests that retain source metadata
-- [ ] RPC and concurrent bash cancellation tests
-- [ ] Failed git-install cleanup test
-- [ ] Session replacement subscription regression test
-- [ ] `./gradlew clean test installDist`
-- [ ] All deterministic migration oracles
-- [ ] `./migration/audit-migration.sh sync`
-- [ ] `./migration/audit-migration.sh full` with the remaining partial areas
+- [x] Focused tests for base and TUI `ctx.scopedModels`
+- [x] Resource reload tests that retain source metadata
+- [x] RPC and concurrent bash cancellation tests
+- [x] Failed git-install cleanup tests
+- [x] Session replacement subscription regression test
+- [x] `./gradlew clean test installDist`
+- [x] All 17 deterministic migration oracles
+- [x] Installed CLI and server smoke tests
+- [x] `./migration/audit-migration.sh sync`
+- [x] `./migration/audit-migration.sh full` with the remaining partial areas
       reported exactly

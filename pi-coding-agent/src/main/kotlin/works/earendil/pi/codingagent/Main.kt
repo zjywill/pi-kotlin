@@ -68,6 +68,7 @@ fun main(rawArguments: Array<String>) {
                                     sessionId = arguments.sessionId,
                                     provider = arguments.provider,
                                     model = arguments.model,
+                                    modelPatterns = arguments.models,
                                     apiKey = arguments.apiKey,
                                     systemPrompt = arguments.systemPrompt,
                                     appendSystemPrompt = arguments.appendSystemPrompt,

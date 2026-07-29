@@ -9,6 +9,8 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.jupiter.api.Assumptions.assumeTrue
+import works.earendil.pi.ai.FauxModelDefinition
+import works.earendil.pi.ai.FauxProvider
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -16,6 +18,95 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class ExtensionHostTest {
+    @Test
+    fun `extension context exposes an empty then live scoped model list`() =
+        runTest {
+            assumeTrue(nodeAvailable(), "Node.js 22+ is required for extension runtime tests")
+            val root = Files.createTempDirectory("pi-kotlin-extension-scoped-models")
+            val agentDir = Files.createDirectories(root.resolve("agent"))
+            val extension =
+                root.resolve("scoped-models.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          pi.on("session_start", (_event, ctx) => ({
+                            mode: ctx.mode,
+                            scopedModels: ctx.scopedModels.map(entry => ({
+                              provider: entry.model.provider,
+                              id: entry.model.id,
+                              thinkingLevel: entry.thinkingLevel,
+                            })),
+                          }));
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val host =
+                assertNotNull(
+                    ExtensionHost.start(
+                        sources =
+                            listOf(
+                                ExtensionSource(
+                                    extension,
+                                    ResourceSourceInfo(extension, "local", baseDir = root),
+                                ),
+                            ),
+                        agentDir = agentDir,
+                        cwd = root,
+                        mode = ExtensionMode.PRINT,
+                        projectTrusted = true,
+                        flagValues = emptyMap(),
+                        context = extensionTestContext(root),
+                    ),
+                )
+            val model =
+                FauxProvider(
+                    definitions = listOf(FauxModelDefinition("faux-scoped", reasoning = true)),
+                ).getModels().single()
+
+            host.use {
+                val empty =
+                    host.emit(
+                        buildJsonObject { put("type", "session_start") },
+                        extensionTestContext(root),
+                    )
+                val populated =
+                    host.emit(
+                        buildJsonObject { put("type", "session_start") },
+                        extensionContextJson(
+                            cwd = root,
+                            mode = ExtensionMode.PRINT,
+                            projectTrusted = true,
+                            model = model,
+                            thinkingLevel = "off",
+                            systemPrompt = "",
+                            activeTools = emptyList(),
+                            allTools = emptyList(),
+                            sessionName = null,
+                            sessionId = null,
+                            sessionFile = null,
+                            isIdle = true,
+                            hasPendingMessages = false,
+                            flagValues = emptyMap(),
+                            scopedModels = listOf(ScopedModel(model, AgentThinkingLevel.HIGH)),
+                        ),
+                    )
+
+                assertTrue(empty.result?.jsonObject?.get("scopedModels")?.jsonArray.orEmpty().isEmpty())
+                val entry =
+                    populated.result
+                        ?.jsonObject
+                        ?.get("scopedModels")
+                        ?.jsonArray
+                        ?.single()
+                        ?.jsonObject
+                assertEquals("faux", entry?.get("provider")?.jsonPrimitive?.content)
+                assertEquals("faux-scoped", entry?.get("id")?.jsonPrimitive?.content)
+                assertEquals("high", entry?.get("thinkingLevel")?.jsonPrimitive?.content)
+            }
+        }
+
     @Test
     fun `loads TypeScript extensions and executes registrations and hooks`() =
         runTest {

@@ -435,6 +435,7 @@ internal class PackageManager(
                     val path = gitInstallPath(parsed, scope)
                     if (Files.exists(path)) {
                         path.toFile().deleteRecursively()
+                        pruneEmptyGitParents(path, gitInstallRoot(scope))
                     }
                 }
 
@@ -502,45 +503,56 @@ internal class PackageManager(
     ) {
         val target = gitInstallPath(source, scope)
         Files.createDirectories(target.parent)
-        if (!Files.exists(target.resolve(".git"))) {
+        val checkoutExisted = Files.exists(target.resolve(".git"))
+        if (!checkoutExisted) {
             if (Files.exists(target)) {
                 target.toFile().deleteRecursively()
             }
-            commandRunner.run(
-                listOf("git", "clone", source.repo, target.toString()),
-                cwd = null,
-                environment = environment + ("GIT_TERMINAL_PROMPT" to "0"),
-                timeoutSeconds = PACKAGE_COMMAND_TIMEOUT_SECONDS,
-            )
         }
-        if (source.ref != null) {
-            commandRunner.run(
-                listOf("git", "fetch", "origin", source.ref),
-                cwd = target,
-                environment = environment + ("GIT_TERMINAL_PROMPT" to "0"),
-                timeoutSeconds = PACKAGE_COMMAND_TIMEOUT_SECONDS,
-            )
-            commandRunner.run(
-                listOf("git", "reset", "--hard", "FETCH_HEAD^{commit}"),
-                cwd = target,
-                environment = environment,
-                timeoutSeconds = PACKAGE_COMMAND_TIMEOUT_SECONDS,
-            )
-            commandRunner.run(
-                listOf("git", "clean", "-fdx"),
-                cwd = target,
-                environment = environment,
-                timeoutSeconds = PACKAGE_COMMAND_TIMEOUT_SECONDS,
-            )
-        } else {
-            commandRunner.run(
-                listOf("git", "pull", "--ff-only"),
-                cwd = target,
-                environment = environment + ("GIT_TERMINAL_PROMPT" to "0"),
-                timeoutSeconds = PACKAGE_COMMAND_TIMEOUT_SECONDS,
-            )
+        try {
+            if (!checkoutExisted) {
+                commandRunner.run(
+                    listOf("git", "clone", source.repo, target.toString()),
+                    cwd = null,
+                    environment = environment + ("GIT_TERMINAL_PROMPT" to "0"),
+                    timeoutSeconds = PACKAGE_COMMAND_TIMEOUT_SECONDS,
+                )
+            }
+            if (source.ref != null) {
+                commandRunner.run(
+                    listOf("git", "fetch", "origin", source.ref),
+                    cwd = target,
+                    environment = environment + ("GIT_TERMINAL_PROMPT" to "0"),
+                    timeoutSeconds = PACKAGE_COMMAND_TIMEOUT_SECONDS,
+                )
+                commandRunner.run(
+                    listOf("git", "reset", "--hard", "FETCH_HEAD^{commit}"),
+                    cwd = target,
+                    environment = environment,
+                    timeoutSeconds = PACKAGE_COMMAND_TIMEOUT_SECONDS,
+                )
+                commandRunner.run(
+                    listOf("git", "clean", "-fdx"),
+                    cwd = target,
+                    environment = environment,
+                    timeoutSeconds = PACKAGE_COMMAND_TIMEOUT_SECONDS,
+                )
+            } else if (checkoutExisted) {
+                commandRunner.run(
+                    listOf("git", "pull", "--ff-only"),
+                    cwd = target,
+                    environment = environment + ("GIT_TERMINAL_PROMPT" to "0"),
+                    timeoutSeconds = PACKAGE_COMMAND_TIMEOUT_SECONDS,
+                )
+            }
+            installGitDependencies(target)
+        } catch (error: Exception) {
+            if (!checkoutExisted) {
+                target.toFile().deleteRecursively()
+                pruneEmptyGitParents(target, gitInstallRoot(scope))
+            }
+            throw error
         }
-        installGitDependencies(target)
     }
 
     private fun installGitDependencies(target: Path) {
@@ -970,6 +982,34 @@ internal class PackageManager(
                 PackageScope.TEMPORARY -> return temporaryDirectory("git-${source.host}", source.path)
             }
         return managedPath(root, source.host, source.path)
+    }
+
+    private fun gitInstallRoot(scope: PackageScope): Path =
+        when (scope) {
+            PackageScope.USER -> agentDir.resolve("git")
+            PackageScope.PROJECT -> {
+                assertProjectTrusted(scope)
+                cwd.resolve(".pi").resolve("git")
+            }
+
+            PackageScope.TEMPORARY -> agentDir.resolve("tmp").resolve("extensions")
+        }.toAbsolutePath().normalize()
+
+    private fun pruneEmptyGitParents(
+        target: Path,
+        installRoot: Path,
+    ) {
+        var current = target.toAbsolutePath().normalize().parent
+        while (current != null && current.startsWith(installRoot) && current != installRoot) {
+            if (Files.exists(current)) {
+                val empty = Files.list(current).use { entries -> entries.findAny().isEmpty }
+                if (!empty) {
+                    break
+                }
+                Files.deleteIfExists(current)
+            }
+            current = current.parent
+        }
     }
 
     private fun temporaryDirectory(

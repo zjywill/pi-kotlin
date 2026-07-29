@@ -36,3 +36,27 @@ b1c444d956b70e5c437d3d2782b01d157fa05ba3	ported	ModelsStore persists ETags; remo
 b4f293684bba718d59cc1157679bcf6157b3a7f5	not-applicable	Package release/version metadata only
 5bc1c2c0a6f07e00e8c240304182f213ab8d311f	not-applicable	Changelog section only
 cee5ff7520d8828bed9955ef00419e995d1f91e0	not-applicable	README reference cleanup only
+f08f58f5f9525d3f532eda1df9082f1831241e2f	not-applicable	Upstream Vitest-only network isolation; Kotlin Gradle tests use local fixtures and explicit integration commands
+60f6a8034d15d77137b364fd184a0b47d8b70ca9	ported	GitHub Copilot Claude Opus 5 metadata overrides adaptive thinking xhigh and temperature compatibility
+f9a49869c20c5dd1eae2e15370d6dfdc8e63dcb8	ported	Partial assistant messages expose the pending stop reason until a terminal stream event arrives
+61da9e2f374000593e6d4fc4a7a9c376c602cdcf	ported	OpenRouter OAuth accepts loopback callbacks or a manually pasted redirect URL with matching state
+c2275d670316d271de5f766c8a9ebdc473bdfd5a	ported	RpcRuntime detaches the outgoing Agent subscription before session replacement; stale-agent regression coverage prevents duplicate events
+2efa728d2ee90ef597626e96b1e28ef2b279f07c	ported	RpcRuntime tracks concurrent user bash processes independently and abort_bash cancels every active execution
+99e34013d13a71c2aef1958fd5ab44fa9bfc75dd	ported	Auth print commands emit API keys or bearer tokens with duration parsing typed errors and credential-only stdout
+e8f9c07153da4814169a91bd93e7d4daa8ca2aad	not-applicable	AgentHarness design document only; no runtime contract change
+c820aa26fe0907e053e881a957722693fc094c9c	not-applicable	Merge commit containing only the AgentHarness design document
+04b15259b216294038169664aa4782d777b0281f	ported	Extension contexts expose live resolved scopedModels from CLI or enabledModels patterns
+b63403a50f57fa0e3098684e927a63279598ec89	ported	Configured Bedrock profiles take precedence over ambient AWS access keys
+063fb963c5c33d099faa593d17e60e0a875430cd	not-applicable	Upstream test-only home-directory isolation; Kotlin package tests already use temporary agent and home roots
+b6fb91e5b3a35a4361ae7d697d66eb7ed4dd9850	ported	TUI extension contexts carry the same resolved scopedModels list and pinned thinking levels
+66eead65249b0623e2c77f8f40447b2af094ec8b	already-covered	ResolvedPackageResources retains package and extension source metadata across reload merges; regression covers skills prompts and themes
+5d548ae969454d23ef8fec627c5be896be888d47	covered-by-known-gap	RPC bash emits user_bash and accepts direct replacement results; function-valued BashOperations require the unported bidirectional extension host protocol
+f1ea6c0d05a5707a483268dbd42f8c60f38377ed	covered-by-known-gap	Model-selector filtering belongs to the unported full-screen selector and overlay workflow
+0563a7c0174d873b6368cf67349f7fc1be950292	ported	New git checkouts are removed after clone checkout or dependency failures and empty managed parents are pruned
+2fe21b407fcbf7625036afd46e39900ff8c081d1	ported	Z.AI provider requests include max_tokens from model metadata with the upstream fallback
+cefa40ed8f8dbcd6ffd67b5e7a0eaa75a5050d1a	covered-by-known-gap	RPC session mutation already rejects active responses; interactive tree navigation and settle-before-replacement remain in the full TUI and RPC gaps
+f14519551682cd0fddac2e4b4e8b1f333667e94c	not-applicable	Upstream test-only duplicate scopedModels fixture edit with no runtime behavior
+0d008b746892ad33d3fe15c0c4bc86a14369e0e8	covered-by-known-gap	Tool expansion status belongs to the unported full-screen transcript and status UI
+47ca25fcd8535b80710fad5be758f1f2cf81443c	not-applicable	Revert of the preceding test-only duplicate fixture edit
+fdbedcad8aeb7c1e2ebd3b85f16e60e5fab0b2c3	not-applicable	AgentHarness design-document reference update only
+027a5847901b5dde30270abaa1041046cd2b4b55	ported	Supported providers accept per-request HTTP transport injection while Google and Vertex reject unsupported custom transports explicitly

@@ -680,6 +680,7 @@ internal fun extensionContextJson(
     isIdle: Boolean,
     hasPendingMessages: Boolean,
     flagValues: Map<String, Any>,
+    scopedModels: List<ScopedModel> = emptyList(),
 ): JsonObject =
     buildJsonObject {
         put("cwd", cwd.toString())
@@ -687,6 +688,17 @@ internal fun extensionContextJson(
         put("hasUI", mode == ExtensionMode.TUI)
         put("projectTrusted", projectTrusted)
         model?.let { put("model", protocolJson.encodeToJsonElement(Model.serializer(), it)) }
+        put(
+            "scopedModels",
+            JsonArray(
+                scopedModels.map { scoped ->
+                    buildJsonObject {
+                        put("model", protocolJson.encodeToJsonElement(Model.serializer(), scoped.model))
+                        scoped.thinkingLevel?.let { put("thinkingLevel", it.name.lowercase().replace('_', '-')) }
+                    }
+                },
+            ),
+        )
         put("thinkingLevel", thinkingLevel)
         put("systemPrompt", systemPrompt)
         put("activeTools", JsonArray(activeTools.map(::JsonPrimitive)))

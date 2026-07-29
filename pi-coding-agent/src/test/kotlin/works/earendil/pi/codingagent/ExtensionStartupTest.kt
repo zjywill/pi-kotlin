@@ -146,12 +146,57 @@ class ExtensionStartupTest {
         val skillDir = Files.createDirectories(root.resolve("skills").resolve("discovered"))
         val promptDir = Files.createDirectories(root.resolve("prompts"))
         val themeDir = Files.createDirectories(root.resolve("themes"))
+        val packageRoot = Files.createDirectories(root.resolve("package"))
+        val packageSkillDir = Files.createDirectories(packageRoot.resolve("skills").resolve("package-skill"))
+        val packagePromptDir = Files.createDirectories(packageRoot.resolve("prompts"))
+        val packageTheme = Files.createDirectories(packageRoot.resolve("themes")).resolve("package.json")
         Files.writeString(
             skillDir.resolve("SKILL.md"),
             "---\nname: discovered\ndescription: Extension discovered skill\n---\nUse it.",
         )
         Files.writeString(promptDir.resolve("discovered.md"), "Discovered prompt")
         Files.writeString(themeDir.resolve("discovered.json"), "{}")
+        Files.writeString(
+            packageSkillDir.resolve("SKILL.md"),
+            "---\nname: package-skill\ndescription: Package skill\n---\nPackage body.",
+        )
+        Files.writeString(packagePromptDir.resolve("package-prompt.md"), "Package prompt")
+        Files.writeString(packageTheme, """{"name":"package"}""")
+        val packageSource =
+            ResourceSourceInfo(
+                path = packageRoot,
+                source = "npm:metadata-pkg",
+                scope = "user",
+                origin = "package",
+                baseDir = packageRoot,
+            )
+        val packageResources =
+            ResolvedPackageResources(
+                skills =
+                    listOf(
+                        ResolvedResource(
+                            packageSkillDir,
+                            true,
+                            packageSource.copy(path = packageSkillDir),
+                        ),
+                    ),
+                prompts =
+                    listOf(
+                        ResolvedResource(
+                            packagePromptDir,
+                            true,
+                            packageSource.copy(path = packagePromptDir),
+                        ),
+                    ),
+                themes =
+                    listOf(
+                        ResolvedResource(
+                            packageTheme,
+                            true,
+                            packageSource.copy(path = packageTheme),
+                        ),
+                    ),
+            )
         val extension =
             root.resolve("resources.ts").also { path ->
                 Files.writeString(
@@ -194,18 +239,56 @@ class ExtensionStartupTest {
                     context = startupContext(root, true),
                     onActions = {},
                 )
+            val initialResources =
+                loadPromptResources(
+                    cwd = root,
+                    agentDir = agentDir,
+                    projectTrusted = true,
+                    resolvedPackageResources = packageResources.merge(discovered),
+                )
+            val rediscovered =
+                discoverExtensionResources(
+                    host = host,
+                    cwd = root,
+                    reason = "reload",
+                    context = startupContext(root, true),
+                    onActions = {},
+                )
             val resources =
                 loadPromptResources(
                     cwd = root,
                     agentDir = agentDir,
                     projectTrusted = true,
-                    resolvedPackageResources = discovered,
+                    resolvedPackageResources = initialResources.packageResources.merge(rediscovered),
                 )
 
-            assertEquals("extension:resources", resources.skills.single().sourceInfo.source)
-            assertEquals("discovered", resources.skills.single().name)
-            assertEquals("discovered", resources.promptTemplates.single().name)
-            assertEquals(themeDir.resolve("discovered.json"), resources.packageResources.themes.single().path)
+            assertEquals(
+                "npm:metadata-pkg",
+                resources.skills.single { it.name == "package-skill" }.sourceInfo.source,
+            )
+            assertEquals(
+                "user",
+                resources.promptTemplates.single { it.name == "package-prompt" }.sourceInfo.scope,
+            )
+            assertEquals(
+                "package",
+                resources.packageResources.themes.single { it.path == packageTheme }.sourceInfo.origin,
+            )
+            assertEquals(
+                "extension:resources",
+                resources.skills.single { it.name == "discovered" }.sourceInfo.source,
+            )
+            assertEquals(
+                "temporary",
+                resources.promptTemplates.single { it.name == "discovered" }.sourceInfo.scope,
+            )
+            assertEquals(
+                "top-level",
+                resources.packageResources.themes
+                    .single { it.path == themeDir.resolve("discovered.json") }
+                    .sourceInfo
+                    .origin,
+            )
         }
     }
 
