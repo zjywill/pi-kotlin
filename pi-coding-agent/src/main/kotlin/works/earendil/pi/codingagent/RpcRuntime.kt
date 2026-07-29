@@ -45,6 +45,7 @@ import works.earendil.pi.agent.AgentTool
 import works.earendil.pi.agent.QueueMode
 import works.earendil.pi.ai.AssistantMessage
 import works.earendil.pi.ai.BashExecutionMessage
+import works.earendil.pi.ai.ContentBlock
 import works.earendil.pi.ai.Context
 import works.earendil.pi.ai.CustomMessage
 import works.earendil.pi.ai.ImageContent
@@ -56,6 +57,8 @@ import works.earendil.pi.ai.StreamFunction
 import works.earendil.pi.ai.StreamOptions
 import works.earendil.pi.ai.TextContent
 import works.earendil.pi.ai.ThinkingLevel
+import works.earendil.pi.ai.ToolCall
+import works.earendil.pi.ai.ToolResultMessage
 import works.earendil.pi.ai.Usage
 import works.earendil.pi.ai.UserMessage
 import works.earendil.pi.ai.contentText
@@ -69,6 +72,7 @@ import works.earendil.pi.codingagent.tools.truncateTail
 import kotlin.math.max
 
 private const val DIRECT_EXTENSION_UI_CANCEL_WAIT_MS = 1_000L
+private val HTML_TEMPLATE_RENDERED_TOOLS = setOf("bash", "read", "write", "edit", "ls")
 
 data class RpcRuntimeOptions(
     val cwd: Path = Path.of("").toAbsolutePath().normalize(),
@@ -379,7 +383,17 @@ class RpcRuntime(
                 "get_session_stats" -> successResponse(id, type, sessionStatsJson())
                 "export_html" -> {
                     val outputPath = command.string("outputPath")?.let(::resolvePath)
-                    val path = exportSession(sessionManager, outputPath)
+                    val path =
+                        exportSession(
+                            sessionManager,
+                            outputPath,
+                            SessionHtmlExportOptions(
+                                theme = currentTheme(),
+                                systemPrompt = agent.state.systemPrompt,
+                                tools = agent.state.tools,
+                                renderedTools = preRenderHtmlTools(),
+                            ),
+                        )
                     successResponse(
                         id,
                         type,
@@ -1792,6 +1806,149 @@ class RpcRuntime(
             )
         }
     }
+
+    private fun preRenderHtmlTools(): JsonObject? {
+        val host = extensionHost
+        val registrations =
+            host
+                ?.registrations
+                ?.tools
+                .orEmpty()
+                .associateBy(ExtensionToolRegistration::name)
+        val rendered = linkedMapOf<String, JsonObject>()
+
+        fun putRendered(
+            toolCallId: String,
+            key: String,
+            html: String,
+        ) {
+            val value = rendered[toolCallId]?.toMutableMap() ?: linkedMapOf()
+            value[key] = JsonPrimitive(html)
+            rendered[toolCallId] = JsonObject(value)
+        }
+
+        sessionManager.getEntries().filterIsInstance<SessionMessageEntry>().forEach { entry ->
+            when (val message = entry.message) {
+                is AssistantMessage ->
+                    message.content.filterIsInstance<ToolCall>().forEach { call ->
+                        if (call.name in HTML_TEMPLATE_RENDERED_TOOLS) {
+                            return@forEach
+                        }
+                        val registration = registrations[call.name]?.takeIf { it.hasRenderCall }
+                        val lines =
+                            if (host != null && registration != null) {
+                                renderHtmlTool(
+                                    host = host,
+                                    registration = registration,
+                                    phase = "call",
+                                    toolCallId = call.id,
+                                    args = call.arguments,
+                                )
+                            } else {
+                                renderBuiltinHtmlToolCall(call, currentTheme())
+                            }
+                        lines?.let(::ansiLinesToHtml)
+                            ?.takeIf(String::isNotEmpty)
+                            ?.let { putRendered(call.id, "callHtml", it) }
+                    }
+
+                is ToolResultMessage -> {
+                    if (rendered[message.toolCallId] == null && message.toolName in HTML_TEMPLATE_RENDERED_TOOLS) {
+                        return@forEach
+                    }
+                    val registration = registrations[message.toolName]?.takeIf { it.hasRenderResult }
+                    val content by lazy {
+                        JsonArray(
+                            message.content.map { block ->
+                                protocolJson.encodeToJsonElement(ContentBlock.serializer(), block)
+                            },
+                        )
+                    }
+                    val collapsed =
+                        if (host != null && registration != null) {
+                            renderHtmlTool(
+                                host = host,
+                                registration = registration,
+                                phase = "result",
+                                toolCallId = message.toolCallId,
+                                content = content,
+                                details = message.details,
+                                isError = message.isError,
+                                expanded = false,
+                            )
+                        } else {
+                            renderBuiltinHtmlToolResult(
+                                message,
+                                currentTheme(),
+                                expanded = false,
+                                expandKey = htmlToolExpandKey(),
+                            )
+                        }?.let(::trimRenderedResultLines)
+                            ?.let(::ansiLinesToHtml)
+                    val expanded =
+                        if (host != null && registration != null) {
+                            renderHtmlTool(
+                                host = host,
+                                registration = registration,
+                                phase = "result",
+                                toolCallId = message.toolCallId,
+                                content = content,
+                                details = message.details,
+                                isError = message.isError,
+                                expanded = true,
+                            )
+                        } else {
+                            renderBuiltinHtmlToolResult(
+                                message,
+                                currentTheme(),
+                                expanded = true,
+                                expandKey = htmlToolExpandKey(),
+                            )
+                        }?.let(::trimRenderedResultLines)
+                            ?.let(::ansiLinesToHtml)
+                            ?: return@forEach
+                    if (!collapsed.isNullOrEmpty() && collapsed != expanded) {
+                        putRendered(message.toolCallId, "resultHtmlCollapsed", collapsed)
+                    }
+                    putRendered(message.toolCallId, "resultHtmlExpanded", expanded)
+                }
+
+                else -> Unit
+            }
+        }
+        return rendered.takeIf { it.isNotEmpty() }?.let(::JsonObject)
+    }
+
+    private fun renderHtmlTool(
+        host: ExtensionHost,
+        registration: ExtensionToolRegistration,
+        phase: String,
+        toolCallId: String,
+        args: JsonObject? = null,
+        content: JsonArray? = null,
+        details: JsonElement? = null,
+        isError: Boolean = false,
+        expanded: Boolean = false,
+    ): List<String>? =
+        runCatching {
+            val invocation =
+                host.invokeToolRenderer(
+                    toolId = registration.id,
+                    phase = phase,
+                    toolCallId = toolCallId,
+                    args = args,
+                    content = content,
+                    details = details,
+                    isError = isError,
+                    expanded = expanded,
+                    context = extensionContextProvider(),
+                )
+            applyExtensionActions(invocation.actions)
+            parseRendererLines(invocation)
+        }.getOrNull()
+
+    private fun htmlToolExpandKey(): String =
+        if (options.extensionMode == ExtensionMode.TUI) "ctrl+o" else ""
 
     private fun resolveModel(
         sessionProvider: String?,

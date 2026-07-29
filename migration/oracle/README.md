@@ -28,6 +28,9 @@ Run the available comparisons from the Kotlin repository:
 ./migration/oracle/compare-extension-shortcuts.sh
 ./migration/oracle/compare-extension-theme.sh
 ./migration/oracle/compare-github-copilot.sh
+./migration/oracle/compare-html-builtin-tool-renderer.sh
+./migration/oracle/compare-html-export.sh
+./migration/oracle/compare-html-tool-renderer.sh
 ./migration/oracle/compare-kimi-coding-oauth.sh
 ./migration/oracle/compare-model-catalog-runtime.sh
 ./migration/oracle/compare-openai-codex-oauth.sh
@@ -138,6 +141,17 @@ selection, resource precedence, collision diagnostics, and active-theme
 settings. The extension-theme comparison covers named and in-memory
 `ctx.ui.setTheme()` calls, failed-name dark fallback without persistence, and
 immediate rerendering of persistent header/widget/footer components.
+
+The HTML export comparison renders the same session and branch fixture through
+the upstream exporter and Kotlin oracle. It compares the complete standalone
+document byte-for-byte for default and custom themes, including HTML/CSS/
+JavaScript templates, Markdown and highlighting runtimes, theme colors, session
+tree data, shortcut text, escaping, and JSON serialization.
+
+The HTML tool-renderer comparison covers extension `renderCall` and
+`renderResult` output in collapsed and expanded states. The built-in
+tool-renderer comparison covers upstream-compatible pre-rendering of `find` and
+`grep` results before the transcript is embedded in the standalone document.
 
 The jiti compatibility comparison loads isolated extensions through the
 upstream loader and the Kotlin distribution's vendored jiti 2.7.0 runtime. It

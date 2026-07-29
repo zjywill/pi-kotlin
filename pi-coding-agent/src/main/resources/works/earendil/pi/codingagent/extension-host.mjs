@@ -737,6 +737,9 @@ const activeProviderOperations = new Map();
 const pendingProviderAuthRequests = new Map();
 const pendingProviderBridgeRequests = new Map();
 const extensionStatuses = new Map();
+const toolRenderStates = new Map();
+const toolRenderArgs = new Map();
+const toolRenderComponents = new Map();
 const persistentUiComponents = {
 	widgets: new Map(),
 	header: undefined,
@@ -1799,6 +1802,8 @@ function registrationMetadata() {
 			executionMode: definition.executionMode,
 			promptSnippet: definition.promptSnippet,
 			promptGuidelines: definition.promptGuidelines,
+			hasRenderCall: typeof definition.renderCall === "function",
+			hasRenderResult: typeof definition.renderResult === "function",
 			extensionPath: extension.path,
 		})),
 		commands: commandList,
@@ -1819,6 +1824,9 @@ async function loadExtensions(request) {
 	registrationVersion = 0;
 	pendingBackgroundActions = [];
 	backgroundPushScheduled = false;
+	toolRenderStates.clear();
+	toolRenderArgs.clear();
+	toolRenderComponents.clear();
 	state.flags = new Map(Object.entries(request.flags ?? {}));
 	updateState(request.context);
 	const errors = await loadExtensionPaths(request.paths ?? []);
@@ -2498,6 +2506,68 @@ async function invokeTool(request) {
 	return { result: jsonValue(result), updates };
 }
 
+function invokeToolRenderer(request) {
+	const registration = [...tools.values()].find(value => value.id === request.toolId);
+	if (!registration) throw new Error(`Unknown extension tool: ${request.toolId}`);
+	updateState(request.context);
+	const definition = registration.definition;
+	const phase = request.phase;
+	const renderer = phase === "call" ? definition.renderCall : definition.renderResult;
+	if (typeof renderer !== "function") {
+		return { result: { rendered: false, lines: [] } };
+	}
+	const width = Math.max(1, Number.isInteger(request.width) ? request.width : 100);
+	const toolCallId = request.toolCallId;
+	const componentKey = `${toolCallId}:${phase}`;
+	if (phase === "call") {
+		toolRenderArgs.set(toolCallId, request.args ?? {});
+	}
+	let renderState = toolRenderStates.get(toolCallId);
+	if (!renderState) {
+		renderState = {};
+		toolRenderStates.set(toolCallId, renderState);
+	}
+	const expanded = request.expanded === true;
+	const isError = request.isError === true;
+	const context = {
+		args: toolRenderArgs.get(toolCallId),
+		toolCallId,
+		invalidate() {},
+		lastComponent: toolRenderComponents.get(componentKey),
+		state: renderState,
+		cwd: state.cwd,
+		executionStarted: true,
+		argsComplete: true,
+		isPartial: phase === "call",
+		expanded,
+		showImages: false,
+		isError,
+	};
+	const component =
+		phase === "call"
+			? renderer(request.args ?? {}, rendererTheme, context)
+			: renderer(
+					{
+						content: request.content ?? [],
+						details: request.details,
+						isError,
+					},
+					{ expanded, isPartial: false },
+					rendererTheme,
+					context,
+				);
+	if (component == null) {
+		return { result: { rendered: false, lines: [] } };
+	}
+	validateUiComponent(component, `Extension tool ${definition.name} ${phase} renderer`);
+	toolRenderComponents.set(componentKey, component);
+	const lines = component.render(width);
+	if (!Array.isArray(lines) || lines.some(line => typeof line !== "string")) {
+		throw new Error(`Extension tool ${definition.name} ${phase} renderer returned invalid lines`);
+	}
+	return { result: { rendered: true, lines } };
+}
+
 async function invokeCommand(request) {
 	commandMetadata();
 	const registration = commands.get(request.name);
@@ -2566,6 +2636,9 @@ async function handle(request) {
 				break;
 			case "invoke_tool":
 				response = await invokeTool(request);
+				break;
+			case "invoke_tool_renderer":
+				response = invokeToolRenderer(request);
 				break;
 			case "invoke_command":
 				response = await invokeCommand(request);

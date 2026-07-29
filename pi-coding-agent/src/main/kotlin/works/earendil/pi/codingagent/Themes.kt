@@ -69,6 +69,7 @@ private sealed interface ResolvedColor {
         val red: Int,
         val green: Int,
         val blue: Int,
+        val css: String,
     ) : ResolvedColor
 
     data class Index(
@@ -83,6 +84,8 @@ internal class Theme internal constructor(
     val colorMode: ThemeColorMode,
     private val foreground: Map<String, String>,
     private val background: Map<String, String>,
+    val cssColors: Map<String, String>,
+    val exportColors: Map<String, String?>,
 ) {
     fun fg(
         color: String,
@@ -144,6 +147,7 @@ internal class Theme internal constructor(
 
     companion object {
         fun fromExtensionJson(value: JsonObject): Theme {
+            val name = value["name"]?.jsonPrimitive?.content ?: "<in-memory>"
             val mode =
                 when (value["colorMode"]?.jsonPrimitive?.content) {
                     ThemeColorMode.COLOR_256.wireName -> ThemeColorMode.COLOR_256
@@ -165,13 +169,20 @@ internal class Theme internal constructor(
             require(BACKGROUND_COLOR_TOKENS.all(background::containsKey)) {
                 "In-memory theme is missing background color tokens"
             }
+            val defaultText = if (name == "light") "#000000" else "#e5e5e7"
+            val cssColors =
+                (foreground + background).mapValues { (_, ansi) ->
+                    ansiColorToCss(ansi) ?: defaultText
+                }
             return Theme(
-                name = value["name"]?.jsonPrimitive?.content ?: "<in-memory>",
+                name = name,
                 sourcePath = value["path"]?.jsonPrimitive?.content?.let(Path::of),
                 sourceInfo = null,
                 colorMode = mode,
                 foreground = foreground,
                 background = background,
+                cssColors = cssColors,
+                exportColors = emptyMap(),
             )
         }
     }
@@ -402,6 +413,18 @@ internal fun createThemeRegistry(
     return ThemeRegistry(loaded, builtins, settings, requested)
 }
 
+internal fun createBuiltinTheme(
+    name: String,
+    colorMode: ThemeColorMode = ThemeColorMode.TRUECOLOR,
+): Theme =
+    createTheme(
+        value = readBuiltinThemeJson(name),
+        label = name,
+        mode = colorMode,
+        sourcePath = null,
+        sourceInfo = null,
+    )
+
 internal fun availableThemes(customThemes: List<Theme>): List<ThemeInfo> {
     val seen = mutableSetOf<String>()
     val result = mutableListOf<ThemeInfo>()
@@ -533,9 +556,12 @@ private fun createTheme(
                 missing.sorted().joinToString("\n") { "  - $it" },
         )
     }
+    val parsedExport =
+        value["export"]?.jsonObject?.mapValues { (key, color) ->
+            parseColorValue(color, "/export/$key")
+        }.orEmpty()
     value["export"]?.jsonObject?.let { export ->
         validateKeys(export, EXPORT_COLOR_TOKENS, "theme \"$label\" export")
-        export.forEach { (key, color) -> parseColorValue(color, "/export/$key") }
     }
     val parsed =
         colorsObject.mapValues { (key, color) ->
@@ -548,6 +574,15 @@ private fun createTheme(
         }
     val foreground = linkedMapOf<String, String>()
     val background = linkedMapOf<String, String>()
+    val defaultText = if (name == "light") "#000000" else "#e5e5e7"
+    val cssColors =
+        resolved.mapValues { (_, color) ->
+            resolvedColorToCss(color, defaultText)
+        }
+    val exportColors =
+        parsedExport.mapValues { (_, color) ->
+            resolvedExportColorToCss(resolveColor(color, vars))
+        }
     resolved.forEach { (key, color) ->
         if (key in BACKGROUND_COLOR_TOKENS) {
             background[key] = backgroundAnsi(color, mode)
@@ -555,7 +590,16 @@ private fun createTheme(
             foreground[key] = foregroundAnsi(color, mode)
         }
     }
-    return Theme(name, sourcePath, sourceInfo, mode, foreground, background)
+    return Theme(
+        name = name,
+        sourcePath = sourcePath,
+        sourceInfo = sourceInfo,
+        colorMode = mode,
+        foreground = foreground,
+        background = background,
+        cssColors = cssColors,
+        exportColors = exportColors,
+    )
 }
 
 private fun validateKeys(
@@ -621,8 +665,53 @@ private fun parseHex(value: String): ResolvedColor.Rgb {
         hex.substring(0, 2).toInt(16),
         hex.substring(2, 4).toInt(16),
         hex.substring(4, 6).toInt(16),
+        value,
     )
 }
+
+private fun resolvedColorToCss(
+    color: ResolvedColor,
+    defaultText: String,
+): String =
+    when (color) {
+        ResolvedColor.TerminalDefault -> defaultText
+        is ResolvedColor.Index -> ansi256ToHex(color.value)
+        is ResolvedColor.Rgb -> color.css
+    }
+
+private fun resolvedExportColorToCss(color: ResolvedColor): String? =
+    when (color) {
+        ResolvedColor.TerminalDefault -> null
+        is ResolvedColor.Index -> ansi256ToHex(color.value)
+        is ResolvedColor.Rgb -> color.css
+    }
+
+private fun ansiColorToCss(value: String): String? {
+    val rgb = ANSI_RGB.matchEntire(value)
+    if (rgb != null) {
+        return rgbToHex(
+            rgb.groupValues[1].toInt(),
+            rgb.groupValues[2].toInt(),
+            rgb.groupValues[3].toInt(),
+        )
+    }
+    val index = ANSI_INDEX.matchEntire(value)
+    if (index != null) {
+        return ansi256ToHex(index.groupValues[1].toInt())
+    }
+    return null
+}
+
+private fun ansi256ToHex(index: Int): String {
+    val (red, green, blue) = ansi256ToRgb(index)
+    return rgbToHex(red, green, blue)
+}
+
+private fun rgbToHex(
+    red: Int,
+    green: Int,
+    blue: Int,
+): String = "#%02x%02x%02x".format(red, green, blue)
 
 private fun foregroundAnsi(
     color: ResolvedColor,
@@ -815,5 +904,7 @@ private val ALL_COLOR_TOKENS = FOREGROUND_COLOR_TOKENS + BACKGROUND_COLOR_TOKENS
 private val REQUIRED_COLOR_TOKENS = ALL_COLOR_TOKENS - "thinkingMax"
 private val EXPORT_COLOR_TOKENS = setOf("pageBg", "cardBg", "infoBg")
 private val HEX_COLOR = Regex("^#([0-9a-fA-F]{6})$")
+private val ANSI_RGB = Regex("^\\u001B\\[(?:38|48);2;(\\d+);(\\d+);(\\d+)m$")
+private val ANSI_INDEX = Regex("^\\u001B\\[(?:38|48);5;(\\d+)m$")
 private val COLOR_CUBE_VALUES = listOf(0, 95, 135, 175, 215, 255)
 private val GRAY_VALUES = List(24) { index -> 8 + index * 10 }

@@ -79,6 +79,8 @@ internal data class ExtensionToolRegistration(
     val executionMode: ToolExecutionMode?,
     val promptSnippet: String?,
     val promptGuidelines: List<String>,
+    val hasRenderCall: Boolean,
+    val hasRenderResult: Boolean,
     val extensionPath: Path,
     val sourceInfo: ResourceSourceInfo,
 )
@@ -365,6 +367,34 @@ internal class ExtensionHost private constructor(
                 put("type", "invoke_command")
                 put("name", name)
                 put("args", args)
+                put("context", context)
+            },
+        )
+
+    fun invokeToolRenderer(
+        toolId: String,
+        phase: String,
+        toolCallId: String,
+        args: JsonObject? = null,
+        content: JsonArray? = null,
+        details: JsonElement? = null,
+        isError: Boolean = false,
+        expanded: Boolean = false,
+        width: Int = 100,
+        context: JsonObject,
+    ): ExtensionInvocation =
+        invoke(
+            buildJsonObject {
+                put("type", "invoke_tool_renderer")
+                put("toolId", toolId)
+                put("phase", phase)
+                put("toolCallId", toolCallId)
+                args?.let { put("args", it) }
+                content?.let { put("content", it) }
+                details?.let { put("details", it) }
+                put("isError", isError)
+                put("expanded", expanded)
+                put("width", width)
                 put("context", context)
             },
         )
@@ -1031,6 +1061,8 @@ internal class ExtensionHost private constructor(
                             },
                         promptSnippet = item.string("promptSnippet"),
                         promptGuidelines = item.stringList("promptGuidelines"),
+                        hasRenderCall = item["hasRenderCall"]?.jsonPrimitive?.booleanOrNull ?: false,
+                        hasRenderResult = item["hasRenderResult"]?.jsonPrimitive?.booleanOrNull ?: false,
                         extensionPath = path,
                         sourceInfo = sourceInfo(path),
                     )

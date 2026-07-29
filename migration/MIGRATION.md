@@ -86,7 +86,7 @@ features outside that slice remain migration work.
 | Interactive terminal UI | Partial | Installed JLine process enters a PTY; themed headers/prompts/stream output/tool labels, startup Context paths, initial `@text-file`/`@image` prompts, `/help`, session/model/thinking commands, shell commands, extension surfaces, focused custom components, basic extension editor input, and `/exit` are covered; full-screen layout, overlays, custom editor replacement, raw terminal input, autocomplete composition, and transcript parity are not ported |
 | TUI utilities | Functional slice | ANSI-aware text layout, grapheme/CJK/emoji width, colors, key parsing, keybindings, word navigation, kill ring, and undo tests |
 | Compaction | Functional slice | Token estimation, safe cut points, split turns, tool-result truncation, standalone summaries, events, persistence, and reload tests |
-| HTML export | Partial | Standalone export, strict escaping, whitespace, and validated image data are covered; upstream theme/Markdown/highlighting parity remains |
+| HTML export | Complete | Exact upstream standalone HTML/CSS/JavaScript, vendored Markdown and syntax-highlighting runtimes, recursive theme variables and export colors, session tree/branch/label/filter/statistics views, extension and built-in tool renderers, strict escaping, safe links, whitespace, and validated image data have byte-for-byte and browser-runtime parity evidence |
 | SQLite storage | Functional slice | Schema migration, session CRUD, ordering, filtering, stats, and codec tests |
 | Server/RPC | Functional slice | Supervisor lifecycle, Unix socket request/response, streaming events, persistence, piped EOF half-close, extension UI request/response routing, user bash persistence, concurrent local/extension bash cancellation, and stale Agent subscription ownership tests |
 
@@ -95,7 +95,7 @@ features outside that slice remain migration work.
 Verified on July 29, 2026 against source commit
 `d7b02636a0c7e8e615d0cff70679d18d2ff59573`:
 
-- `./gradlew clean test installDist`: passed, 376 tests, 0 failures, 0 errors,
+- `./gradlew clean test installDist`: passed, 378 tests, 0 failures, 0 errors,
   and 0 skipped.
 - `./migration/oracle/compare-cli-help.sh`: passed with byte-for-byte CLI help
   parity.
@@ -140,10 +140,27 @@ Verified on July 29, 2026 against source commit
 - `./migration/oracle/compare-extension-theme.sh`: passed for named and
   in-memory theme switching, failed-name fallback, persistence, and immediate
   persistent-surface rerendering.
+- `./migration/oracle/compare-html-export.sh`: passed with byte-identical
+  standalone default-theme output and byte-identical custom-theme output,
+  including the upstream templates, Markdown/highlighting runtimes, session
+  tree data, shortcut text, JSON serialization, and export colors. The
+  custom-theme SHA-256 is
+  `829d2e917ae7faf3e505420bab0ecf837ac59f693983f3c9eb66edd64dc11cd4`.
+- `./migration/oracle/compare-html-tool-renderer.sh`: passed for extension
+  `renderCall` and `renderResult` behavior, including collapsed and expanded
+  output.
+- `./migration/oracle/compare-html-builtin-tool-renderer.sh`: passed for
+  upstream-compatible `find` and `grep` result rendering.
 - Provider payload/stream parity passed with Qwen Token Plan reasoning controls
   and provider-native `rawStopReason` terminal fields.
-- All 23 deterministic migration oracles passed against the same source
+- All 26 deterministic migration oracles passed against the same source
   baseline.
+- Installed `pi --export` output was byte-identical to upstream with SHA-256
+  `3613ceef433cc31040a5413427db35c4fd5b1d480aab0988b1613f634809bcb6`.
+- A Playwright browser smoke rendered the Markdown heading, two highlighted
+  keyword spans, session tree, and tool output; retained the allowed HTTPS
+  link; rejected the `javascript:` link; applied custom accent `#123456` and
+  body background `rgb(17, 34, 51)`; and reported no console or page errors.
 - The installed JLine PTY loaded a custom 256-color theme, emitted its
   `accent=201` ANSI sequence, and listed `SYSTEM.md`, `APPEND_SYSTEM.md`, then
   `AGENTS.md` in startup Context order.
@@ -433,9 +450,9 @@ Verified on July 29, 2026 against source commit
   the source worktree remained clean, and an isolated rerun of the whole file
   passed all 8 tests.
 - `./migration/audit-migration.sh sync` passes through `d7b02636`.
-  `./migration/audit-migration.sh full` intentionally remains nonzero on six
+  `./migration/audit-migration.sh full` intentionally remains nonzero on five
   partial areas: CLI workflows, package management, extension runtime,
-  interactive terminal, HTML export, and RPC/server parity.
+  interactive terminal, and RPC/server parity.
 - The next July 29 synchronization pass reviewed every source commit through
   `cced6a21da273b26ee4a23a803680614bbe8dd1e`. Kotlin now avoids duplicate
   context files in nested linked worktrees and accepts nullable array schemas
@@ -560,8 +577,6 @@ Verified on July 29, 2026 against source commit
   terminal transcripts at multiple widths.
 - Close CLI behavior gaps for options that are parsed or documented but do not
   yet have complete runtime behavior.
-- Match upstream HTML export theming, Markdown rendering, and syntax
-  highlighting.
 - Expand process-level server compatibility and restart/recovery coverage.
 
 ## Completeness audit

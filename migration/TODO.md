@@ -101,17 +101,16 @@ Last reviewed: July 29, 2026
   - [x] Port Qwen Token Plan reasoning controls
   - [x] Show system prompt file sources in startup Context output
 
-The latest implementation stage completes the theme subsystem and synchronizes
-through `d7b02636`. Kotlin now parses upstream-compatible themes, resolves
-variables and fallbacks, applies truecolor or 256-color ANSI output, composes
-project/user/package/extension sources, persists active settings, and exposes
-named or in-memory themes to extensions with persistent-surface rerendering.
-Provider terminal messages retain raw stop reasons, Qwen Token Plan uses the
-correct thinking controls, and startup Context output includes system prompt
-file sources. `./gradlew clean test installDist` passes with 376 tests, all 23
-deterministic migration oracles pass, the installed PTY loads a custom theme,
-and the installed server lifecycle smoke passes. The full audit remains
-nonzero on the six partial areas listed below.
+The latest implementation stage completes HTML export parity through
+`d7b02636`. Kotlin now emits the upstream standalone application with the exact
+HTML, CSS, JavaScript, Markdown, and syntax-highlighting resources; reproduces
+theme variables and export colors; renders the session tree, branches, labels,
+filters, statistics, messages, and tool output; and supports extension plus
+built-in `find`/`grep` tool renderers. `./gradlew clean test installDist` passes
+with 378 tests, all 26 deterministic migration oracles pass, installed
+`pi --export` is byte-identical to upstream, and a Playwright smoke verifies
+rendering, highlighting, theme colors, links, and XSS rejection without browser
+errors. The full audit remains nonzero on the five partial areas listed below.
 
 ## Remaining
 
@@ -218,9 +217,9 @@ nonzero on the six partial areas listed below.
 
 ### 7. HTML export
 
-- [ ] Theme parity
-- [ ] Markdown rendering parity
-- [ ] Syntax highlighting parity
+- [x] Theme parity
+- [x] Markdown rendering parity
+- [x] Syntax highlighting parity
 
 ### 8. RPC and server
 
@@ -232,8 +231,32 @@ nonzero on the six partial areas listed below.
 ## Next stage
 
 Complete the remaining interactive extension integration together with the
-full-screen terminal model, then continue the CLI/package, HTML export, and
-RPC/server gaps as separately audited slices.
+full-screen terminal model, then continue the CLI/package and RPC/server gaps
+as separately audited slices.
+
+Evidence for the completed HTML export stage:
+
+- [x] Exact upstream standalone HTML, CSS, JavaScript, `marked`, and
+      `highlight.js` resources
+- [x] Recursive theme variables, export colors, truecolor, and 256-color
+      conversion
+- [x] Session tree, branches, labels, filters, statistics, Markdown, syntax
+      highlighting, tool output, and XSS-safe links
+- [x] Extension `renderCall`/`renderResult` output in collapsed and expanded
+      states
+- [x] Upstream-compatible built-in `find` and `grep` tool rendering
+- [x] `./gradlew clean test installDist` with 378 tests and no failures,
+      errors, or skips
+- [x] All 26 deterministic migration oracles, including the three HTML export
+      graders
+- [x] Installed `pi --export` byte-identical to upstream with SHA-256
+      `3613ceef433cc31040a5413427db35c4fd5b1d480aab0988b1613f634809bcb6`
+- [x] Playwright smoke for Markdown, syntax highlighting, theme colors, session
+      navigation, tool output, allowed HTTPS links, rejected `javascript:`
+      links, and zero console/page errors
+- [x] `./migration/audit-migration.sh sync` through `d7b02636`
+- [x] `./migration/audit-migration.sh full` confirms exactly five remaining
+      partial areas
 
 Evidence for the completed theme and upstream synchronization stage:
 

@@ -107,3 +107,26 @@ tasks.register<JavaExec>("extensionThemeOracle") {
     mainClass = "works.earendil.pi.codingagent.ExtensionThemeOracleKt"
     args(rootProject.file("migration/fixtures/extension-theme.ts").absolutePath)
 }
+
+tasks.register<JavaExec>("htmlExportOracle") {
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass = "works.earendil.pi.codingagent.HtmlExportOracleKt"
+    args(
+        rootProject.file("migration/fixtures/html-export/session.jsonl").absolutePath,
+        rootProject.file("migration/fixtures/html-export/oracle-theme.json").absolutePath,
+    )
+}
+
+tasks.register<JavaExec>("htmlToolRendererOracle") {
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass = "works.earendil.pi.codingagent.HtmlToolRendererOracleKt"
+    args(rootProject.file("migration/fixtures/html-export/extension-tool.ts").absolutePath)
+}
+
+tasks.register<JavaExec>("htmlBuiltinToolRendererOracle") {
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass = "works.earendil.pi.codingagent.HtmlBuiltinToolRendererOracleKt"
+}
