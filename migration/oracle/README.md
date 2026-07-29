@@ -110,8 +110,8 @@ selection, interactive trust choices, UI timeout/EOF/shutdown behavior, server
 stream routing, bash and provider cancellation, arbitrary top-level OAuth
 credential fields, native auth `env`/`fileExists` correlation, model-store
 `read`/`write`/`delete`, immediate and background active-tool refresh,
-background provider discovery, host lifecycle cleanup, and invalid
-re-registration rollback.
+background provider discovery, request-scoped blocking TUI timeout/AbortSignal
+interruption, host lifecycle cleanup, and invalid re-registration rollback.
 
 The jiti compatibility comparison loads isolated extensions through the
 upstream loader and the Kotlin distribution's vendored jiti 2.7.0 runtime. It

@@ -79,7 +79,7 @@ features outside that slice remain migration work.
 | CLI argument contract | Partial | Parser tests and byte-for-byte `--help` oracle against the pinned TypeScript CLI; provider-prefixed and slash-containing model IDs, thinking suffixes, package install/remove/update/list, and interactive `/login`/`/logout` for OAuth providers are covered |
 | Context, skill, and prompt resources | Functional slice | Global and ancestor `AGENTS.md`/`CLAUDE.md`, nested linked-worktree context deduplication, `SYSTEM.md`/`APPEND_SYSTEM.md`, recursive `.pi`/`.agents` skills, prompt templates, YAML frontmatter, collisions, manual skill commands, template arguments, trusted project precedence, persisted trust inheritance, CLI/RPC commands, and interactive reload have an independent resource-loading oracle |
 | Package settings and resources | Functional slice | User/project `settings.json`, local/npm/git package identities and managed paths, install/remove/package-update/list commands, package manifests, autoload filters, top-level resource overrides, project precedence, package-sourced skills/prompts, source metadata, and failed new-checkout cleanup have an independent package-resources oracle and package tests; config TUI, self-update, legacy lookup, available-update checks, and remaining recovery paths remain |
-| JavaScript/TypeScript extensions | Partial | A bundled Node 22 JSONL host ships the official jiti 2.7.0 static runtime and MIT license. It loads `.js`/`.cjs`/`.mjs`/`.ts`/`.cts`/`.mts`/`.tsx`, extensionless imports, directory indexes, local TypeScript and extension-owned bare-package dependencies, ESM/CommonJS interop, and common pi/TypeBox virtual modules with `moduleCache: false`; JSX stays disabled like upstream by default. Tools, commands, flags, package discovery, lifecycle/tool hooks, command actions, project trust, resource composition, serializable and direct native provider registration, request-bound and unsolicited background registration refresh, live `ctx.scopedModels`, awaited `select`/`confirm`/`input`/`editor` dialogs, RPC and server UI responses, `user_bash` direct results, function-valued `BashOperations`, native `stream`/`streamSimple`, legacy extension OAuth, native API-key `login`/`check`/`resolve`, function-valued `refreshModels(context.store)`, cancellation/lifecycle cleanup, and fire-and-forget UI events run through CLI/RPC/interactive paths with independent extension-runtime and jiti compatibility oracles. Blocking TUI timeout interruption, shortcuts/renderers, and custom UI components remain |
+| JavaScript/TypeScript extensions | Partial | A bundled Node 22 JSONL host ships the official jiti 2.7.0 static runtime and MIT license. It loads `.js`/`.cjs`/`.mjs`/`.ts`/`.cts`/`.mts`/`.tsx`, extensionless imports, directory indexes, local TypeScript and extension-owned bare-package dependencies, ESM/CommonJS interop, and common pi/TypeBox virtual modules with `moduleCache: false`; JSX stays disabled like upstream by default. Tools, commands, flags, package discovery, lifecycle/tool hooks, command actions, project trust, resource composition, serializable and direct native provider registration, request-bound and unsolicited background registration refresh, live `ctx.scopedModels`, awaited `select`/`confirm`/`input`/`editor` dialogs with request-scoped blocking TUI timeout/AbortSignal interruption, RPC and server UI responses, `user_bash` direct results, function-valued `BashOperations`, native `stream`/`streamSimple`, legacy extension OAuth, native API-key `login`/`check`/`resolve`, function-valued `refreshModels(context.store)`, cancellation/lifecycle cleanup, and fire-and-forget UI events run through CLI/RPC/interactive paths with independent extension-runtime and jiti compatibility oracles. Shortcuts/renderers and custom UI components remain |
 | Session JSONL compatibility | Functional slice | Independent TypeScript/Kotlin JSONL parity covers current/v1/v2 parsing, rewrite, migration, branching, compaction, model/thinking state, custom/tool/bash messages, and explicit empty-leaf context |
 | Built-in coding tools | Functional slice | Read, write, edit, bash, grep, find, and ls behavior tests with path and truncation handling |
 | Interactive terminal UI | Partial | Installed JLine process enters a PTY; initial `@text-file`/`@image` prompts, `/help`, session/model/thinking commands, shell commands, and `/exit` are covered; full-screen upstream UI is not ported |
@@ -94,7 +94,7 @@ features outside that slice remain migration work.
 Verified on July 29, 2026 against source commit
 `4f0437e2d58d651dd934119ecabea2893975f62f`:
 
-- `./gradlew clean test installDist`: passed, 355 tests, 0 failures, 0 errors,
+- `./gradlew clean test installDist`: passed, 356 tests, 0 failures, 0 errors,
   and 0 skipped.
 - `./migration/oracle/compare-cli-help.sh`: passed with byte-for-byte CLI help
   parity.
@@ -483,12 +483,22 @@ Verified on July 29, 2026 against source commit
 - Installed `pi --mode rpc` and `pi-server` each discovered all eight supported
   jiti fixture commands. Server validation also covered spawn, status, stop,
   and missing-instance read-back.
+- Direct TUI extension handlers now run on request-scoped workers while the
+  host response loop remains free to receive `ui_cancel`. Timeout and explicit
+  AbortSignal cancellation interrupt the active JLine reader, wait for dialog
+  cleanup, and suppress late responses.
+- The installed JLine PTY ran `/cancel-dialogs`, cancelled a blocking input on
+  timeout and a blocking selector on `AbortController.abort()`, printed
+  `dialog-cancelled:timeout|aborted`, restored the main prompt, and exited
+  normally.
+- Installed RPC JSONL and server `rpc-stream` emitted the input, select, and
+  notification events without client dialog responses, completed the slash
+  command, and retained clean EOF/status/stop behavior.
 
 ## Remaining major gaps
 
-- Finish extension parity beyond the migrated Node host: interrupt blocking
-  TUI dialogs on timeout/AbortSignal, then add shortcuts and custom
-  renderers/components. Theme
+- Finish extension parity beyond the migrated Node host: add shortcuts and
+  custom renderers/components. Theme
   parsing/rendering, the package config selector, self-update, and remaining
   package recovery paths also remain. Core package
   manifests/filters/settings, skills, prompt templates, persisted trust

@@ -7,7 +7,9 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -64,6 +66,8 @@ import works.earendil.pi.codingagent.session.encodeEntry
 import works.earendil.pi.codingagent.tools.truncateTail
 import kotlin.math.max
 
+private const val DIRECT_EXTENSION_UI_CANCEL_WAIT_MS = 1_000L
+
 data class RpcRuntimeOptions(
     val cwd: Path = Path.of("").toAbsolutePath().normalize(),
     val agentDir: Path = defaultAgentDirectory(),
@@ -96,6 +100,55 @@ data class RpcRuntimeOptions(
     val thinking: works.earendil.pi.codingagent.AgentThinkingLevel? = null,
     val projectTrustPrompt: ((Path, List<String>) -> Int?)? = null,
     val extensionUiHandler: ((JsonObject) -> JsonObject)? = null,
+    val cancellableExtensionUiHandler: CancellableExtensionUiHandler? = null,
+)
+
+fun interface CancellableExtensionUiHandler {
+    fun handle(
+        request: JsonObject,
+        cancellation: ExtensionUiCancellation,
+    ): JsonObject
+}
+
+class ExtensionUiCancellation internal constructor() {
+    private val cancelled = AtomicBoolean(false)
+    private val callbacks = CopyOnWriteArrayList<() -> Unit>()
+
+    val isCancelled: Boolean
+        get() = cancelled.get()
+
+    fun onCancellation(callback: () -> Unit): AutoCloseable {
+        val invoked = AtomicBoolean(false)
+        val wrapped = {
+            if (invoked.compareAndSet(false, true)) {
+                callback()
+            }
+        }
+        if (cancelled.get()) {
+            wrapped()
+            return AutoCloseable {}
+        }
+        callbacks += wrapped
+        if (cancelled.get() && callbacks.remove(wrapped)) {
+            wrapped()
+        }
+        return AutoCloseable { callbacks.remove(wrapped) }
+    }
+
+    internal fun cancel() {
+        if (!cancelled.compareAndSet(false, true)) {
+            return
+        }
+        callbacks.toList().forEach { callback ->
+            runCatching(callback)
+        }
+        callbacks.clear()
+    }
+}
+
+private data class PendingDirectExtensionUiRequest(
+    val cancellation: ExtensionUiCancellation = ExtensionUiCancellation(),
+    val finished: CountDownLatch = CountDownLatch(1),
 )
 
 class RpcRuntime(
@@ -115,6 +168,7 @@ class RpcRuntime(
     private val activeBashes = ConcurrentHashMap.newKeySet<RunningBash>()
     private val pendingBashMessages = mutableListOf<BashExecutionMessage>()
     private val pendingExtensionUiRequests = ConcurrentHashMap<String, (JsonObject) -> Unit>()
+    private val pendingDirectExtensionUiRequests = ConcurrentHashMap<String, PendingDirectExtensionUiRequest>()
     private val closing = AtomicBoolean(false)
     private val extensionActionLock = Any()
     private var promptResources: PromptResources? = null
@@ -148,7 +202,7 @@ class RpcRuntime(
         get() = activeBashes.size
 
     internal val pendingExtensionUiCount: Int
-        get() = pendingExtensionUiRequests.size
+        get() = pendingExtensionUiRequests.size + pendingDirectExtensionUiRequests.size
 
     suspend fun handleLine(line: String): JsonObject? {
         val command =
@@ -1034,7 +1088,7 @@ class RpcRuntime(
                 },
                 onBootstrapActions = ::applyBootstrapExtensionActions,
                 onUiRequest = ::handleHostedUiRequest,
-                onUiCancelled = { requestId -> pendingExtensionUiRequests.remove(requestId) },
+                onUiCancelled = ::handleHostedUiCancellation,
                 onProjectTrustPrompt =
                     options.projectTrustPrompt?.let { prompt ->
                         { path, choices ->
@@ -1561,7 +1615,14 @@ class RpcRuntime(
                 respond(buildJsonObject { put("cancelled", true) })
                 return
             }
-        if (closing.get() || (initializingExtensions && listeners.isEmpty() && options.extensionUiHandler == null)) {
+        if (closing.get() ||
+            (
+                initializingExtensions &&
+                    listeners.isEmpty() &&
+                    options.extensionUiHandler == null &&
+                    options.cancellableExtensionUiHandler == null
+            )
+        ) {
             respond(buildJsonObject { put("cancelled", true) })
             return
         }
@@ -1575,12 +1636,28 @@ class RpcRuntime(
                     }
                 }
             }
-        val directHandler = options.extensionUiHandler
+        val directHandler =
+            options.cancellableExtensionUiHandler
+                ?: options.extensionUiHandler?.let { handler ->
+                    CancellableExtensionUiHandler { directRequest, _ -> handler(directRequest) }
+                }
         if (directHandler != null) {
-            val response =
-                runCatching { directHandler(outward) }
-                    .getOrElse { buildJsonObject { put("cancelled", true) } }
-            respond(response)
+            val pending = PendingDirectExtensionUiRequest()
+            pendingDirectExtensionUiRequests.put(requestId, pending)?.let { previous ->
+                previous.cancellation.cancel()
+            }
+            scope.launch(Dispatchers.IO) {
+                try {
+                    val response =
+                        runCatching { directHandler.handle(outward, pending.cancellation) }
+                            .getOrElse { buildJsonObject { put("cancelled", true) } }
+                    if (pendingDirectExtensionUiRequests.remove(requestId, pending)) {
+                        respond(response)
+                    }
+                } finally {
+                    pending.finished.countDown()
+                }
+            }
             return
         }
         pendingExtensionUiRequests.put(requestId, respond)?.invoke(
@@ -1594,6 +1671,19 @@ class RpcRuntime(
         pendingExtensionUiRequests.remove(requestId)?.invoke(command)
     }
 
+    private fun handleHostedUiCancellation(requestId: String) {
+        pendingExtensionUiRequests.remove(requestId)
+        cancelDirectExtensionUiRequest(requestId)
+    }
+
+    private fun cancelDirectExtensionUiRequest(requestId: String) {
+        val pending = pendingDirectExtensionUiRequests.remove(requestId) ?: return
+        pending.cancellation.cancel()
+        runCatching {
+            pending.finished.await(DIRECT_EXTENSION_UI_CANCEL_WAIT_MS, TimeUnit.MILLISECONDS)
+        }
+    }
+
     private fun cancelPendingExtensionUiRequests() {
         val pending = pendingExtensionUiRequests.values.toList()
         pendingExtensionUiRequests.clear()
@@ -1602,6 +1692,7 @@ class RpcRuntime(
                 respond(buildJsonObject { put("cancelled", true) })
             }
         }
+        pendingDirectExtensionUiRequests.keys.toList().forEach(::cancelDirectExtensionUiRequest)
     }
 
     private fun detachAgent() {

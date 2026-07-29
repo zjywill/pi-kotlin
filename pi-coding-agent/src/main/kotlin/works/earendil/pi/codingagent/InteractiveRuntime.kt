@@ -38,6 +38,11 @@ import works.earendil.pi.codingagent.session.SessionManager
 interface InteractiveConsole : AutoCloseable {
     fun readLine(prompt: String): String?
 
+    fun readLine(
+        prompt: String,
+        cancellation: ExtensionUiCancellation,
+    ): String? = readLine(prompt)
+
     fun print(text: String)
 
     fun println(text: String = "")
@@ -127,8 +132,8 @@ class InteractiveRuntime(
                         projectTrustPrompt = { projectPath, labels ->
                             selectProjectTrust(projectPath, labels, console)
                         },
-                        extensionUiHandler = { request ->
-                            handleExtensionUiDialog(request, console)
+                        cancellableExtensionUiHandler = CancellableExtensionUiHandler { request, cancellation ->
+                            handleExtensionUiDialog(request, console, cancellation)
                         },
                     ),
                 )
@@ -356,16 +361,17 @@ class InteractiveRuntime(
     private fun handleExtensionUiDialog(
         request: JsonObject,
         console: InteractiveConsole,
+        cancellation: ExtensionUiCancellation,
     ): JsonObject {
         return try {
             when (request.string("method")) {
-                "select" -> handleExtensionSelect(request, console)
-                "confirm" -> handleExtensionConfirm(request, console)
+                "select" -> handleExtensionSelect(request, console, cancellation)
+                "confirm" -> handleExtensionConfirm(request, console, cancellation)
 
                 "input" -> {
                     request.string("title")?.let(console::println)
                     val prompt = request.string("placeholder")?.let { "$it: " } ?: "> "
-                    val value = console.readLine(prompt) ?: return cancelledUiResponse()
+                    val value = console.readLine(prompt, cancellation) ?: return cancelledUiResponse()
                     buildJsonObject { put("value", value) }
                 }
 
@@ -375,7 +381,7 @@ class InteractiveRuntime(
                     if (!prefill.isNullOrEmpty()) {
                         console.println(prefill)
                     }
-                    val value = console.readLine("Edit: ") ?: return cancelledUiResponse()
+                    val value = console.readLine("Edit: ", cancellation) ?: return cancelledUiResponse()
                     buildJsonObject { put("value", value.ifEmpty { prefill.orEmpty() }) }
                 }
 
@@ -391,6 +397,7 @@ class InteractiveRuntime(
     private fun handleExtensionSelect(
         request: JsonObject,
         console: InteractiveConsole,
+        cancellation: ExtensionUiCancellation,
     ): JsonObject {
         val options =
             request["options"]
@@ -406,7 +413,7 @@ class InteractiveRuntime(
         }
         while (true) {
             val value =
-                console.readLine("Select 1-${options.size} (Enter cancels): ")
+                console.readLine("Select 1-${options.size} (Enter cancels): ", cancellation)
                     ?.trim()
                     ?: return cancelledUiResponse()
             if (value.isEmpty()) {
@@ -427,11 +434,12 @@ class InteractiveRuntime(
     private fun handleExtensionConfirm(
         request: JsonObject,
         console: InteractiveConsole,
+        cancellation: ExtensionUiCancellation,
     ): JsonObject {
         request.string("title")?.let(console::println)
         request.string("message")?.let(console::println)
         while (true) {
-            when (console.readLine("Confirm [y/N]: ")?.trim()?.lowercase()) {
+            when (console.readLine("Confirm [y/N]: ", cancellation)?.trim()?.lowercase()) {
                 null -> return cancelledUiResponse()
                 "", "n", "no" -> return buildJsonObject { put("confirmed", false) }
                 "y", "yes" -> return buildJsonObject { put("confirmed", true) }
@@ -872,12 +880,35 @@ private class JLineConsole(
             .variable(LineReader.HISTORY_FILE, historyFile())
             .build()
 
-    override fun readLine(prompt: String): String? =
-        try {
+    override fun readLine(
+        prompt: String,
+    ): String? = readLineInternal(prompt, cancellation = null)
+
+    override fun readLine(
+        prompt: String,
+        cancellation: ExtensionUiCancellation,
+    ): String? = readLineInternal(prompt, cancellation)
+
+    private fun readLineInternal(
+        prompt: String,
+        cancellation: ExtensionUiCancellation?,
+    ): String? {
+        if (cancellation?.isCancelled == true) {
+            return null
+        }
+        val readingThread = Thread.currentThread()
+        val registration = cancellation?.onCancellation(readingThread::interrupt)
+        return try {
             reader.readLine(prompt)
         } catch (_: EndOfFileException) {
             null
+        } finally {
+            registration?.close()
+            if (cancellation?.isCancelled == true) {
+                Thread.interrupted()
+            }
         }
+    }
 
     override fun print(text: String) {
         output.print(text)

@@ -66,6 +66,7 @@ Last reviewed: July 29, 2026
   - [x] Function-valued `refreshModels(context.store)` with provider-scoped
         `read`, `write`, and `delete`
   - [x] Official jiti 2.7 TypeScript transpilation and module loading
+  - [x] Blocking TUI dialog interruption on timeout and `AbortSignal`
   - [x] Unsolicited background registration updates after the originating
         extension invocation has returned
   - [x] Provider cancellation and extension-host lifecycle cleanup
@@ -79,19 +80,17 @@ Last reviewed: July 29, 2026
   - [x] Accept nullable array schemas with `items`
   - [x] Classify the AgentHarness v2 design document as documentation-only
 
-The latest implementation stage replaces the Node type-stripping loader with
-the official jiti 2.7.0 static runtime, bundled with its MIT license in the JVM
-distribution. Extensions load through `jiti.import(..., { default: true })`
-with `moduleCache: false`; pi and TypeBox namespaces remain available through
-jiti `virtualModules`. An independent matrix covers extensionless imports,
-directory indexes, ESM/CommonJS interop, `require()`, `.mts`/`.cts`/`.tsx`,
-local TypeScript dependencies, extension-owned bare packages, and virtual
-imports. JSX remains disabled exactly as in the upstream loader's default
-configuration. `./gradlew clean test installDist` passes with 355 tests, all 18
-deterministic migration oracles pass, and installed CLI/server distributions
-discover all eight supported fixture commands. The sync audit reaches
-`4f0437e2`; the full audit remains nonzero on the seven partial areas listed
-below.
+The latest implementation stage makes direct TUI extension dialogs
+request-scoped and cancellable. The host now handles each dialog on a separate
+worker so its response loop can continue receiving Node `ui_cancel` messages.
+Timeout and explicit `AbortSignal` cancellation remove the matching pending
+request, notify an `ExtensionUiCancellation`, interrupt the active JLine
+`readLine()` thread, wait for cleanup, and suppress late UI responses. The same
+fixture verifies timeout and abort behavior through unit tests, an installed
+JLine PTY, installed RPC JSONL, and installed server `rpc-stream`.
+`./gradlew clean test installDist` passes with 356 tests and all 18
+deterministic migration oracles pass. The sync audit reaches `4f0437e2`; the
+full audit remains nonzero on the seven partial areas listed below.
 
 ## Remaining
 
@@ -151,7 +150,7 @@ below.
         deadlocks
   - [x] Define RPC cancellation, timeout, EOF, shutdown, and startup behavior
   - [x] Compare awaited results with the TypeScript extension runtime
-- [ ] Interrupt a blocking TUI dialog when its extension timeout or
+- [x] Interrupt a blocking TUI dialog when its extension timeout or
       `AbortSignal` fires
 - [x] jiti-complete TypeScript transpilation and module-loading compatibility
 - [x] Direct registration of a complete native `Provider`
@@ -192,30 +191,29 @@ below.
 
 ## Next stage
 
-Interrupt a blocking TUI extension dialog when its timeout or `AbortSignal`
-fires. Keep shortcuts/renderers/custom UI and the other six global partial
-areas as separately audited slices.
+Implement extension shortcuts end to end: registration metadata, conflict
+handling, TUI dispatch, and installed PTY behavior. Keep renderers/custom UI
+and the other six global partial areas as separately audited slices.
 
-Evidence for the completed jiti compatibility stage:
+Evidence for the completed blocking TUI dialog interruption stage:
 
-- [x] Vendored official jiti 2.7.0 static runtime and MIT license
-- [x] `jiti.import(..., { default: true })` with `moduleCache: false`
-- [x] pi and TypeBox namespace injection through jiti `virtualModules`
-- [x] Extensionless local imports and directory/index resolution
-- [x] ESM/CommonJS default and named export interop plus explicit `require()`
-- [x] `.mts`, `.cts`, `.tsx`, and imported TypeScript dependency loading
-- [x] Extension-owned bare package resolution from local `node_modules`
-- [x] Upstream-compatible JSX-disabled boundary
-- [x] Independent TypeScript/Kotlin jiti compatibility oracle
-- [x] Shared-dependency reload regression proving the module cache is disabled
-- [x] Existing extension-runtime oracle remains unchanged
-- [x] `pi-coding-agent` with 132 tests and no failures, errors, or skips
-- [x] `./gradlew clean test installDist` with 355 tests and no failures,
+- [x] Direct TUI handlers run asynchronously so host responses remain readable
+- [x] Request-scoped cancellation with race-safe callback registration
+- [x] Matching direct-dialog pending request removal and late-response suppression
+- [x] Bounded cleanup wait before the originating extension request resumes
+- [x] JLine `readLine()` interruption without a process-wide terminal signal
+- [x] Timeout and explicit `AbortController.abort()` regression fixture
+- [x] Existing awaited dialog and RPC EOF/shutdown tests remain unchanged
+- [x] `pi-coding-agent` with 133 tests and no failures, errors, or skips
+- [x] `./gradlew clean test installDist` with 356 tests and no failures,
       errors, or skips
 - [x] All 18 deterministic migration oracles
-- [x] Installed `pi --mode rpc` discovers all eight supported fixture commands
-- [x] Installed `pi-server` spawn, eight-command discovery, status, stop, and
-      removed-instance read-back
+- [x] Installed JLine PTY cancels both dialogs and restores the main prompt
+- [x] Installed `pi --mode rpc` emits input/select/notify and completes without
+      client dialog responses
+- [x] Installed `pi-server rpc-stream` emits the same events and completes the
+      slash command
+- [x] Installed server status, stop, and removed-instance read-back
 - [x] `./migration/audit-migration.sh sync` through `4f0437e2`
 - [x] `./migration/audit-migration.sh full` confirms exactly seven remaining
       partial areas

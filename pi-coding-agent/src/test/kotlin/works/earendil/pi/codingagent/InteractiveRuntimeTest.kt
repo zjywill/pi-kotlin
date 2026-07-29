@@ -2,6 +2,9 @@ package works.earendil.pi.codingagent
 
 import java.nio.file.Files
 import java.util.Base64
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.test.runTest
 import works.earendil.pi.ai.AuthInteraction
 import works.earendil.pi.ai.AuthOption
@@ -417,6 +420,52 @@ class InteractiveRuntimeTest {
             assertTrue(console.output.contains("beta|true|Ada"))
         }
 
+    @Test
+    fun `interactive extension dialogs stop blocking on timeout and abort`() =
+        runTest {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                nodeAvailable(),
+                "Node.js 22+ is required for extension runtime tests",
+            )
+            val root = Files.createTempDirectory("pi-kotlin-interactive-extension-dialog-cancellation")
+            val extension =
+                java.nio.file.Path
+                    .of(requireNotNull(System.getProperty("pi.project.root")))
+                    .resolve("migration/fixtures/extension-runtime/dialog-cancellation.ts")
+            val console = CancellingDialogConsole()
+            val runtime =
+                InteractiveRuntime(
+                    Models(listOf(FauxProvider())),
+                    cwd = root,
+                    agentDir = Files.createDirectories(root.resolve("agent")),
+                    consoleFactory = { console },
+                )
+
+            val exit =
+                runtime.run(
+                    parseArgs(
+                        listOf(
+                            "--provider",
+                            "faux",
+                            "--model",
+                            "faux-1",
+                            "--no-session",
+                            "--extension",
+                            extension.toString(),
+                        ),
+                    ),
+                )
+
+            assertEquals(0, exit)
+            assertEquals(
+                2,
+                console.dialogCancellationCount.get(),
+                "output=${console.output}; waitTimeouts=${console.dialogWaitTimeoutCount.get()}",
+            )
+            assertEquals(0, console.dialogWaitTimeoutCount.get(), "output=${console.output}")
+            assertTrue(console.output.contains("dialog-cancelled:timeout|aborted"))
+        }
+
     private fun nodeAvailable(): Boolean =
         runCatching {
             val process = ProcessBuilder("node", "--version").start()
@@ -446,6 +495,63 @@ class InteractiveRuntimeTest {
 
         override fun error(text: String) {
             output.append("Error: ").append(text).append('\n')
+        }
+    }
+
+    private class CancellingDialogConsole : InteractiveConsole {
+        private val commandInputs = ArrayDeque(listOf("/cancel-dialogs", "/exit"))
+        val dialogCancellationCount = AtomicInteger()
+        val dialogWaitTimeoutCount = AtomicInteger()
+        val output = StringBuilder()
+
+        override fun readLine(prompt: String): String? {
+            synchronized(output) {
+                output.append(prompt)
+            }
+            return commandInputs.removeFirstOrNull()
+        }
+
+        override fun readLine(
+            prompt: String,
+            cancellation: ExtensionUiCancellation,
+        ): String? {
+            synchronized(output) {
+                output.append(prompt)
+            }
+            val cancelled = CountDownLatch(1)
+            val registration =
+                cancellation.onCancellation {
+                    dialogCancellationCount.incrementAndGet()
+                    cancelled.countDown()
+                }
+            return try {
+                if (!cancelled.await(2, TimeUnit.SECONDS)) {
+                    dialogWaitTimeoutCount.incrementAndGet()
+                    "late"
+                } else {
+                    null
+                }
+            } finally {
+                registration.close()
+            }
+        }
+
+        override fun print(text: String) {
+            synchronized(output) {
+                output.append(text)
+            }
+        }
+
+        override fun println(text: String) {
+            synchronized(output) {
+                output.append(text).append('\n')
+            }
+        }
+
+        override fun error(text: String) {
+            synchronized(output) {
+                output.append("Error: ").append(text).append('\n')
+            }
         }
     }
 }
