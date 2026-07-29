@@ -1054,6 +1054,16 @@ class RpcRuntime(
             context.model?.let { models.getModel(it.provider, it.modelId) }
                 ?: models.getModels().firstOrNull()
 
+        fun currentExtensionUiWidth(): Int? =
+            if (options.extensionMode == ExtensionMode.TUI) {
+                options.extensionRenderOptionsProvider
+                    ?.invoke()
+                    ?.width
+                    ?.coerceAtLeast(1)
+            } else {
+                null
+            }
+
         fun currentExtensionContext(): JsonObject {
             val state = createdRef?.state
             return extensionContextJson(
@@ -1072,6 +1082,7 @@ class RpcRuntime(
                 hasPendingMessages = createdRef?.hasQueuedMessages() == true,
                 flagValues = options.extensionFlagValues,
                 scopedModels = sessionScopedModels,
+                uiWidth = currentExtensionUiWidth(),
             )
         }
 
@@ -1108,6 +1119,7 @@ class RpcRuntime(
                                 agentDir = options.agentDir,
                                 projectTrusted = trusted,
                             ).scopedModels,
+                        uiWidth = currentExtensionUiWidth(),
                     )
                 },
                 onWarning = { warning ->

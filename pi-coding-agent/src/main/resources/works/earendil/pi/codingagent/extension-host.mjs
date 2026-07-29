@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { registerHooks } from "node:module";
 import readline from "node:readline";
 import { createJiti } from "./jiti/lib/jiti-static.mjs";
@@ -133,6 +133,7 @@ export const streamSimple = unsupported("streamSimple");
 `;
 
 const CODING_AGENT_SOURCE = String.raw`
+import { Editor } from "virtual:pi-tui";
 export const CONFIG_DIR_NAME = ".pi";
 export const VERSION = "0.1.0-SNAPSHOT";
 export const defineTool = tool => tool;
@@ -160,16 +161,78 @@ export const createReadTool = unsupported("createReadTool");
 export const createWriteTool = unsupported("createWriteTool");
 export class DynamicBorder {}
 export class BorderedLoader {}
-export class CustomEditor {}
+export class CustomEditor extends Editor {
+	constructor(tui, theme, keybindings) {
+		super(tui, theme, keybindings);
+		this.keybindings = keybindings;
+		this.actionHandlers = new Map();
+	}
+}
 `;
 
 const PI_TUI_SOURCE = String.raw`
 export const Key = {
+	escape: "escape",
+	esc: "esc",
+	enter: "enter",
+	return: "return",
+	tab: "tab",
+	space: "space",
+	backspace: "backspace",
+	delete: "delete",
+	home: "home",
+	end: "end",
+	pageUp: "pageUp",
+	pageDown: "pageDown",
+	up: "up",
+	down: "down",
+	left: "left",
+	right: "right",
 	ctrl: key => "ctrl+" + key,
 	shift: key => "shift+" + key,
 	alt: key => "alt+" + key,
+	super: key => "super+" + key,
+	ctrlShift: key => "ctrl+shift+" + key,
+	ctrlAlt: key => "ctrl+alt+" + key,
+	ctrlSuper: key => "ctrl+super+" + key,
+	shiftAlt: key => "shift+alt+" + key,
+	shiftSuper: key => "shift+super+" + key,
+	altSuper: key => "alt+super+" + key,
 };
-export const matchesKey = (input, key) => input === key;
+const keySequences = {
+	escape: ["\x1b"],
+	esc: ["\x1b"],
+	enter: ["\r", "\n"],
+	return: ["\r", "\n"],
+	tab: ["\t"],
+	space: [" "],
+	backspace: ["\x7f", "\b"],
+	delete: ["\x1b[3~"],
+	home: ["\x1b[H", "\x1b[1~"],
+	end: ["\x1b[F", "\x1b[4~"],
+	pageUp: ["\x1b[5~"],
+	pageDown: ["\x1b[6~"],
+	up: ["\x1b[A"],
+	down: ["\x1b[B"],
+	right: ["\x1b[C"],
+	left: ["\x1b[D"],
+};
+const ctrlSequence = key => {
+	if (key.length !== 1) return undefined;
+	const code = key.toUpperCase().charCodeAt(0);
+	return code >= 64 && code <= 95 ? String.fromCharCode(code - 64) : undefined;
+};
+export const matchesKey = (input, key) => {
+	if (input === key) return true;
+	if (keySequences[key]?.includes(input)) return true;
+	if (key.startsWith("ctrl+") && !key.slice(5).includes("+")) {
+		return input === ctrlSequence(key.slice(5));
+	}
+	if (key.startsWith("alt+") && !key.slice(4).includes("+")) {
+		return input === "\x1b" + key.slice(4);
+	}
+	return false;
+};
 export const isKeyRelease = () => false;
 export const parseKey = key => key;
 const ansiPattern = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/g;
@@ -343,9 +406,87 @@ export class TruncatedText extends Component {
 		];
 	}
 }
-export class Input extends Component {}
+export class Editor extends Component {
+	constructor(tui, theme = {}, keybindings) {
+		super();
+		this.tui = tui;
+		this.theme = theme;
+		this.keybindings = keybindings;
+		this.text = "";
+		this.cursor = 0;
+		this.onSubmit = undefined;
+		this.onChange = undefined;
+		this.borderColor = theme.borderColor;
+		this.paddingX = 0;
+	}
+	setText(text) {
+		this.text = String(text ?? "");
+		this.cursor = this.text.length;
+		this.onChange?.(this.text);
+		this.tui?.requestRender?.();
+	}
+	getText() {
+		return this.text;
+	}
+	setPaddingX(value) {
+		this.paddingX = Math.max(0, Number.isInteger(value) ? value : 0);
+	}
+	getPaddingX() {
+		return this.paddingX;
+	}
+	setAutocompleteProvider(provider) {
+		this.autocompleteProvider = provider;
+	}
+	handleInput(data) {
+		if (matchesKey(data, Key.enter)) {
+			this.onSubmit?.(this.text);
+			return;
+		}
+		if (matchesKey(data, Key.backspace)) {
+			if (this.cursor > 0) {
+				this.text = this.text.slice(0, this.cursor - 1) + this.text.slice(this.cursor);
+				this.cursor--;
+			}
+		} else if (matchesKey(data, Key.delete)) {
+			this.text = this.text.slice(0, this.cursor) + this.text.slice(this.cursor + 1);
+		} else if (matchesKey(data, Key.left)) {
+			this.cursor = Math.max(0, this.cursor - 1);
+		} else if (matchesKey(data, Key.right)) {
+			this.cursor = Math.min(this.text.length, this.cursor + 1);
+		} else if (matchesKey(data, Key.home)) {
+			this.cursor = 0;
+		} else if (matchesKey(data, Key.end)) {
+			this.cursor = this.text.length;
+		} else {
+			const value = String(data)
+				.replace(/^\x1b\[200~/, "")
+				.replace(/\x1b\[201~$/, "");
+			if (value && !value.startsWith("\x1b") && !/[\x00-\x08\x0b-\x1f\x7f]/.test(value)) {
+				this.text = this.text.slice(0, this.cursor) + value + this.text.slice(this.cursor);
+				this.cursor += value.length;
+			}
+		}
+		this.onChange?.(this.text);
+		this.tui?.requestRender?.();
+	}
+	render(width) {
+		const available = Math.max(1, width - this.paddingX * 2);
+		const lines = wrapText(this.text || " ", available);
+		const padding = " ".repeat(this.paddingX);
+		return lines.map(line => truncateToWidth(padding + line + padding, width));
+	}
+}
+export class Input extends Editor {}
 export class SettingsList extends Component {}
 export class SelectList extends Component {}
+export class KeybindingsManager {
+	matches(data, binding) {
+		return matchesKey(data, binding);
+	}
+	getKeys(binding) {
+		return [binding];
+	}
+}
 export const CURSOR_MARKER = "";
 `;
 
@@ -461,6 +602,7 @@ const state = {
 	systemPrompt: "",
 	activeTools: [],
 	allTools: [],
+	uiWidth: 80,
 	flags: new Map(),
 };
 let extensions = [];
@@ -480,6 +622,13 @@ let providerCallbacks = new Map();
 const activeProviderOperations = new Map();
 const pendingProviderAuthRequests = new Map();
 const pendingProviderBridgeRequests = new Map();
+const extensionStatuses = new Map();
+const persistentUiComponents = {
+	widgets: new Map(),
+	header: undefined,
+	footer: undefined,
+};
+let activeCustomComponent;
 
 const rendererTheme = {
 	fg(_color, text) {
@@ -519,6 +668,215 @@ const rendererTheme = {
 		return text => String(text);
 	},
 };
+
+function normalizedUiWidth() {
+	return Math.max(1, Number.isInteger(state.uiWidth) ? state.uiWidth : 80);
+}
+
+function validateUiComponent(component, label) {
+	if (!component || typeof component.render !== "function") {
+		throw new Error(`${label} factory returned an invalid component`);
+	}
+}
+
+function renderUiComponent(component, label) {
+	validateUiComponent(component, label);
+	const lines = component.render(normalizedUiWidth());
+	if (!Array.isArray(lines) || lines.some(line => typeof line !== "string")) {
+		throw new Error(`${label} component returned invalid lines`);
+	}
+	return lines;
+}
+
+function disposeUiComponent(record) {
+	if (!record || record.disposed) return;
+	record.disposed = true;
+	try {
+		record.component?.dispose?.();
+	} catch (error) {
+		log(`Failed to dispose ${record.label}:`, error);
+	}
+}
+
+function activePersistentUiComponent(record) {
+	if (!record) return false;
+	switch (record.kind) {
+		case "widget":
+			return persistentUiComponents.widgets.get(record.key) === record;
+		case "header":
+			return persistentUiComponents.header === record;
+		case "footer":
+			return persistentUiComponents.footer === record;
+		default:
+			return false;
+	}
+}
+
+function persistentUiPayload(record, lines) {
+	switch (record.kind) {
+		case "widget":
+			return {
+				id: record.id,
+				componentId: record.id,
+				method: "setWidget",
+				widgetKey: record.key,
+				widgetLines: lines,
+				widgetPlacement: record.placement,
+			};
+		case "header":
+			return {
+				id: record.id,
+				componentId: record.id,
+				method: "setHeader",
+				headerLines: lines,
+			};
+		case "footer":
+			return {
+				id: record.id,
+				componentId: record.id,
+				method: "setFooter",
+				footerLines: lines,
+			};
+		default:
+			throw new Error(`Unknown persistent UI component kind: ${record.kind}`);
+	}
+}
+
+function emitPersistentUiComponent(record) {
+	if (!activePersistentUiComponent(record)) return;
+	action("ui", persistentUiPayload(record, renderUiComponent(record.component, record.label)));
+}
+
+function createVirtualTui(onRequestRender) {
+	return {
+		requestRender() {
+			onRequestRender?.();
+		},
+		addChild() {},
+		removeChild() {},
+		setFocus() {},
+		hideOverlay() {},
+		showOverlay() {
+			return {
+				hide() {},
+				show() {},
+				dispose() {},
+			};
+		},
+		get terminal() {
+			return { columns: normalizedUiWidth() };
+		},
+	};
+}
+
+const virtualKeybindings = {
+	matches(data, binding) {
+		return data === binding;
+	},
+	getKeys(binding) {
+		return [binding];
+	},
+};
+
+function createPersistentUiComponent(kind, key, factory, options = {}) {
+	let record;
+	const tui = createVirtualTui(() => emitPersistentUiComponent(record));
+	const component = factory(tui, rendererTheme, options.footerData);
+	record = {
+		id: randomUUID(),
+		kind,
+		key,
+		placement: options.placement,
+		component,
+		label: `Extension ${kind}${key ? ` ${key}` : ""}`,
+	};
+	validateUiComponent(component, record.label);
+	return record;
+}
+
+function currentGitBranch() {
+	const result = spawnSync("git", ["--no-optional-locks", "symbolic-ref", "--quiet", "--short", "HEAD"], {
+		cwd: state.cwd,
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "ignore"],
+	});
+	const branch = result.status === 0 ? result.stdout.trim() : "";
+	return branch || null;
+}
+
+const footerDataProvider = {
+	getGitBranch: currentGitBranch,
+	getExtensionStatuses() {
+		return new Map(extensionStatuses);
+	},
+	getAvailableProviderCount() {
+		return new Set((state.scopedModels ?? []).map(value => value?.model?.provider).filter(Boolean)).size;
+	},
+	onBranchChange() {
+		return () => {};
+	},
+};
+
+function clearPersistentUiComponent(kind, key, emitAction = true) {
+	let record;
+	if (kind === "widget") {
+		record = persistentUiComponents.widgets.get(key);
+		persistentUiComponents.widgets.delete(key);
+	} else {
+		record = persistentUiComponents[kind];
+		persistentUiComponents[kind] = undefined;
+	}
+	disposeUiComponent(record);
+	if (!emitAction) return;
+	const id = record?.id ?? randomUUID();
+	action(
+		"ui",
+		persistentUiPayload(
+			{
+				id,
+				kind,
+				key,
+				placement: record?.placement,
+			},
+			undefined,
+		),
+	);
+}
+
+function setPersistentUiComponent(kind, key, factory, options = {}) {
+	if (kind === "widget") {
+		const previous = persistentUiComponents.widgets.get(key);
+		persistentUiComponents.widgets.delete(key);
+		disposeUiComponent(previous);
+	} else {
+		const previous = persistentUiComponents[kind];
+		persistentUiComponents[kind] = undefined;
+		disposeUiComponent(previous);
+	}
+	const record = createPersistentUiComponent(kind, key, factory, options);
+	if (kind === "widget") persistentUiComponents.widgets.set(key, record);
+	else persistentUiComponents[kind] = record;
+	try {
+		emitPersistentUiComponent(record);
+	} catch (error) {
+		if (kind === "widget") persistentUiComponents.widgets.delete(key);
+		else persistentUiComponents[kind] = undefined;
+		disposeUiComponent(record);
+		throw error;
+	}
+}
+
+function resetPersistentUiComponents() {
+	for (const record of persistentUiComponents.widgets.values()) disposeUiComponent(record);
+	disposeUiComponent(persistentUiComponents.header);
+	disposeUiComponent(persistentUiComponents.footer);
+	disposeUiComponent(activeCustomComponent);
+	persistentUiComponents.widgets.clear();
+	persistentUiComponents.header = undefined;
+	persistentUiComponents.footer = undefined;
+	activeCustomComponent = undefined;
+	extensionStatuses.clear();
+}
 
 function jsonValue(value) {
 	if (value === undefined) return null;
@@ -699,6 +1057,7 @@ function updateState(context = {}) {
 		"systemPrompt",
 		"activeTools",
 		"allTools",
+		"uiWidth",
 	]) {
 		if (Object.hasOwn(context, name)) state[name] = context[name];
 	}
@@ -814,16 +1173,75 @@ function createUI() {
 			action("ui", { id: randomUUID(), method: "notify", message, notifyType });
 		},
 		setStatus(key, text) {
-			action("ui", { id: randomUUID(), method: "setStatus", key, text });
+			if (text === undefined) extensionStatuses.delete(key);
+			else extensionStatuses.set(key, text);
+			action("ui", {
+				id: randomUUID(),
+				method: "setStatus",
+				key,
+				text,
+			});
+			if (state.mode === "tui" && persistentUiComponents.footer) {
+				persistentUiComponents.footer.component.invalidate?.();
+				emitPersistentUiComponent(persistentUiComponents.footer);
+			}
 		},
 		setWidget(key, content, options) {
-			action("ui", { id: randomUUID(), method: "setWidget", key, content, options });
+			if (state.mode !== "tui") {
+				if (content === undefined || Array.isArray(content)) {
+					action("ui", {
+						id: randomUUID(),
+						method: "setWidget",
+						widgetKey: key,
+						widgetLines: content,
+						widgetPlacement: options?.placement,
+					});
+				}
+				return;
+			}
+			if (content === undefined) {
+				clearPersistentUiComponent("widget", key);
+				return;
+			}
+			const placement = options?.placement ?? "aboveEditor";
+			const factory =
+				Array.isArray(content)
+					? () => ({
+							render() {
+								const lines = content.slice(0, 10).map(String);
+								if (content.length > 10) lines.push("... (widget truncated)");
+								return lines;
+							},
+						})
+					: content;
+			if (typeof factory !== "function") {
+				throw new Error(`Extension widget ${key} must be a string array or component factory`);
+			}
+			setPersistentUiComponent("widget", key, factory, { placement });
 		},
 		setFooter(factory) {
-			action("unsupported", { method: "setFooter", enabled: factory != null });
+			if (state.mode !== "tui") return;
+			if (factory === undefined) {
+				clearPersistentUiComponent("footer");
+				return;
+			}
+			if (typeof factory !== "function") {
+				throw new Error("Extension footer must be a component factory");
+			}
+			setPersistentUiComponent("footer", undefined, factory, {
+				footerData: footerDataProvider,
+			});
 		},
 		setHeader(factory) {
-			action("unsupported", { method: "setHeader", enabled: factory != null });
+			if (state.mode !== "tui") return;
+			if (factory === undefined) {
+				clearPersistentUiComponent("header");
+				return;
+			}
+			if (typeof factory !== "function") {
+				throw new Error("Extension header must be a component factory");
+			}
+			setPersistentUiComponent("header", undefined, factory);
 		},
 		setTitle(title) {
 			action("ui", { id: randomUUID(), method: "setTitle", title });
@@ -859,8 +1277,55 @@ function createUI() {
 		getEditorComponent() {
 			return undefined;
 		},
-		async custom() {
-			return undefined;
+		async custom(factory, options) {
+			if (state.mode !== "tui" || typeof factory !== "function") return undefined;
+			let completed = false;
+			let result;
+			let record;
+			const tui = createVirtualTui(() => {
+				record?.component?.invalidate?.();
+			});
+			const done = value => {
+				if (completed) return;
+				completed = true;
+				result = value;
+			};
+			const component = await factory(tui, rendererTheme, virtualKeybindings, done);
+			record = {
+				id: randomUUID(),
+				kind: "custom",
+				component,
+				label: "Extension custom UI",
+			};
+			validateUiComponent(component, record.label);
+			activeCustomComponent = record;
+			try {
+				while (!completed) {
+					const response = await requestUI(
+						"custom",
+						{
+							componentId: record.id,
+							lines: renderUiComponent(component, record.label),
+							overlay: options?.overlay === true,
+							overlayOptions:
+								typeof options?.overlayOptions === "function"
+									? options.overlayOptions()
+									: options?.overlayOptions,
+						},
+						undefined,
+						{ cancelled: true },
+						value => value,
+					);
+					if (response?.cancelled === true) return undefined;
+					if (typeof response?.input !== "string") return undefined;
+					if (typeof component.handleInput !== "function") return undefined;
+					component.handleInput(response.input);
+				}
+				return result;
+			} finally {
+				if (activeCustomComponent === record) activeCustomComponent = undefined;
+				disposeUiComponent(record);
+			}
 		},
 		getAllThemes() {
 			return [];
@@ -1144,6 +1609,7 @@ function registrationMetadata() {
 }
 
 async function loadExtensions(request) {
+	resetPersistentUiComponents();
 	extensions = [];
 	tools = new Map();
 	commands = new Map();
@@ -1920,6 +2386,7 @@ async function handle(request) {
 				response = { result: registrationMetadata() };
 				break;
 			case "close":
+				resetPersistentUiComponents();
 				response = { result: null };
 				break;
 			default:

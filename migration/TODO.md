@@ -84,18 +84,18 @@ Last reviewed: July 29, 2026
   - [x] Accept nullable array schemas with `items`
   - [x] Classify the AgentHarness v2 design document as documentation-only
 
-The latest implementation stage ports extension message and session-entry
-renderers end to end. The Node host exports stable renderer IDs, executes the
-first matching extension renderer, passes upstream-shaped payloads and render
-options, and calls the returned JavaScript component's `render(width)`. Kotlin
-persists custom messages in `custom_message` entries, still accepts legacy
-message entries, renders startup and live extension actions without duplicate
-startup output, replays the current branch after resume, hides `display=false`
-messages, preserves message default fallback, and distinguishes hidden entry
-results from explicit entry renderer failures. `./gradlew clean test
-installDist` passes with 364 tests and all 20 deterministic migration oracles
-pass. The sync audit reaches `4f0437e2`; the full audit remains nonzero on the
-seven partial areas listed below.
+The latest implementation stage ports persistent extension component surfaces
+and focused `ctx.ui.custom()` flows. The Node host keeps stable component IDs,
+executes factories and `render(width)`, forwards `requestRender()` updates,
+disposes replaced or cleared components, exposes status/git footer data, and
+provides functional virtual `Key`, `Editor`, and `CustomEditor` primitives.
+Kotlin collects startup header/widget/footer state before the first prompt,
+renders later updates in the linear JLine UI, maps line commands to terminal key
+sequences, and restores the normal prompt after a focused custom component
+finishes. `./gradlew clean test installDist` passes with 369 tests, all 21
+deterministic migration oracles pass, and the installed 67-column PTY completes
+both selection and editor flows. The sync audit reaches `4f0437e2`; the full
+audit remains nonzero on the seven partial areas listed below.
 
 ## Remaining
 
@@ -163,7 +163,20 @@ seven partial areas listed below.
 - [x] Function-valued `refreshModels(context.store)`
 - [x] Extension shortcuts
 - [x] Message and session-entry renderers
-- [ ] Custom extension UI components
+- [x] Persistent extension component surfaces and focused custom UI
+  - [x] String and component-factory widgets with above/below placement
+  - [x] Custom header and footer factories
+  - [x] Stable component IDs, terminal width, `requestRender()`, replace, clear,
+        and dispose lifecycle
+  - [x] Footer extension statuses, git branch read-back, and no-op branch
+        listener compatibility
+  - [x] Focused `ctx.ui.custom()` render/input/rerender/done loop
+  - [x] Functional virtual key constants and basic `Editor`/`CustomEditor`
+- [ ] Remaining interactive extension integration
+  - [ ] Custom editor replacement parity
+  - [ ] Raw terminal input listeners
+  - [ ] Autocomplete provider composition
+  - [ ] Overlay positioning, visibility handles, and full-screen placement
 - [x] Unsolicited background registration updates
 - [x] Function-valued `user_bash` `BashOperations` over the JSON extension
       host, including streaming updates and cancellation
@@ -178,7 +191,8 @@ seven partial areas listed below.
 
 - [ ] Full-screen component model
 - [ ] Overlays and selectors
-- [ ] Upstream-compatible editor behavior
+- [ ] Upstream-compatible editor and custom editor replacement behavior
+- [ ] Raw terminal input and autocomplete composition
 - [ ] Transcript and rendering parity at multiple terminal widths
 
 ### 7. HTML export
@@ -196,9 +210,9 @@ seven partial areas listed below.
 
 ## Next stage
 
-Implement custom extension UI components while keeping theme parsing, the
-full-screen terminal model, and the other global partial areas as separately
-audited slices.
+Complete the remaining interactive extension integration together with the
+full-screen terminal model, while keeping theme parsing and the other global
+partial areas as separately audited slices.
 
 Evidence for the completed extension renderer stage:
 
@@ -221,6 +235,27 @@ Evidence for the completed extension renderer stage:
 - [x] Installed JLine PTY passes 72 columns to both renderer kinds, hides the
       non-display message, and exits normally
 - [x] Dumb-terminal installed PTY falls back to 80 columns
+- [x] `./migration/audit-migration.sh sync` through `4f0437e2`
+- [x] `./migration/audit-migration.sh full` confirms exactly seven remaining
+      partial areas
+
+Evidence for the completed custom extension UI stage:
+
+- [x] String and factory widgets plus custom header/footer component surfaces
+- [x] Stable component IDs and terminal-width propagation
+- [x] Component `requestRender()` updates and replace/clear/dispose lifecycle
+- [x] Footer status and git-branch data provider subset
+- [x] Focused `ctx.ui.custom()` input loop with up/down/enter/escape mappings
+- [x] Functional virtual `Key`, basic `Editor`, and `CustomEditor` inheritance
+- [x] Startup surface collection without duplicate header/widget/footer output
+- [x] RPC/print component factories and custom UI retain upstream no-op behavior
+- [x] Independent TypeScript/Kotlin custom UI oracle with shared fixtures
+- [x] `pi-coding-agent` with 146 tests and no failures, errors, or skips
+- [x] `./gradlew clean test installDist` with 369 tests and no failures,
+      errors, or skips
+- [x] All 21 deterministic migration oracles
+- [x] Installed JLine PTY passes 67 columns to all surface/custom/editor frames,
+      selects `beta`, submits `Ada`, restores the prompt, and exits normally
 - [x] `./migration/audit-migration.sh sync` through `4f0437e2`
 - [x] `./migration/audit-migration.sh full` confirms exactly seven remaining
       partial areas

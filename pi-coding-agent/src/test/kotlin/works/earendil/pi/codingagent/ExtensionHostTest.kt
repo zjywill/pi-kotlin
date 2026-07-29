@@ -6,6 +6,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
@@ -23,6 +24,285 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class ExtensionHostTest {
+    @Test
+    fun `TUI component surfaces render refresh clear and dispose`() =
+        runTest {
+            assumeTrue(nodeAvailable(), "Node.js 22+ is required for extension runtime tests")
+            val root = Files.createTempDirectory("pi-kotlin-extension-surfaces")
+            val agentDir = Files.createDirectories(root.resolve("agent"))
+            val extension =
+                root.resolve("surfaces.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          let widgetTui;
+                          const disposed = [];
+                          pi.registerCommand("mount", {
+                            handler(_args, ctx) {
+                              ctx.ui.setStatus("phase", "ready");
+                              ctx.ui.setWidget("main", tui => {
+                                widgetTui = tui;
+                                return {
+                                  render(width) { return [`widget:${'$'}{width}`]; },
+                                  dispose() { disposed.push("widget"); },
+                                };
+                              }, { placement: "belowEditor" });
+                              ctx.ui.setHeader(() => ({
+                                render(width) { return [`header:${'$'}{width}`]; },
+                                dispose() { disposed.push("header"); },
+                              }));
+                              ctx.ui.setFooter((_tui, _theme, footerData) => ({
+                                render(width) {
+                                  const statuses = [...footerData.getExtensionStatuses()]
+                                    .map(([key, value]) => `${'$'}{key}=${'$'}{value}`)
+                                    .join(",");
+                                  return [`footer:${'$'}{width}:${'$'}{statuses}:${'$'}{footerData.getGitBranch()}`];
+                                },
+                                dispose() { disposed.push("footer"); },
+                              }));
+                            },
+                          });
+                          pi.registerCommand("refresh-clear", {
+                            handler(_args, ctx) {
+                              widgetTui.requestRender();
+                              ctx.ui.setWidget("main", undefined);
+                              ctx.ui.setHeader(undefined);
+                              ctx.ui.setFooter(undefined);
+                              pi.appendEntry("surface-lifecycle", { disposed });
+                            },
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val host =
+                assertNotNull(
+                    ExtensionHost.start(
+                        sources =
+                            listOf(
+                                ExtensionSource(
+                                    extension,
+                                    ResourceSourceInfo(extension, "local", baseDir = root),
+                                ),
+                            ),
+                        agentDir = agentDir,
+                        cwd = root,
+                        mode = ExtensionMode.TUI,
+                        projectTrusted = true,
+                        flagValues = emptyMap(),
+                        context = extensionTestContext(root, uiWidth = 33, mode = ExtensionMode.TUI),
+                    ),
+                )
+
+            host.use {
+                val mounted =
+                    host.invokeCommand(
+                        name = "mount",
+                        args = "",
+                        context = extensionTestContext(root, uiWidth = 33, mode = ExtensionMode.TUI),
+                    )
+                val uiActions = mounted.actions.filter { it.type == "ui" }
+                val widget = uiActions.single { it.data.testString("method") == "setWidget" }
+                val header = uiActions.single { it.data.testString("method") == "setHeader" }
+                val footer = uiActions.single { it.data.testString("method") == "setFooter" }
+
+                assertEquals("belowEditor", widget.data.testString("widgetPlacement"))
+                assertEquals(listOf("widget:33"), widget.data.testStringList("widgetLines"))
+                assertEquals(listOf("header:33"), header.data.testStringList("headerLines"))
+                assertEquals(listOf("footer:33:phase=ready:null"), footer.data.testStringList("footerLines"))
+                val widgetId = assertNotNull(widget.data.testString("componentId"))
+
+                val cleared =
+                    host.invokeCommand(
+                        name = "refresh-clear",
+                        args = "",
+                        context = extensionTestContext(root, uiWidth = 41, mode = ExtensionMode.TUI),
+                    )
+                val refreshedWidget =
+                    cleared.actions.first {
+                        it.type == "ui" &&
+                            it.data.testString("method") == "setWidget" &&
+                            it.data["widgetLines"] != null
+                    }
+                assertEquals(widgetId, refreshedWidget.data.testString("componentId"))
+                assertEquals(listOf("widget:41"), refreshedWidget.data.testStringList("widgetLines"))
+                assertEquals(
+                    listOf("widget", "header", "footer"),
+                    cleared.actions
+                        .single { it.type == "append_entry" }
+                        .data["data"]
+                        ?.jsonObject
+                        ?.testStringList("disposed"),
+                )
+                assertEquals(
+                    3,
+                    cleared.actions.count {
+                        it.type == "ui" &&
+                            it.data.testString("method") in setOf("setWidget", "setHeader", "setFooter") &&
+                            it.data.keys.none { name -> name.endsWith("Lines") }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `focused custom UI renders handles keys and disposes`() =
+        runTest {
+            assumeTrue(nodeAvailable(), "Node.js 22+ is required for extension runtime tests")
+            val root = Files.createTempDirectory("pi-kotlin-extension-custom-ui")
+            val agentDir = Files.createDirectories(root.resolve("agent"))
+            val extension =
+                root.resolve("custom-ui.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        import { Key, matchesKey } from "@earendil-works/pi-tui";
+
+                        export default function(pi) {
+                          pi.registerCommand("choose", {
+                            async handler(_args, ctx) {
+                              let disposed = false;
+                              const result = await ctx.ui.custom((_tui, _theme, _keybindings, done) => {
+                                let selected = 0;
+                                return {
+                                  render(width) { return [`choice:${'$'}{width}:${'$'}{selected}`]; },
+                                  handleInput(input) {
+                                    if (matchesKey(input, Key.down)) selected = 1;
+                                    if (matchesKey(input, Key.enter)) done(selected === 0 ? "alpha" : "beta");
+                                  },
+                                  dispose() { disposed = true; },
+                                };
+                              });
+                              pi.appendEntry("custom-result", { result, disposed });
+                            },
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val requests = mutableListOf<JsonObject>()
+            val host =
+                assertNotNull(
+                    ExtensionHost.start(
+                        sources =
+                            listOf(
+                                ExtensionSource(
+                                    extension,
+                                    ResourceSourceInfo(extension, "local", baseDir = root),
+                                ),
+                            ),
+                        agentDir = agentDir,
+                        cwd = root,
+                        mode = ExtensionMode.TUI,
+                        projectTrusted = true,
+                        flagValues = emptyMap(),
+                        context = extensionTestContext(root, uiWidth = 29, mode = ExtensionMode.TUI),
+                        onUiRequest = { request, respond ->
+                            requests += request
+                            respond(
+                                buildJsonObject {
+                                    put("input", if (requests.size == 1) "\u001b[B" else "\r")
+                                },
+                            )
+                        },
+                    ),
+                )
+
+            host.use {
+                val invocation =
+                    host.invokeCommand(
+                        name = "choose",
+                        args = "",
+                        context = extensionTestContext(root, uiWidth = 29, mode = ExtensionMode.TUI),
+                    )
+                val result =
+                    invocation.actions
+                        .single { it.type == "append_entry" }
+                        .data["data"]
+                        ?.jsonObject
+
+                assertEquals(listOf("custom", "custom"), requests.map { it.testString("method") })
+                assertEquals(
+                    listOf(listOf("choice:29:0"), listOf("choice:29:1")),
+                    requests.map { it.testStringList("lines") },
+                )
+                assertEquals(1, requests.mapNotNull { it.testString("componentId") }.distinct().size)
+                assertEquals("beta", result?.testString("result"))
+                assertEquals("true", result?.get("disposed")?.jsonPrimitive?.content)
+            }
+        }
+
+    @Test
+    fun `non TUI modes ignore component factories and custom UI`() =
+        runTest {
+            assumeTrue(nodeAvailable(), "Node.js 22+ is required for extension runtime tests")
+            val root = Files.createTempDirectory("pi-kotlin-extension-rpc-ui")
+            val agentDir = Files.createDirectories(root.resolve("agent"))
+            val extension =
+                root.resolve("rpc-ui.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          pi.registerCommand("rpc-ui", {
+                            async handler(_args, ctx) {
+                              ctx.ui.setWidget("lines", ["serializable"]);
+                              ctx.ui.setWidget("factory", () => ({ render() { return ["hidden"]; } }));
+                              ctx.ui.setHeader(() => ({ render() { return ["hidden"]; } }));
+                              ctx.ui.setFooter(() => ({ render() { return ["hidden"]; } }));
+                              const result = await ctx.ui.custom((_tui, _theme, _keybindings, done) => {
+                                done("unexpected");
+                                return { render() { return ["hidden"]; } };
+                              });
+                              pi.appendEntry("rpc-ui", { result: result ?? "undefined" });
+                            },
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val host =
+                assertNotNull(
+                    ExtensionHost.start(
+                        sources =
+                            listOf(
+                                ExtensionSource(
+                                    extension,
+                                    ResourceSourceInfo(extension, "local", baseDir = root),
+                                ),
+                            ),
+                        agentDir = agentDir,
+                        cwd = root,
+                        mode = ExtensionMode.RPC,
+                        projectTrusted = true,
+                        flagValues = emptyMap(),
+                        context = extensionTestContext(root, mode = ExtensionMode.RPC),
+                    ),
+                )
+
+            host.use {
+                val invocation =
+                    host.invokeCommand(
+                        name = "rpc-ui",
+                        args = "",
+                        context = extensionTestContext(root, mode = ExtensionMode.RPC),
+                    )
+                val ui = invocation.actions.filter { it.type == "ui" }
+                assertEquals(1, ui.size)
+                assertEquals("setWidget", ui.single().data.testString("method"))
+                assertEquals(listOf("serializable"), ui.single().data.testStringList("widgetLines"))
+                assertEquals(
+                    "undefined",
+                    invocation.actions
+                        .single { it.type == "append_entry" }
+                        .data["data"]
+                        ?.jsonObject
+                        ?.testString("result"),
+                )
+            }
+        }
+
     @Test
     fun `extension host invokes registered message and entry renderers`() =
         runTest {
@@ -796,11 +1076,15 @@ class ExtensionHostTest {
             }
         }
 
-    private fun extensionTestContext(root: java.nio.file.Path): JsonObject =
+    private fun extensionTestContext(
+        root: java.nio.file.Path,
+        uiWidth: Int? = null,
+        mode: ExtensionMode = ExtensionMode.PRINT,
+    ): JsonObject =
         buildJsonObject {
             put("cwd", root.toString())
-            put("mode", "print")
-            put("hasUI", false)
+            put("mode", mode.wireName)
+            put("hasUI", mode == ExtensionMode.TUI)
             put("projectTrusted", true)
             put("thinkingLevel", "off")
             put("systemPrompt", "base")
@@ -809,7 +1093,17 @@ class ExtensionHostTest {
             put("isIdle", true)
             put("hasPendingMessages", false)
             put("flags", buildJsonObject { put("plan", true) })
+            uiWidth?.let { put("uiWidth", it) }
         }
+
+    private fun JsonObject.testString(name: String): String? =
+        (this[name] as? JsonPrimitive)?.contentOrNull
+
+    private fun JsonObject.testStringList(name: String): List<String> =
+        this[name]
+            ?.jsonArray
+            .orEmpty()
+            .mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
 
     private fun nodeAvailable(): Boolean =
         runCatching {

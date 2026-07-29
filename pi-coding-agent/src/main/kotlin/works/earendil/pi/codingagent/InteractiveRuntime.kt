@@ -87,6 +87,15 @@ class InteractiveRuntime(
     private val agentDir: Path = defaultAgentDirectory(),
     private val consoleFactory: () -> InteractiveConsole = { JLineConsole() },
 ) {
+    private val extensionSurfaceLock = Any()
+    private val extensionWidgetsAbove = linkedMapOf<String, List<String>>()
+    private val extensionWidgetsBelow = linkedMapOf<String, List<String>>()
+    private var extensionHeader: List<String>? = null
+    private var extensionFooter: List<String>? = null
+    @Volatile
+    private var renderLiveExtensionSurfaces = false
+    private var defaultInteractiveHeader = "pi Kotlin"
+
     suspend fun run(args: Args): Int {
         if (args.diagnostics.any { it.type == Diagnostic.Type.ERROR }) {
             args.diagnostics.forEach { diagnostic ->
@@ -180,6 +189,14 @@ class InteractiveRuntime(
             }
 
         console.use {
+            synchronized(extensionSurfaceLock) {
+                extensionWidgetsAbove.clear()
+                extensionWidgetsBelow.clear()
+                extensionHeader = null
+                extensionFooter = null
+            }
+            renderLiveExtensionSurfaces = false
+            defaultInteractiveHeader = "pi Kotlin ${currentModel(runtime)}"
             val settled = AtomicReference<CompletableDeferred<Unit>?>(null)
             val streamedText = AtomicBoolean(false)
             val unsubscribe =
@@ -231,9 +248,11 @@ class InteractiveRuntime(
                     }
                 }
             try {
-                console.println("pi Kotlin ${currentModel(runtime)}")
+                renderInteractiveHeader(console)
                 console.println("Type /help for commands. Ctrl-D or /exit quits.")
                 runtime.renderExtensionTranscript()
+                renderInitialExtensionSurfaces(console)
+                renderLiveExtensionSurfaces = true
                 args.name?.let { name ->
                     val response =
                         runtime.handle(
@@ -432,8 +451,99 @@ class InteractiveRuntime(
             }
 
             "setTitle" -> event.string("title")?.let { console.println(it) }
+            "setWidget" -> updateExtensionWidget(event, console)
+            "setHeader" -> updateExtensionHeader(event, console)
+            "setFooter" -> updateExtensionFooter(event, console)
         }
     }
+
+    private fun updateExtensionWidget(
+        event: JsonObject,
+        console: InteractiveConsole,
+    ) {
+        val key = event.string("widgetKey") ?: event.string("key") ?: return
+        val lines =
+            event.stringLines("widgetLines")
+                ?: event.stringLines("content")
+        val placement =
+            event.string("widgetPlacement")
+                ?: event["options"]?.jsonObject?.string("placement")
+                ?: "aboveEditor"
+        synchronized(extensionSurfaceLock) {
+            extensionWidgetsAbove.remove(key)
+            extensionWidgetsBelow.remove(key)
+            if (lines != null) {
+                val target =
+                    if (placement == "belowEditor") extensionWidgetsBelow else extensionWidgetsAbove
+                target[key] = lines
+            }
+        }
+        if (renderLiveExtensionSurfaces && lines != null) {
+            renderExtensionLines(lines, console)
+        }
+    }
+
+    private fun updateExtensionHeader(
+        event: JsonObject,
+        console: InteractiveConsole,
+    ) {
+        val lines = event.stringLines("headerLines") ?: event.stringLines("lines")
+        synchronized(extensionSurfaceLock) {
+            extensionHeader = lines
+        }
+        if (renderLiveExtensionSurfaces) {
+            if (lines == null) {
+                console.println(defaultInteractiveHeader)
+            } else {
+                renderExtensionLines(lines, console)
+            }
+        }
+    }
+
+    private fun updateExtensionFooter(
+        event: JsonObject,
+        console: InteractiveConsole,
+    ) {
+        val lines = event.stringLines("footerLines") ?: event.stringLines("lines")
+        synchronized(extensionSurfaceLock) {
+            extensionFooter = lines
+        }
+        if (renderLiveExtensionSurfaces && lines != null) {
+            renderExtensionLines(lines, console)
+        }
+    }
+
+    private fun renderInteractiveHeader(console: InteractiveConsole) {
+        val lines = synchronized(extensionSurfaceLock) { extensionHeader }
+        if (lines == null) {
+            console.println(defaultInteractiveHeader)
+        } else {
+            renderExtensionLines(lines, console)
+        }
+    }
+
+    private fun renderInitialExtensionSurfaces(console: InteractiveConsole) {
+        val surfaces =
+            synchronized(extensionSurfaceLock) {
+                buildList {
+                    extensionWidgetsAbove.values.forEach(::add)
+                    extensionWidgetsBelow.values.forEach(::add)
+                    extensionFooter?.let(::add)
+                }
+            }
+        surfaces.forEach { renderExtensionLines(it, console) }
+    }
+
+    private fun renderExtensionLines(
+        lines: List<String>,
+        console: InteractiveConsole,
+    ) {
+        lines.forEach(console::println)
+    }
+
+    private fun JsonObject.stringLines(name: String): List<String>? =
+        (this[name] as? kotlinx.serialization.json.JsonArray)
+            ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
 
     private fun handleExtensionUiDialog(
         request: JsonObject,
@@ -462,6 +572,7 @@ class InteractiveRuntime(
                     buildJsonObject { put("value", value.ifEmpty { prefill.orEmpty() }) }
                 }
 
+                "custom" -> handleExtensionCustom(request, console, cancellation)
                 else -> cancelledUiResponse()
             }
         } catch (_: UserInterruptException) {
@@ -469,6 +580,17 @@ class InteractiveRuntime(
         } catch (_: EndOfFileException) {
             cancelledUiResponse()
         }
+    }
+
+    private fun handleExtensionCustom(
+        request: JsonObject,
+        console: InteractiveConsole,
+        cancellation: ExtensionUiCancellation,
+    ): JsonObject {
+        request.stringLines("lines").orEmpty().forEach(console::println)
+        val value = console.readLine("Custom input: ", cancellation)
+            ?: return cancelledUiResponse()
+        return buildJsonObject { put("input", extensionCustomInputSequence(value)) }
     }
 
     private fun handleExtensionSelect(
@@ -941,6 +1063,24 @@ private fun openBrowser(url: String) {
         }
     }
 }
+
+internal fun extensionCustomInputSequence(value: String): String =
+    when (value.trim().lowercase()) {
+        "", "enter", "return" -> "\r"
+        "escape", "esc" -> "\u001b"
+        "tab" -> "\t"
+        "backspace" -> "\u007f"
+        "delete" -> "\u001b[3~"
+        "home" -> "\u001b[H"
+        "end" -> "\u001b[F"
+        "pageup", "page-up" -> "\u001b[5~"
+        "pagedown", "page-down" -> "\u001b[6~"
+        "up" -> "\u001b[A"
+        "down" -> "\u001b[B"
+        "right" -> "\u001b[C"
+        "left" -> "\u001b[D"
+        else -> value
+    }
 
 internal class JLineConsole(
     private val terminal: Terminal =

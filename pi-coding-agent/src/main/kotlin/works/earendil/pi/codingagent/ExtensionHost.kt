@@ -1356,6 +1356,7 @@ internal fun extensionContextJson(
     hasPendingMessages: Boolean,
     flagValues: Map<String, Any>,
     scopedModels: List<ScopedModel> = emptyList(),
+    uiWidth: Int? = null,
 ): JsonObject =
     buildJsonObject {
         put("cwd", cwd.toString())
@@ -1395,6 +1396,7 @@ internal fun extensionContextJson(
         put("isIdle", isIdle)
         put("hasPendingMessages", hasPendingMessages)
         put("flags", extensionFlagValuesJson(flagValues))
+        uiWidth?.takeIf { it > 0 }?.let { put("uiWidth", it) }
     }
 
 internal fun decodeExtensionToolResult(value: JsonObject): AgentToolResult =

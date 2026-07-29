@@ -21,6 +21,7 @@ import works.earendil.pi.ai.fauxAssistantMessage
 import works.earendil.pi.codingagent.session.SessionManager
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class InteractiveRuntimeTest {
@@ -480,6 +481,118 @@ class InteractiveRuntimeTest {
             assertTrue(console.output.contains("Continue?"))
             assertTrue(console.output.contains("beta|true|Ada"))
         }
+
+    @Test
+    fun `interactive component surfaces and focused custom UI render at terminal width`() =
+        runTest {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                nodeAvailable(),
+                "Node.js 22+ is required for extension runtime tests",
+            )
+            val root = Files.createTempDirectory("pi-kotlin-interactive-custom-ui")
+            val extension =
+                root.resolve("custom-ui.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        import { Key, matchesKey } from "@earendil-works/pi-tui";
+
+                        export default function(pi) {
+                          pi.on("session_start", (_event, ctx) => {
+                            ctx.ui.setStatus("phase", "ready");
+                            ctx.ui.setHeader(() => ({
+                              render(width) { return [`surface-header:${'$'}{width}`]; },
+                            }));
+                            ctx.ui.setWidget("array", ["surface-array"]);
+                            ctx.ui.setWidget("factory", () => ({
+                              render(width) { return [`surface-widget:${'$'}{width}`]; },
+                            }), { placement: "belowEditor" });
+                            ctx.ui.setFooter((_tui, _theme, footerData) => ({
+                              render(width) {
+                                const statuses = [...footerData.getExtensionStatuses()]
+                                  .map(([key, value]) => `${'$'}{key}=${'$'}{value}`)
+                                  .join(",");
+                                return [`surface-footer:${'$'}{width}:${'$'}{statuses}`];
+                              },
+                            }));
+                          });
+                          pi.registerCommand("choose", {
+                            async handler(_args, ctx) {
+                              const result = await ctx.ui.custom((_tui, _theme, _keybindings, done) => {
+                                let selected = 0;
+                                return {
+                                  render(width) {
+                                    return [`custom-frame:${'$'}{width}:${'$'}{selected === 0 ? "alpha" : "beta"}`];
+                                  },
+                                  handleInput(input) {
+                                    if (matchesKey(input, Key.down)) selected = 1;
+                                    if (matchesKey(input, Key.enter)) done(selected === 0 ? "alpha" : "beta");
+                                  },
+                                };
+                              });
+                              ctx.ui.notify(`chosen:${'$'}{result}`, "info");
+                            },
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val console =
+                ScriptedConsole(
+                    listOf(
+                        "/choose",
+                        "down",
+                        "enter",
+                        "/exit",
+                    ),
+                    terminalWidth = 23,
+                )
+            val runtime =
+                InteractiveRuntime(
+                    Models(listOf(FauxProvider())),
+                    cwd = root,
+                    agentDir = Files.createDirectories(root.resolve("agent")),
+                    consoleFactory = { console },
+                )
+
+            val exit =
+                runtime.run(
+                    parseArgs(
+                        listOf(
+                            "--provider",
+                            "faux",
+                            "--model",
+                            "faux-1",
+                            "--no-session",
+                            "--extension",
+                            extension.toString(),
+                        ),
+                    ),
+                )
+
+            assertEquals(0, exit)
+            val output = console.output.toString()
+            assertTrue(output.contains("surface-header:23"))
+            assertEquals(1, output.split("surface-header:23").size - 1)
+            assertFalse(output.contains("pi Kotlin faux/faux-1"))
+            assertTrue(output.contains("surface-array"))
+            assertTrue(output.contains("surface-widget:23"))
+            assertTrue(output.contains("surface-footer:23:phase=ready"))
+            assertTrue(output.contains("custom-frame:23:alpha"))
+            assertTrue(output.contains("custom-frame:23:beta"))
+            assertTrue(output.contains("chosen:beta"))
+            assertTrue(output.endsWith("> "))
+        }
+
+    @Test
+    fun `custom UI line commands map to terminal input sequences`() {
+        assertEquals("\u001b[A", extensionCustomInputSequence("up"))
+        assertEquals("\u001b[B", extensionCustomInputSequence("DOWN"))
+        assertEquals("\r", extensionCustomInputSequence(""))
+        assertEquals("\r", extensionCustomInputSequence("enter"))
+        assertEquals("\u001b", extensionCustomInputSequence("escape"))
+        assertEquals("typed text", extensionCustomInputSequence("typed text"))
+    }
 
     @Test
     fun `interactive extension dialogs stop blocking on timeout and abort`() =
