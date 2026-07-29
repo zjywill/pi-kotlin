@@ -153,6 +153,7 @@ areas listed below.
 - [x] Function-valued `refreshModels(context.store)`
 - [ ] Extension shortcuts
 - [ ] Message and session-entry renderers
+- [ ] Custom extension UI components
 - [ ] Unsolicited background registration updates
 - [x] Function-valued `user_bash` `BashOperations` over the JSON extension
       host, including streaming updates and cancellation
