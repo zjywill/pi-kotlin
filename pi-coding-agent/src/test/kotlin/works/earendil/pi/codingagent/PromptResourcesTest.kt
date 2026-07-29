@@ -91,4 +91,24 @@ class PromptResourcesTest {
         assertEquals(listOf("fallback instructions"), files.map(ProjectContextFile::content))
         assertTrue(warnings.isEmpty())
     }
+
+    @Test
+    fun `nested linked worktree does not reload the main worktree context file`() {
+        val root = Files.createTempDirectory("pi-kotlin-nested-worktree")
+        val main = Files.createDirectories(root.resolve("main"))
+        val mainGit = Files.createDirectories(main.resolve(".git"))
+        val linkedGit = Files.createDirectories(mainGit.resolve("worktrees").resolve("nested"))
+        val linked = Files.createDirectories(main.resolve("nested"))
+        val cwd = Files.createDirectories(linked.resolve("project"))
+        val agentDir = Files.createDirectories(root.resolve("agent"))
+        Files.writeString(main.resolve("AGENTS.md"), "main instructions")
+        Files.writeString(linked.resolve("AGENTS.md"), "linked instructions")
+        Files.writeString(linked.resolve(".git"), "gitdir: $linkedGit\n")
+        Files.writeString(linkedGit.resolve("commondir"), "../..\n")
+
+        val files = loadProjectContextFiles(cwd, agentDir)
+
+        assertEquals(listOf("linked instructions"), files.map(ProjectContextFile::content))
+        assertEquals(listOf(linked.resolve("AGENTS.md")), files.map(ProjectContextFile::path))
+    }
 }

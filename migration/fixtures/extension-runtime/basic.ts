@@ -81,6 +81,17 @@ export default function extensionRuntimeFixture(pi: ExtensionAPI) {
 		},
 	});
 
+	pi.registerCommand("dialogs", {
+		description: "Exercise awaited extension dialogs",
+		async handler(_args, ctx) {
+			const choice = await ctx.ui.select("Choose", ["alpha", "beta"]);
+			const confirmed = await ctx.ui.confirm("Confirm", "Continue?");
+			const name = await ctx.ui.input("Name", "enter name");
+			const edited = await ctx.ui.editor("Edit", "draft");
+			pi.appendEntry("fixture-dialogs", { choice, confirmed, name, edited });
+		},
+	});
+
 	pi.on("session_start", (_event, ctx) => {
 		ctx.ui.setStatus("fixture", "started");
 	});
@@ -109,5 +120,15 @@ export default function extensionRuntimeFixture(pi: ExtensionAPI) {
 		skillPaths: ["fixture-skill.md"],
 		promptPaths: ["fixture-prompt.md"],
 		themePaths: ["fixture-theme.json"],
+	}));
+
+	pi.on("user_bash", () => ({
+		operations: {
+			async exec(command, cwd, { onData }) {
+				onData(Buffer.from(`remote:${command}:${cwd}\n`));
+				onData(Buffer.from("finished"));
+				return { exitCode: 7 };
+			},
+		},
 	}));
 }

@@ -25,6 +25,10 @@ internal fun bootstrapExtensions(
     onDiagnostic: (ExtensionDiagnostic) -> Unit = {},
     onLog: (String) -> Unit = {},
     onBootstrapActions: (List<ExtensionAction>) -> Unit = {},
+    onUiRequest: (JsonObject, (JsonObject) -> Unit) -> Unit = { _, respond ->
+        respond(buildJsonObject { put("cancelled", true) })
+    },
+    onUiCancelled: (String) -> Unit = {},
     onProjectTrustPrompt: ((Path, List<ProjectTrustOption>) -> ProjectTrustOption?)? = null,
 ): ExtensionBootstrapResult {
     val normalizedCwd = cwd.toAbsolutePath().normalize()
@@ -67,6 +71,8 @@ internal fun bootstrapExtensions(
                     context = context(trusted),
                     onDiagnostic = onDiagnostic,
                     onLog = onLog,
+                    onUiRequest = onUiRequest,
+                    onUiCancelled = onUiCancelled,
                 ),
         )
     }
@@ -97,6 +103,8 @@ internal fun bootstrapExtensions(
             context = context(false),
             onDiagnostic = onDiagnostic,
             onLog = onLog,
+            onUiRequest = onUiRequest,
+            onUiCancelled = onUiCancelled,
         )
     onBootstrapActions(preTrustHost?.drainStartupActions().orEmpty())
     val trusted =
@@ -142,6 +150,8 @@ internal fun bootstrapExtensions(
             context = context(trusted),
             onDiagnostic = onDiagnostic,
             onLog = onLog,
+            onUiRequest = onUiRequest,
+            onUiCancelled = onUiCancelled,
         )
     return ExtensionBootstrapResult(trusted, finalResources, host)
 }
@@ -183,6 +193,8 @@ private fun startExtensionHost(
     context: JsonObject,
     onDiagnostic: (ExtensionDiagnostic) -> Unit,
     onLog: (String) -> Unit,
+    onUiRequest: (JsonObject, (JsonObject) -> Unit) -> Unit,
+    onUiCancelled: (String) -> Unit,
 ): ExtensionHost? =
     ExtensionHost.start(
         sources = sources,
@@ -195,6 +207,8 @@ private fun startExtensionHost(
         hasUI = mode == ExtensionMode.TUI,
         onDiagnostic = onDiagnostic,
         onLog = onLog,
+        onUiRequest = onUiRequest,
+        onUiCancelled = onUiCancelled,
     )
 
 private fun finalizeExtensionHost(
@@ -209,6 +223,8 @@ private fun finalizeExtensionHost(
     context: JsonObject,
     onDiagnostic: (ExtensionDiagnostic) -> Unit,
     onLog: (String) -> Unit,
+    onUiRequest: (JsonObject, (JsonObject) -> Unit) -> Unit,
+    onUiCancelled: (String) -> Unit,
 ): ExtensionHost? {
     if (preTrustHost == null) {
         return startExtensionHost(
@@ -221,6 +237,8 @@ private fun finalizeExtensionHost(
             context,
             onDiagnostic,
             onLog,
+            onUiRequest,
+            onUiCancelled,
         )
     }
     val finalByPath = finalSources.associateBy { canonicalPath(it.path) }
@@ -240,6 +258,8 @@ private fun finalizeExtensionHost(
         context,
         onDiagnostic,
         onLog,
+        onUiRequest,
+        onUiCancelled,
     )
 }
 

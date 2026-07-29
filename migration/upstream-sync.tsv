@@ -50,7 +50,7 @@ b63403a50f57fa0e3098684e927a63279598ec89	ported	Configured Bedrock profiles take
 063fb963c5c33d099faa593d17e60e0a875430cd	not-applicable	Upstream test-only home-directory isolation; Kotlin package tests already use temporary agent and home roots
 b6fb91e5b3a35a4361ae7d697d66eb7ed4dd9850	ported	TUI extension contexts carry the same resolved scopedModels list and pinned thinking levels
 66eead65249b0623e2c77f8f40447b2af094ec8b	already-covered	ResolvedPackageResources retains package and extension source metadata across reload merges; regression covers skills prompts and themes
-5d548ae969454d23ef8fec627c5be896be888d47	covered-by-known-gap	RPC bash emits user_bash and accepts direct replacement results; function-valued BashOperations require the unported bidirectional extension host protocol
+5d548ae969454d23ef8fec627c5be896be888d47	ported	RPC bash emits user_bash and accepts direct replacement results plus function-valued BashOperations through the bidirectional extension host
 f1ea6c0d05a5707a483268dbd42f8c60f38377ed	covered-by-known-gap	Model-selector filtering belongs to the unported full-screen selector and overlay workflow
 0563a7c0174d873b6368cf67349f7fc1be950292	ported	New git checkouts are removed after clone checkout or dependency failures and empty managed parents are pruned
 2fe21b407fcbf7625036afd46e39900ff8c081d1	ported	Z.AI provider requests include max_tokens from model metadata with the upstream fallback
@@ -60,3 +60,7 @@ f14519551682cd0fddac2e4b4e8b1f333667e94c	not-applicable	Upstream test-only dupli
 47ca25fcd8535b80710fad5be758f1f2cf81443c	not-applicable	Revert of the preceding test-only duplicate fixture edit
 fdbedcad8aeb7c1e2ebd3b85f16e60e5fab0b2c3	not-applicable	AgentHarness design-document reference update only
 027a5847901b5dde30270abaa1041046cd2b4b55	ported	Supported providers accept per-request HTTP transport injection while Google and Vertex reject unsupported custom transports explicitly
+0c32e83a352a4284133b2544f730a23814948ac3	covered-by-known-gap	llama.cpp streaming usage metadata belongs to the unported native llama extension and function-based custom provider surface
+fb4ecd633e10680063e6cd38c607361e03c19181	covered-by-known-gap	Image fallback shortening hyperlinks and render-width clamping belong to the unported full-screen image rendering surface
+f9476a61e557bfdce2fbf3ffeaad0988fe47c184	ported	Kotlin tool validation and the virtual TypeBox compile/value modules accept nullable array schemas with items
+cced6a21da273b26ee4a23a803680614bbe8dd1e	ported	Context discovery detects nested linked worktrees and skips the shadowed main-worktree context file

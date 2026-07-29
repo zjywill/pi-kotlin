@@ -186,11 +186,15 @@ internal fun loadProjectContextFiles(
         seenPaths.add(global.path)
     }
 
+    val shadowedContextFile = findShadowedContextFile(cwd)
     val ancestors = ArrayDeque<ProjectContextFile>()
     var current: Path? = cwd
     while (current != null) {
         loadContextFileFromDirectory(current, onWarning)?.let { contextFile ->
-            if (contextFile.path !in seenPaths) {
+            if (
+                canonicalPath(contextFile.path) != shadowedContextFile &&
+                contextFile.path !in seenPaths
+            ) {
                 ancestors.addFirst(contextFile)
                 seenPaths.add(contextFile.path)
             }
@@ -199,6 +203,71 @@ internal fun loadProjectContextFiles(
     }
     contextFiles += ancestors
     return contextFiles
+}
+
+private data class GitContextPaths(
+    val repoDir: Path,
+    val commonGitDir: Path,
+)
+
+private fun findShadowedContextFile(cwd: Path): Path? {
+    val gitPaths = findGitContextPaths(cwd) ?: return null
+    val worktreeRoot = canonicalPath(gitPaths.repoDir)
+    val commonGitDir = canonicalPath(gitPaths.commonGitDir)
+    val mainRepoRoot = commonGitDir.parent ?: return null
+    if (worktreeRoot == mainRepoRoot || !worktreeRoot.startsWith(mainRepoRoot)) {
+        return null
+    }
+    if (canonicalPath(mainRepoRoot.resolve(".git")) != commonGitDir) {
+        return null
+    }
+    val worktreeContext =
+        loadContextFileFromDirectory(worktreeRoot) {}
+            ?: return null
+    return canonicalPath(mainRepoRoot.resolve(worktreeContext.path.fileName))
+}
+
+private fun findGitContextPaths(cwd: Path): GitContextPaths? {
+    var current: Path? = cwd.toAbsolutePath().normalize()
+    while (current != null) {
+        val gitPath = current.resolve(".git")
+        when {
+            Files.isDirectory(gitPath) ->
+                return GitContextPaths(current, gitPath)
+
+            Files.isRegularFile(gitPath) -> {
+                val gitDirLine =
+                    runCatching { Files.readString(gitPath).lineSequence().firstOrNull() }
+                        .getOrNull()
+                        ?.trim()
+                        ?: return null
+                if (!gitDirLine.startsWith("gitdir:")) {
+                    return null
+                }
+                val rawGitDir = Path.of(gitDirLine.removePrefix("gitdir:").trim())
+                val gitDir =
+                    canonicalPath(
+                        if (rawGitDir.isAbsolute) rawGitDir else gitPath.parent.resolve(rawGitDir),
+                    )
+                val commonDirFile = gitDir.resolve("commondir")
+                val commonGitDir =
+                    if (Files.isRegularFile(commonDirFile)) {
+                        val rawCommon =
+                            runCatching { Path.of(Files.readString(commonDirFile).trim()) }
+                                .getOrNull()
+                                ?: return null
+                        canonicalPath(
+                            if (rawCommon.isAbsolute) rawCommon else gitDir.resolve(rawCommon),
+                        )
+                    } else {
+                        gitDir
+                    }
+                return GitContextPaths(current, commonGitDir)
+            }
+        }
+        current = current.parent
+    }
+    return null
 }
 
 internal fun createSelectedCodingTools(

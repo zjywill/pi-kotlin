@@ -1,6 +1,7 @@
 package works.earendil.pi.ai
 
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.double
@@ -60,5 +61,47 @@ class ToolValidationTest {
                 ToolCall("tool-1", "echo", buildJsonObject {}),
             )
         }
+    }
+
+    @Test
+    fun `accepts null for nullable array schemas with items`() {
+        val tool =
+            ToolDefinition(
+                name = "nullable",
+                description = "Nullable array",
+                parameters =
+                    buildJsonObject {
+                        put("type", "object")
+                        put(
+                            "properties",
+                            buildJsonObject {
+                                put(
+                                    "values",
+                                    buildJsonObject {
+                                        put(
+                                            "type",
+                                            JsonArray(
+                                                listOf(
+                                                    JsonPrimitive("array"),
+                                                    JsonPrimitive("null"),
+                                                ),
+                                            ),
+                                        )
+                                        put("items", buildJsonObject { put("type", "string") })
+                                    },
+                                )
+                            },
+                        )
+                        put("required", JsonArray(listOf(JsonPrimitive("values"))))
+                    },
+            )
+        val call =
+            ToolCall(
+                id = "tool-nullable",
+                name = "nullable",
+                arguments = buildJsonObject { put("values", JsonNull) },
+            )
+
+        assertEquals(JsonNull, validateToolArguments(tool, call)["values"])
     }
 }

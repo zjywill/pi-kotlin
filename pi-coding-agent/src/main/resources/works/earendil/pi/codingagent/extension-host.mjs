@@ -143,23 +143,36 @@ const check = (schema, value) => {
 	if (schema.const !== undefined) return value === schema.const;
 	if (schema.anyOf) return schema.anyOf.some(item => check(item, value));
 	if (schema.allOf) return schema.allOf.every(item => check(item, value));
+	if (Array.isArray(schema.type)) return schema.type.some(type => check({ ...schema, type }, value));
 	if (schema.type === "object") {
 		if (!value || typeof value !== "object" || Array.isArray(value)) return false;
 		return (schema.required ?? []).every(name => Object.hasOwn(value, name));
 	}
-	if (schema.type === "array") return Array.isArray(value);
+	if (schema.type === "array") {
+		return Array.isArray(value) && (!schema.items || value.every(item => check(schema.items, item)));
+	}
 	if (schema.type === "integer") return Number.isInteger(value);
 	if (schema.type === "null") return value === null;
 	return schema.type === undefined || typeof value === schema.type;
 };
 export const TypeCompiler = { Compile: schema => ({ Check: value => check(schema, value) }) };
+export const Compile = schema => ({
+	Check: value => check(schema, value),
+	Code: () => {
+		const serialized = JSON.stringify(schema);
+		return "const check = " + check.toString() + "; return value => check(" + serialized + ", value);";
+	},
+});
 `;
 
 const TYPEBOX_VALUE_SOURCE = String.raw`
 export const Value = {
 	Check: (schema, value) => {
+		if (Array.isArray(schema?.type)) return schema.type.some(type => Value.Check({ ...schema, type }, value));
 		if (schema?.type === "object") return !!value && typeof value === "object" && !Array.isArray(value);
-		if (schema?.type === "array") return Array.isArray(value);
+		if (schema?.type === "array") {
+			return Array.isArray(value) && (!schema.items || value.every(item => Value.Check(schema.items, item)));
+		}
 		if (schema?.type === "integer") return Number.isInteger(value);
 		if (schema?.type === "null") return value === null;
 		return schema?.type === undefined || typeof value === schema.type;
@@ -254,6 +267,9 @@ let providers = new Map();
 let attemptedPaths = new Set();
 let registrationVersion = 0;
 let currentActions = null;
+let currentProtocolRequestId = null;
+const pendingUiRequests = new Map();
+const activeBashOperations = new Map();
 
 function jsonValue(value) {
 	if (value === undefined) return null;
@@ -308,23 +324,91 @@ function createEventBus() {
 
 const sharedEventBus = createEventBus();
 
+function requestUI(method, payload, uiOptions, defaultValue, parseResponse) {
+	const parentId = currentProtocolRequestId;
+	if (!parentId) return Promise.resolve(defaultValue);
+	if (uiOptions?.signal?.aborted) return Promise.resolve(defaultValue);
+
+	const requestId = randomUUID();
+	return new Promise(resolve => {
+		let timeoutId;
+		const signal = uiOptions?.signal;
+		const cleanup = () => {
+			if (timeoutId) clearTimeout(timeoutId);
+			signal?.removeEventListener("abort", onAbort);
+			pendingUiRequests.delete(requestId);
+		};
+		const settle = (value, notifyCancel = false) => {
+			if (!pendingUiRequests.has(requestId)) return;
+			cleanup();
+			if (notifyCancel) {
+				protocolWrite(`${JSON.stringify({ type: "ui_cancel", id: parentId, requestId })}\n`);
+			}
+			resolve(value);
+		};
+		const onAbort = () => settle(defaultValue, true);
+		signal?.addEventListener("abort", onAbort, { once: true });
+		if (Number.isFinite(uiOptions?.timeout) && uiOptions.timeout > 0) {
+			timeoutId = setTimeout(() => settle(defaultValue, true), uiOptions.timeout);
+		}
+		pendingUiRequests.set(requestId, {
+			resolve: response => settle(parseResponse(response)),
+			cancel: () => settle(defaultValue),
+		});
+		protocolWrite(
+			`${JSON.stringify({
+				type: "ui_request",
+				id: parentId,
+				requestId,
+				method,
+				...payload,
+				...(Number.isFinite(uiOptions?.timeout) ? { timeout: uiOptions.timeout } : {}),
+			})}\n`,
+		);
+	});
+}
+
+function cancelAllUiRequests() {
+	for (const pending of [...pendingUiRequests.values()]) pending.cancel();
+}
+
 function createUI() {
 	return {
 		async select(title, options, uiOptions) {
-			action("ui", { id: randomUUID(), method: "select", title, options, ...uiOptions });
-			return undefined;
+			return requestUI(
+				"select",
+				{ title, options },
+				uiOptions,
+				undefined,
+				response => response?.cancelled ? undefined : response?.value,
+			);
 		},
 		async confirm(title, message, uiOptions) {
-			action("ui", { id: randomUUID(), method: "confirm", title, message, ...uiOptions });
-			return false;
+			return requestUI(
+				"confirm",
+				{ title, message },
+				uiOptions,
+				false,
+				response => response?.cancelled ? false : response?.confirmed === true,
+			);
 		},
 		async input(title, placeholder, uiOptions) {
-			action("ui", { id: randomUUID(), method: "input", title, placeholder, ...uiOptions });
-			return undefined;
+			return requestUI(
+				"input",
+				{ title, placeholder },
+				uiOptions,
+				undefined,
+				response => response?.cancelled ? undefined : response?.value,
+			);
 		},
 		async editor(title, prefill) {
-			action("ui", { id: randomUUID(), method: "editor", title, prefill });
-			return undefined;
+			return requestUI(
+				"editor",
+				{ title, prefill },
+				undefined,
+				undefined,
+				response => response?.cancelled ? undefined : response?.value,
+			);
 		},
 		notify(message, notifyType = "info") {
 			action("ui", { id: randomUUID(), method: "notify", message, notifyType });
@@ -721,6 +805,7 @@ async function emitEvent(event, context) {
 	const collectedMessages = [];
 	let result;
 	let resources;
+	let bashOperations;
 	let currentEvent = jsonValue(event);
 
 	handlerLoop: for (const { extension, handler } of handlersFor(event.type)) {
@@ -730,6 +815,16 @@ async function emitEvent(event, context) {
 			}
 			const handlerResult = await handler(currentEvent, ctx);
 			if (handlerResult === undefined) continue;
+			if (event.type === "user_bash") {
+				if (handlerResult?.result !== undefined) {
+					result = jsonValue(handlerResult);
+					break handlerLoop;
+				}
+				if (typeof handlerResult?.operations?.exec === "function") {
+					bashOperations = handlerResult.operations;
+					break handlerLoop;
+				}
+			}
 			const value = jsonValue(handlerResult);
 			if (event.type === "tool_call") {
 				result = value;
@@ -783,7 +878,56 @@ async function emitEvent(event, context) {
 			errors.push(errorInfo(extension.path, event.type, error));
 		}
 	}
+	if (bashOperations) {
+		result = {
+			operationsResult: await executeBashOperations(
+				bashOperations,
+				event.command,
+				event.cwd,
+				currentProtocolRequestId,
+			),
+		};
+	}
 	return { result: result ?? null, errors, ...(resources ? { resources } : {}) };
+}
+
+async function executeBashOperations(operations, command, cwd, requestId) {
+	if (!requestId) throw new Error("BashOperations require an active host request");
+	const controller = new AbortController();
+	const decoder = new TextDecoder();
+	activeBashOperations.set(requestId, controller);
+	protocolWrite(`${JSON.stringify({ type: "bash_start", id: requestId })}\n`);
+	const emitDecoded = value => {
+		if (!value) return;
+		protocolWrite(
+			`${JSON.stringify({
+				type: "bash_update",
+				id: requestId,
+				data: value,
+			})}\n`,
+		);
+	};
+	try {
+		const result = await operations.exec(command, cwd, {
+			onData(data) {
+				const bytes = Buffer.isBuffer(data) ? data : Buffer.from(data);
+				emitDecoded(decoder.decode(bytes, { stream: true }));
+			},
+			signal: controller.signal,
+		});
+		return {
+			exitCode: result?.exitCode ?? null,
+			cancelled: controller.signal.aborted,
+		};
+	} catch (error) {
+		if (controller.signal.aborted) {
+			return { exitCode: null, cancelled: true };
+		}
+		throw error;
+	} finally {
+		emitDecoded(decoder.decode());
+		activeBashOperations.delete(requestId);
+	}
 }
 
 async function invokeTool(request) {
@@ -863,20 +1007,41 @@ async function handle(request) {
 		};
 	} finally {
 		currentActions = null;
+		currentProtocolRequestId = null;
 	}
 }
 
 const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
-for await (const line of input) {
-	if (!line.trim()) continue;
+let requestQueue = Promise.resolve();
+const inputClosed = new Promise(resolve => {
+	input.once("close", () => {
+		cancelAllUiRequests();
+		resolve();
+	});
+});
+input.on("line", line => {
+	if (!line.trim()) return;
 	let request;
 	try {
 		request = JSON.parse(line);
 	} catch (error) {
 		protocolWrite(`${JSON.stringify({ ok: false, error: `Invalid JSON: ${error.message}` })}\n`);
-		continue;
+		return;
 	}
-	const response = await handle(request);
-	protocolWrite(`${JSON.stringify(response)}\n`);
-	if (request.type === "close") break;
-}
+	if (request.type === "ui_response") {
+		pendingUiRequests.get(request.requestId)?.resolve(request);
+		return;
+	}
+	if (request.type === "bash_abort") {
+		activeBashOperations.get(request.id)?.abort();
+		return;
+	}
+	requestQueue = requestQueue.then(async () => {
+		currentProtocolRequestId = request.id;
+		const response = await handle(request);
+		protocolWrite(`${JSON.stringify(response)}\n`);
+		if (request.type === "close") input.close();
+	});
+});
+await inputClosed;
+await requestQueue;

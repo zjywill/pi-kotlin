@@ -9,12 +9,14 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -79,6 +81,7 @@ class IpcServer(
                 return
             }
             val instanceId = request.instanceId()
+            val commandJobs = ConcurrentHashMap.newKeySet<Job>()
             val unsubscribe =
                 service.subscribe(instanceId, ::send)
                     ?: run {
@@ -94,8 +97,20 @@ class IpcServer(
                             send(errorResponse(error.message ?: "Invalid RPC command"))
                             continue
                         }
-                    service.handleStreamCommand(instanceId, command)?.let(::send)
+                    if (command.string("type") == "extension_ui_response") {
+                        service.handleStreamCommand(instanceId, command)
+                    } else {
+                        val job =
+                            scope.launch {
+                                runCatching {
+                                    service.handleStreamCommand(instanceId, command)?.let(::send)
+                                }
+                            }
+                        commandJobs += job
+                        job.invokeOnCompletion { commandJobs -= job }
+                    }
                 }
+                commandJobs.toList().joinAll()
             } finally {
                 unsubscribe()
             }

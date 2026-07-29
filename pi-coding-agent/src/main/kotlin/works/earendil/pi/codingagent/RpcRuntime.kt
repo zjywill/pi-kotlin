@@ -14,6 +14,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -93,6 +95,7 @@ data class RpcRuntimeOptions(
     val excludeTools: List<String>? = null,
     val thinking: works.earendil.pi.codingagent.AgentThinkingLevel? = null,
     val projectTrustPrompt: ((Path, List<String>) -> Int?)? = null,
+    val extensionUiHandler: ((JsonObject) -> JsonObject)? = null,
 )
 
 class RpcRuntime(
@@ -111,6 +114,8 @@ class RpcRuntime(
     private var promptJob: Job? = null
     private val activeBashes = ConcurrentHashMap.newKeySet<RunningBash>()
     private val pendingBashMessages = mutableListOf<BashExecutionMessage>()
+    private val pendingExtensionUiRequests = ConcurrentHashMap<String, (JsonObject) -> Unit>()
+    private val closing = AtomicBoolean(false)
     private var promptResources: PromptResources? = null
     private var extensionHost: ExtensionHost? = null
     private val extensionProviders = ExtensionProviderRegistry(models)
@@ -140,6 +145,9 @@ class RpcRuntime(
 
     internal val activeBashCount: Int
         get() = activeBashes.size
+
+    internal val pendingExtensionUiCount: Int
+        get() = pendingExtensionUiRequests.size
 
     suspend fun handleLine(line: String): JsonObject? {
         val command =
@@ -261,6 +269,10 @@ class RpcRuntime(
                     abortBashes()
                     successResponse(id, type)
                 }
+                "extension_ui_response" -> {
+                    handleExtensionUiResponse(command)
+                    null
+                }
 
                 "get_session_stats" -> successResponse(id, type, sessionStatsJson())
                 "export_html" -> {
@@ -373,8 +385,12 @@ class RpcRuntime(
     }
 
     suspend fun close() {
+        if (!closing.compareAndSet(false, true)) {
+            return
+        }
         promptJob?.cancel()
         abortBashes()
+        cancelPendingExtensionUiRequests()
         detachAgent()
         runCatching {
             emitExtensionEvent(
@@ -397,6 +413,7 @@ class RpcRuntime(
 
     fun reloadResources() {
         ensureIdle("reload")
+        cancelPendingExtensionUiRequests()
         detachAgent()
         shutdownExtensionSession()
         agent = createAgent()
@@ -594,33 +611,72 @@ class RpcRuntime(
             ?: return errorResponse(id, "bash", "Command is required")
         val excludeFromContext =
             command["excludeFromContext"]?.jsonPrimitive?.booleanOrNull
+        val extensionOutput = StringBuilder()
+        var extensionRunning: RunningBash? = null
         val extensionResult =
-            emitExtensionEvent(
-                host = extensionHost,
-                event =
-                    buildJsonObject {
-                        put("type", "user_bash")
-                        put("command", shellCommand)
-                        put("excludeFromContext", excludeFromContext ?: false)
-                        put("cwd", sessionManager.getCwd().toString())
-                    },
-                context = extensionContextProvider,
-                onActions = { applyExtensionActions(it) },
-            ) as? JsonObject
+            extensionHost?.let { host ->
+                val invocation =
+                    try {
+                        withContext(Dispatchers.IO) {
+                            host.emitUserBash(
+                                event =
+                                    buildJsonObject {
+                                        put("type", "user_bash")
+                                        put("command", shellCommand)
+                                        put("excludeFromContext", excludeFromContext ?: false)
+                                        put("cwd", sessionManager.getCwd().toString())
+                                    },
+                                context = extensionContextProvider(),
+                                onOperationStart = { operationId ->
+                                    val running =
+                                        RunningBash {
+                                            host.abortBashOperation(operationId)
+                                        }
+                                    extensionRunning = running
+                                    activeBashes += running
+                                },
+                                onUpdate = { delta ->
+                                    extensionOutput.append(delta)
+                                    emitBashUpdate(id, delta)
+                                },
+                            )
+                        }
+                    } finally {
+                        extensionRunning?.let(activeBashes::remove)
+                    }
+                applyExtensionActions(invocation.actions)
+                invocation.result as? JsonObject
+            }
         val replacement = extensionResult?.get("result") as? JsonObject
         if (replacement != null) {
             val result = normalizeBashResult(replacement)
             recordBashResult(shellCommand, result, excludeFromContext)
             return successResponse(id, "bash", result)
         }
-        if (extensionResult?.containsKey("operations") == true) {
-            emitExtensionError(
-                ExtensionDiagnostic(
-                    extensionPath = "<user_bash>",
-                    event = "user_bash",
-                    error = "Extension-provided BashOperations are not available over the Kotlin JSON host yet",
-                ),
-            )
+        val operationsResult = extensionResult?.get("operationsResult") as? JsonObject
+        if (operationsResult != null) {
+            val truncated = truncateTail(extensionOutput.toString())
+            val cancelled =
+                operationsResult["cancelled"]?.jsonPrimitive?.booleanOrNull == true ||
+                    extensionRunning?.cancelled?.get() == true
+            val result =
+                buildJsonObject {
+                    put("output", truncated.content)
+                    val exitCode =
+                        operationsResult["exitCode"]
+                            ?.jsonPrimitive
+                            ?.contentOrNull
+                            ?.toIntOrNull()
+                    if (cancelled || exitCode == null) {
+                        put("exitCode", JsonNull)
+                    } else {
+                        put("exitCode", exitCode)
+                    }
+                    put("cancelled", cancelled)
+                    put("truncated", truncated.truncated)
+                }
+            recordBashResult(shellCommand, result, excludeFromContext)
+            return successResponse(id, "bash", result)
         }
         val result =
             withContext(Dispatchers.IO) {
@@ -635,7 +691,18 @@ class RpcRuntime(
                         .directory(sessionManager.getCwd().toFile())
                         .redirectErrorStream(true)
                         .start()
-                val running = RunningBash(process)
+                val running =
+                    RunningBash {
+                        runCatching {
+                            process
+                                .toHandle()
+                                .descendants()
+                                .toList()
+                                .asReversed()
+                                .forEach { handle -> handle.destroyForcibly() }
+                        }
+                        runCatching { process.destroyForcibly() }
+                    }
                 activeBashes += running
                 try {
                     val output = StringBuilder()
@@ -648,13 +715,7 @@ class RpcRuntime(
                             }
                             val delta = String(buffer, 0, count)
                             output.append(delta)
-                            emit(
-                                buildJsonObject {
-                                    put("type", "bash_execution_update")
-                                    id?.let { put("id", it) }
-                                    put("delta", delta)
-                                },
-                            )
+                            emitBashUpdate(id, delta)
                         }
                     }
                     val exitCode = process.waitFor()
@@ -675,6 +736,19 @@ class RpcRuntime(
             }
         recordBashResult(shellCommand, result, excludeFromContext)
         return successResponse(id, "bash", result)
+    }
+
+    private fun emitBashUpdate(
+        id: String?,
+        delta: String,
+    ) {
+        emit(
+            buildJsonObject {
+                put("type", "bash_execution_update")
+                id?.let { put("id", it) }
+                put("delta", delta)
+            },
+        )
     }
 
     private fun handleSwitchSession(
@@ -955,6 +1029,8 @@ class RpcRuntime(
                     )
                 },
                 onBootstrapActions = ::applyBootstrapExtensionActions,
+                onUiRequest = ::handleHostedUiRequest,
+                onUiCancelled = { requestId -> pendingExtensionUiRequests.remove(requestId) },
                 onProjectTrustPrompt =
                     options.projectTrustPrompt?.let { prompt ->
                         { path, choices ->
@@ -1453,6 +1529,7 @@ class RpcRuntime(
     }
 
     private fun replaceSession(session: SessionManager) {
+        cancelPendingExtensionUiRequests()
         detachAgent()
         shutdownExtensionSession()
         sessionManager = session
@@ -1466,6 +1543,58 @@ class RpcRuntime(
 
     private fun abortBashes() {
         activeBashes.toList().forEach(RunningBash::cancel)
+    }
+
+    private fun handleHostedUiRequest(
+        request: JsonObject,
+        respond: (JsonObject) -> Unit,
+    ) {
+        val requestId = request.string("requestId")
+            ?: run {
+                respond(buildJsonObject { put("cancelled", true) })
+                return
+            }
+        if (closing.get() || (initializingExtensions && listeners.isEmpty() && options.extensionUiHandler == null)) {
+            respond(buildJsonObject { put("cancelled", true) })
+            return
+        }
+        val outward =
+            buildJsonObject {
+                put("type", "extension_ui_request")
+                put("id", requestId)
+                request.forEach { (name, value) ->
+                    if (name != "type" && name != "id" && name != "requestId") {
+                        put(name, value)
+                    }
+                }
+            }
+        val directHandler = options.extensionUiHandler
+        if (directHandler != null) {
+            val response =
+                runCatching { directHandler(outward) }
+                    .getOrElse { buildJsonObject { put("cancelled", true) } }
+            respond(response)
+            return
+        }
+        pendingExtensionUiRequests.put(requestId, respond)?.invoke(
+            buildJsonObject { put("cancelled", true) },
+        )
+        emit(outward)
+    }
+
+    private fun handleExtensionUiResponse(command: JsonObject) {
+        val requestId = command.string("id") ?: return
+        pendingExtensionUiRequests.remove(requestId)?.invoke(command)
+    }
+
+    private fun cancelPendingExtensionUiRequests() {
+        val pending = pendingExtensionUiRequests.values.toList()
+        pendingExtensionUiRequests.clear()
+        pending.forEach { respond ->
+            runCatching {
+                respond(buildJsonObject { put("cancelled", true) })
+            }
+        }
     }
 
     private fun detachAgent() {
@@ -1593,7 +1722,7 @@ class RpcRuntime(
 }
 
 private class RunningBash(
-    private val process: Process,
+    private val cancelAction: () -> Unit,
 ) {
     val cancelled = AtomicBoolean(false)
 
@@ -1601,15 +1730,7 @@ private class RunningBash(
         if (!cancelled.compareAndSet(false, true)) {
             return
         }
-        runCatching {
-            process
-                .toHandle()
-                .descendants()
-                .toList()
-                .asReversed()
-                .forEach { handle -> handle.destroyForcibly() }
-        }
-        runCatching { process.destroyForcibly() }
+        runCatching(cancelAction)
     }
 }
 
@@ -1617,8 +1738,9 @@ suspend fun runRpcJsonLines(
     runtime: RpcRuntime,
     input: BufferedReader,
     output: PrintWriter,
-) {
+) = coroutineScope {
     val lock = Any()
+    val jobs = ConcurrentHashMap.newKeySet<Job>()
     val unsubscribe =
         runtime.subscribe { value ->
             synchronized(lock) {
@@ -1627,20 +1749,27 @@ suspend fun runRpcJsonLines(
             }
         }
     try {
-        input.lineSequence().forEach { line ->
+        while (true) {
+            val line = withContext(Dispatchers.IO) { input.readLine() } ?: break
             if (line.isBlank()) {
-                return@forEach
+                continue
             }
-            runtime.handleLine(line)?.let { response ->
-                synchronized(lock) {
-                    output.println(protocolJson.encodeToString(JsonObject.serializer(), response))
-                    output.flush()
+            val job =
+                launch {
+                    runtime.handleLine(line)?.let { response ->
+                        synchronized(lock) {
+                            output.println(protocolJson.encodeToString(JsonObject.serializer(), response))
+                            output.flush()
+                        }
+                    }
                 }
-            }
+            jobs += job
+            job.invokeOnCompletion { jobs -= job }
         }
     } finally {
-        unsubscribe()
         runtime.close()
+        jobs.toList().joinAll()
+        unsubscribe()
     }
 }
 

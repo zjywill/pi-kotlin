@@ -7,6 +7,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 import kotlinx.coroutines.Dispatchers
@@ -131,9 +132,13 @@ internal class ExtensionHost private constructor(
     private val stderrThread: Thread,
     private val sourceInfoByPath: MutableMap<Path, ResourceSourceInfo>,
     private val onDiagnostic: (ExtensionDiagnostic) -> Unit,
+    private val onUiRequest: (JsonObject, (JsonObject) -> Unit) -> Unit,
+    private val onUiCancelled: (String) -> Unit,
 ) : AutoCloseable {
     private val requestIds = AtomicLong()
+    private val outputLock = Any()
     private val startupActions = mutableListOf<ExtensionAction>()
+    @Volatile
     private var closed = false
 
     lateinit var registrations: ExtensionRegistrations
@@ -150,6 +155,42 @@ internal class ExtensionHost private constructor(
                 put("context", context)
             },
         )
+
+    fun emitUserBash(
+        event: JsonObject,
+        context: JsonObject,
+        onOperationStart: (String) -> Unit,
+        onUpdate: (String) -> Unit,
+    ): ExtensionInvocation =
+        invoke(
+            buildJsonObject {
+                put("type", "emit")
+                put("event", event)
+                put("context", context)
+            },
+            onIntermediate = { message ->
+                when (message.string("type")) {
+                    "bash_start" ->
+                        message.string("id")?.let(onOperationStart)
+
+                    "bash_update" ->
+                        message.string("data")
+                            ?.let(onUpdate)
+                }
+            },
+        )
+
+    fun abortBashOperation(id: String) {
+        if (closed) {
+            return
+        }
+        writePayload(
+            buildJsonObject {
+                put("type", "bash_abort")
+                put("id", id)
+            },
+        )
+    }
 
     fun invokeTool(
         toolId: String,
@@ -233,25 +274,15 @@ internal class ExtensionHost private constructor(
         return registrations
     }
 
-    @Synchronized
     override fun close() {
-        if (closed) {
-            return
-        }
-        closed = true
-        runCatching {
-            val id = requestIds.incrementAndGet().toString()
-            output.println(
-                protocolJson.encodeToString(
-                    JsonObject.serializer(),
-                    buildJsonObject {
-                        put("id", id)
-                        put("type", "close")
-                    },
-                ),
-            )
-            output.flush()
-            input.readLine()
+        synchronized(this) {
+            if (closed) {
+                return
+            }
+            runCatching {
+                request(buildJsonObject { put("type", "close") })
+            }
+            closed = true
         }
         output.close()
         input.close()
@@ -264,8 +295,11 @@ internal class ExtensionHost private constructor(
         stderrThread.join(1_000)
     }
 
-    private fun invoke(request: JsonObject): ExtensionInvocation {
-        val response = request(request)
+    private fun invoke(
+        request: JsonObject,
+        onIntermediate: (JsonObject) -> Unit = {},
+    ): ExtensionInvocation {
+        val response = request(request, onIntermediate)
         response["errors"]
             ?.jsonArray
             .orEmpty()
@@ -335,7 +369,10 @@ internal class ExtensionHost private constructor(
     }
 
     @Synchronized
-    private fun request(request: JsonObject): JsonObject {
+    private fun request(
+        request: JsonObject,
+        onIntermediate: (JsonObject) -> Unit = {},
+    ): JsonObject {
         check(!closed) { "Extension host is closed" }
         val id = requestIds.incrementAndGet().toString()
         val payload =
@@ -343,8 +380,52 @@ internal class ExtensionHost private constructor(
                 request.forEach { (name, value) -> put(name, value) }
                 put("id", id)
             }
-        output.println(protocolJson.encodeToString(JsonObject.serializer(), payload))
-        output.flush()
+        writePayload(payload)
+        while (true) {
+            val response = readResponse()
+            when (response.string("type")) {
+                "ui_request" -> {
+                    val requestId = response.string("requestId")
+                        ?: error("Extension host UI request is missing requestId")
+                    val responded = AtomicBoolean(false)
+                    onUiRequest(response) { value ->
+                        if (responded.compareAndSet(false, true)) {
+                            writePayload(
+                                buildJsonObject {
+                                    put("type", "ui_response")
+                                    put("requestId", requestId)
+                                    value.forEach { (name, element) ->
+                                        if (name != "type" && name != "id" && name != "requestId") {
+                                            put(name, element)
+                                        }
+                                    }
+                                },
+                            )
+                        }
+                    }
+                }
+
+                "ui_cancel" ->
+                    response.string("requestId")?.let(onUiCancelled)
+
+                else -> {
+                    if (requireExtensionHostFinalResponse(response, id)) {
+                        return response
+                    }
+                    onIntermediate(response)
+                }
+            }
+        }
+    }
+
+    private fun writePayload(payload: JsonObject) {
+        synchronized(outputLock) {
+            output.println(protocolJson.encodeToString(JsonObject.serializer(), payload))
+            output.flush()
+        }
+    }
+
+    private fun readResponse(): JsonObject {
         val line =
             input.readLine()
                 ?: error(
@@ -357,19 +438,11 @@ internal class ExtensionHost private constructor(
                         }
                     },
                 )
-        val response =
-            try {
-                protocolJson.parseToJsonElement(line).jsonObject
-            } catch (error: Exception) {
-                throw IllegalStateException("Extension host returned invalid JSON: $line", error)
-            }
-        check(response.string("id") == id) {
-            "Extension host response id mismatch: expected $id, received ${response.string("id")}"
+        return try {
+            protocolJson.parseToJsonElement(line).jsonObject
+        } catch (error: Exception) {
+            throw IllegalStateException("Extension host returned invalid JSON: $line", error)
         }
-        if (response["ok"]?.jsonPrimitive?.booleanOrNull != true) {
-            error(response.string("error") ?: "Extension host request failed")
-        }
-        return response
     }
 
     private fun parseRegistrations(value: JsonObject): ExtensionRegistrations {
@@ -480,6 +553,10 @@ internal class ExtensionHost private constructor(
             environment: Map<String, String> = System.getenv(),
             onDiagnostic: (ExtensionDiagnostic) -> Unit = {},
             onLog: (String) -> Unit = {},
+            onUiRequest: (JsonObject, (JsonObject) -> Unit) -> Unit = { _, respond ->
+                respond(buildJsonObject { put("cancelled", true) })
+            },
+            onUiCancelled: (String) -> Unit = {},
         ): ExtensionHost? {
             if (sources.isEmpty()) {
                 return null
@@ -537,8 +614,10 @@ internal class ExtensionHost private constructor(
                     sourceInfoByPath =
                         normalizedSources.associate { source ->
                             canonicalExtensionPath(source.path) to source.sourceInfo
-                        }.toMutableMap(),
+                    }.toMutableMap(),
                     onDiagnostic = onDiagnostic,
+                    onUiRequest = onUiRequest,
+                    onUiCancelled = onUiCancelled,
                 )
             return try {
                 val response =
@@ -623,6 +702,20 @@ internal class ExtensionHost private constructor(
             return target
         }
     }
+}
+
+internal fun requireExtensionHostFinalResponse(
+    response: JsonObject,
+    expectedId: String,
+): Boolean {
+    val ok = response["ok"]?.jsonPrimitive?.booleanOrNull ?: return false
+    check(response.string("id") == expectedId) {
+        "Extension host response id mismatch: expected $expectedId, received ${response.string("id")}"
+    }
+    if (!ok) {
+        error(response.string("error") ?: "Extension host request failed")
+    }
+    return true
 }
 
 internal class HostedExtensionTool(

@@ -1,11 +1,20 @@
 package works.earendil.pi.codingagent
 
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.io.PipedInputStream
+import java.io.PipedOutputStream
+import java.io.PrintWriter
 import java.nio.file.Files
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonNull
@@ -169,6 +178,418 @@ class RpcRuntimeTest {
                 messages.map { it["excludeFromContext"]?.jsonPrimitive?.boolean },
             )
             runtime.close()
+        }
+
+    @Test
+    fun `RPC extension dialogs await correlated client responses without deadlock`() =
+        runBlocking {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                nodeAvailable(),
+                "Node.js 22+ is required for extension runtime tests",
+            )
+            val root = Files.createTempDirectory("pi-kotlin-rpc-extension-dialogs")
+            val extension =
+                root.resolve("dialogs.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          pi.registerCommand("dialogs", {
+                            async handler(_args, ctx) {
+                              const choice = await ctx.ui.select("Choose", ["alpha", "beta"]);
+                              const confirmed = await ctx.ui.confirm("Confirm", "Continue?");
+                              const name = await ctx.ui.input("Name", "enter name");
+                              ctx.ui.notify(`${'$'}{choice}|${'$'}{confirmed}|${'$'}{name}`, "info");
+                            },
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val runtime =
+                RpcRuntime(
+                    Models(listOf(FauxProvider())),
+                    RpcRuntimeOptions(
+                        cwd = root,
+                        agentDir = Files.createDirectories(root.resolve("agent")),
+                        noSession = true,
+                        provider = "faux",
+                        model = "faux-1",
+                        extensionPaths = listOf(extension.toString()),
+                    ),
+                )
+            try {
+                val events = CopyOnWriteArrayList<JsonObject>()
+                val requests = Channel<JsonObject>(Channel.UNLIMITED)
+                runtime.subscribe { event ->
+                    events += event
+                    if (event.eventType() == "extension_ui_request" &&
+                        event["method"]?.jsonPrimitive?.content in setOf("select", "confirm", "input")
+                    ) {
+                        requests.trySend(event)
+                    }
+                }
+
+                val invocation =
+                    async(Dispatchers.Default) {
+                        runtime.handle(
+                            buildJsonObject {
+                                put("id", "dialogs-command")
+                                put("type", "prompt")
+                                put("message", "/dialogs")
+                            },
+                        )
+                    }
+                val responses =
+                    mapOf(
+                        "select" to buildJsonObject { put("value", "beta") },
+                        "confirm" to buildJsonObject { put("confirmed", true) },
+                        "input" to buildJsonObject { put("value", "Ada") },
+                    )
+                repeat(3) {
+                    val request = withTimeout(2_000) { requests.receive() }
+                    assertEquals(1, runtime.pendingExtensionUiCount)
+                    runtime.handle(
+                        buildJsonObject {
+                            put("type", "extension_ui_response")
+                            put("id", requireNotNull(request["id"]).jsonPrimitive.content)
+                            responses.getValue(requireNotNull(request["method"]).jsonPrimitive.content)
+                                .forEach { (name, value) -> put(name, value) }
+                        },
+                    )
+                }
+
+                assertSuccess(withTimeout(2_000) { invocation.await() })
+                assertEquals(0, runtime.pendingExtensionUiCount)
+                assertTrue(
+                    events.any {
+                        it.eventType() == "extension_ui_request" &&
+                            it["method"]?.jsonPrimitive?.content == "notify" &&
+                            it["message"]?.jsonPrimitive?.content == "beta|true|Ada"
+                    },
+                )
+            } finally {
+                runtime.close()
+            }
+        }
+
+    @Test
+    fun `function valued user bash operations stream output and persist results`() =
+        runTest {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                nodeAvailable(),
+                "Node.js 22+ is required for extension runtime tests",
+            )
+            val root = Files.createTempDirectory("pi-kotlin-rpc-user-bash-operations")
+            val extension =
+                root.resolve("user-bash-operations.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          pi.on("user_bash", () => ({
+                            operations: {
+                              async exec(command, cwd, { onData }) {
+                                onData(Buffer.from(`remote:${'$'}{command}:${'$'}{cwd}\n`));
+                                onData(Buffer.from("finished"));
+                                const splitUtf8 = Buffer.from([0xe7, 0x95, 0x8c]);
+                                onData(splitUtf8.subarray(0, 2));
+                                onData(splitUtf8.subarray(2));
+                                return { exitCode: 7 };
+                              },
+                            },
+                          }));
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val runtime =
+                RpcRuntime(
+                    Models(listOf(FauxProvider())),
+                    RpcRuntimeOptions(
+                        cwd = root,
+                        agentDir = Files.createDirectories(root.resolve("agent")),
+                        noSession = true,
+                        provider = "faux",
+                        model = "faux-1",
+                        extensionPaths = listOf(extension.toString()),
+                    ),
+                )
+            val updates = mutableListOf<String>()
+            runtime.subscribe { event ->
+                if (event.eventType() == "bash_execution_update") {
+                    updates += event["delta"]?.jsonPrimitive?.content.orEmpty()
+                }
+            }
+
+            val response =
+                requireNotNull(
+                    runtime.handle(
+                        buildJsonObject {
+                            put("id", "remote-bash")
+                            put("type", "bash")
+                            put("command", "hostname")
+                        },
+                    ),
+                )
+            val entries =
+                requireNotNull(runtime.handle(buildJsonObject { put("type", "get_entries") }))
+                    .data()["entries"]
+                    ?.jsonArray
+                    .orEmpty()
+            val message = entries.mapNotNull { it.jsonObject["message"] as? JsonObject }.single()
+
+            assertSuccess(response)
+            assertEquals(
+                "remote:hostname:$root\nfinished\u754c",
+                response.data()["output"]?.jsonPrimitive?.content,
+            )
+            assertEquals("7", response.data()["exitCode"]?.jsonPrimitive?.content)
+            assertEquals(listOf("remote:hostname:$root\n", "finished", "\u754c"), updates)
+            assertEquals("bashExecution", message["role"]?.jsonPrimitive?.content)
+            assertEquals("7", message["exitCode"]?.jsonPrimitive?.content)
+            runtime.close()
+        }
+
+    @Test
+    fun `abort bash cancels function valued extension operations`() =
+        runBlocking {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                nodeAvailable(),
+                "Node.js 22+ is required for extension runtime tests",
+            )
+            val root = Files.createTempDirectory("pi-kotlin-rpc-user-bash-cancel")
+            val extension =
+                root.resolve("user-bash-cancel.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          pi.on("user_bash", () => ({
+                            operations: {
+                              async exec(_command, _cwd, { onData, signal }) {
+                                onData(Buffer.from("started"));
+                                await new Promise(resolve => {
+                                  if (signal.aborted) resolve();
+                                  else signal.addEventListener("abort", resolve, { once: true });
+                                });
+                                throw new Error("aborted");
+                              },
+                            },
+                          }));
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val runtime =
+                RpcRuntime(
+                    Models(listOf(FauxProvider())),
+                    RpcRuntimeOptions(
+                        cwd = root,
+                        agentDir = Files.createDirectories(root.resolve("agent")),
+                        noSession = true,
+                        provider = "faux",
+                        model = "faux-1",
+                        extensionPaths = listOf(extension.toString()),
+                    ),
+                )
+            val bash =
+                async(Dispatchers.Default) {
+                    requireNotNull(
+                        runtime.handle(
+                            buildJsonObject {
+                                put("id", "remote-cancel")
+                                put("type", "bash")
+                                put("command", "wait")
+                            },
+                        ),
+                    )
+                }
+            withTimeout(2_000) {
+                while (runtime.activeBashCount != 1) {
+                    delay(10)
+                }
+            }
+
+            assertSuccess(runtime.handle(buildJsonObject { put("type", "abort_bash") }))
+            val response = withTimeout(2_000) { bash.await() }
+
+            assertSuccess(response)
+            assertEquals("started", response.data()["output"]?.jsonPrimitive?.content)
+            assertEquals(JsonNull, response.data()["exitCode"])
+            assertTrue(response.data()["cancelled"]?.jsonPrimitive?.boolean ?: false)
+            assertEquals(0, runtime.activeBashCount)
+            runtime.close()
+        }
+
+    @Test
+    fun `JSONL reader accepts extension UI responses while a command is awaiting them`() =
+        runBlocking {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                nodeAvailable(),
+                "Node.js 22+ is required for extension runtime tests",
+            )
+            val root = Files.createTempDirectory("pi-kotlin-rpc-jsonl-dialog")
+            val extension =
+                root.resolve("jsonl-dialog.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          pi.registerCommand("choose", {
+                            async handler(_args, ctx) {
+                              const choice = await ctx.ui.select("Choose", ["one", "two"]);
+                              ctx.ui.notify(`selected:${'$'}{choice}`, "info");
+                            },
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val runtime =
+                RpcRuntime(
+                    Models(listOf(FauxProvider())),
+                    RpcRuntimeOptions(
+                        cwd = root,
+                        agentDir = Files.createDirectories(root.resolve("agent")),
+                        noSession = true,
+                        provider = "faux",
+                        model = "faux-1",
+                        extensionPaths = listOf(extension.toString()),
+                    ),
+                )
+            val runtimeInput = PipedInputStream()
+            val clientWriter = PrintWriter(PipedOutputStream(runtimeInput), true)
+            val clientInput = PipedInputStream()
+            val runtimeOutput = PrintWriter(PipedOutputStream(clientInput), true)
+            val clientReader = BufferedReader(InputStreamReader(clientInput))
+            val runner =
+                async(Dispatchers.IO) {
+                    runRpcJsonLines(
+                        runtime,
+                        BufferedReader(InputStreamReader(runtimeInput)),
+                        runtimeOutput,
+                    )
+                }
+
+            clientWriter.println("""{"id":"choose-command","type":"prompt","message":"/choose"}""")
+            val request =
+                withTimeout(2_000) {
+                    while (true) {
+                        val event =
+                            protocolJson
+                                .parseToJsonElement(
+                                    requireNotNull(withContext(Dispatchers.IO) { clientReader.readLine() }),
+                                ).jsonObject
+                        if (event.eventType() == "extension_ui_request" &&
+                            event["method"]?.jsonPrimitive?.content == "select"
+                        ) {
+                            return@withTimeout event
+                        }
+                    }
+                    error("unreachable")
+                }
+            clientWriter.println(
+                """{"type":"extension_ui_response","id":"${request["id"]?.jsonPrimitive?.content}","value":"two"}""",
+            )
+            val response =
+                withTimeout(2_000) {
+                    while (true) {
+                        val event =
+                            protocolJson
+                                .parseToJsonElement(
+                                    requireNotNull(withContext(Dispatchers.IO) { clientReader.readLine() }),
+                                ).jsonObject
+                        if (event.eventType() == "response" &&
+                            event["id"]?.jsonPrimitive?.content == "choose-command"
+                        ) {
+                            return@withTimeout event
+                        }
+                    }
+                    error("unreachable")
+                }
+
+            assertSuccess(response)
+            clientWriter.close()
+            withTimeout(2_000) { runner.await() }
+            runtimeOutput.close()
+            clientReader.close()
+        }
+
+    @Test
+    fun `JSONL EOF cancels pending extension UI requests and shuts down`() =
+        runBlocking {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                nodeAvailable(),
+                "Node.js 22+ is required for extension runtime tests",
+            )
+            val root = Files.createTempDirectory("pi-kotlin-rpc-jsonl-eof")
+            val extension =
+                root.resolve("jsonl-eof.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          pi.registerCommand("wait-input", {
+                            async handler(_args, ctx) {
+                              await ctx.ui.input("Wait");
+                            },
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val runtime =
+                RpcRuntime(
+                    Models(listOf(FauxProvider())),
+                    RpcRuntimeOptions(
+                        cwd = root,
+                        agentDir = Files.createDirectories(root.resolve("agent")),
+                        noSession = true,
+                        provider = "faux",
+                        model = "faux-1",
+                        extensionPaths = listOf(extension.toString()),
+                    ),
+                )
+            val runtimeInput = PipedInputStream()
+            val clientWriter = PrintWriter(PipedOutputStream(runtimeInput), true)
+            val clientInput = PipedInputStream()
+            val runtimeOutput = PrintWriter(PipedOutputStream(clientInput), true)
+            val clientReader = BufferedReader(InputStreamReader(clientInput))
+            val runner =
+                async(Dispatchers.IO) {
+                    runRpcJsonLines(
+                        runtime,
+                        BufferedReader(InputStreamReader(runtimeInput)),
+                        runtimeOutput,
+                    )
+                }
+
+            clientWriter.println("""{"id":"wait-command","type":"prompt","message":"/wait-input"}""")
+            val request =
+                withTimeout(2_000) {
+                    while (true) {
+                        val event =
+                            protocolJson
+                                .parseToJsonElement(
+                                    requireNotNull(withContext(Dispatchers.IO) { clientReader.readLine() }),
+                                ).jsonObject
+                        if (event.eventType() == "extension_ui_request" &&
+                            event["method"]?.jsonPrimitive?.content == "input"
+                        ) {
+                            return@withTimeout event
+                        }
+                    }
+                    error("unreachable")
+                }
+            assertEquals(1, runtime.pendingExtensionUiCount)
+            assertTrue(request["id"]?.jsonPrimitive?.content?.isNotBlank() == true)
+
+            clientWriter.close()
+            withTimeout(2_000) { runner.await() }
+            assertEquals(0, runtime.pendingExtensionUiCount)
+            runtimeOutput.close()
+            clientReader.close()
         }
 
     @Test

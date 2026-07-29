@@ -205,6 +205,109 @@ class ServerIntegrationTest {
         }
 
     @Test
+    fun `rpc stream routes extension UI responses while commands are awaiting them`() =
+        runTest {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                nodeAvailable(),
+                "Node.js 22+ is required for extension runtime tests",
+            )
+            val root = Files.createTempDirectory("pi-kotlin-server-extension-ui")
+            val extension =
+                root.resolve("choose.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          pi.registerCommand("choose", {
+                            async handler(_args, ctx) {
+                              const choice = await ctx.ui.select("Choose", ["one", "two"]);
+                              ctx.ui.notify(`selected:${'$'}{choice}`, "info");
+                            },
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val config = ServerConfig(root.resolve("server"))
+            val supervisor =
+                ServerSupervisor(
+                    ServerStorage(config),
+                    RpcRuntimeFactory { cwd, _, _ ->
+                        RpcRuntime(
+                            Models(listOf(FauxProvider())),
+                            RpcRuntimeOptions(
+                                cwd = cwd,
+                                agentDir = Files.createDirectories(root.resolve("agent")),
+                                noSession = true,
+                                provider = "faux",
+                                model = "faux-1",
+                                extensionPaths = listOf(extension.toString()),
+                            ),
+                        )
+                    },
+                )
+            val socketPath = Path.of("/tmp", "pi-kotlin-${UUID.randomUUID()}.sock")
+            val server = IpcServer(socketPath, ServerService(supervisor))
+            server.start()
+            try {
+                val instance = supervisor.spawnInstance(root)
+                socketStream(socketPath, instance.id).use { stream ->
+                    assertEquals("rpc_ready", stream.read().string("type"))
+                    stream.write(
+                        buildJsonObject {
+                            put("id", "choose-command")
+                            put("type", "prompt")
+                            put("message", "/choose")
+                        },
+                    )
+                    val request = stream.read()
+                    assertEquals("extension_ui_request", request.string("type"))
+                    assertEquals("select", request.string("method"))
+                    stream.write(
+                        buildJsonObject {
+                            put("type", "extension_ui_response")
+                            put("id", requireNotNull(request.string("id")))
+                            put("value", "two")
+                        },
+                    )
+                    val afterResponse = mutableListOf<JsonObject>()
+                    withContext(Dispatchers.IO) {
+                        withTimeout(5_000) {
+                            while (
+                                afterResponse.none {
+                                    it.string("type") == "response" &&
+                                        it.string("id") == "choose-command"
+                                } ||
+                                afterResponse.none {
+                                    it.string("type") == "extension_ui_request" &&
+                                        it.string("method") == "notify"
+                                }
+                            ) {
+                                afterResponse += stream.read()
+                            }
+                        }
+                    }
+                    val response =
+                        afterResponse.firstOrNull {
+                            it.string("type") == "response" &&
+                                it.string("id") == "choose-command"
+                        } ?: error("Missing command response in $afterResponse")
+                    val notification =
+                        afterResponse.firstOrNull {
+                            it.string("type") == "extension_ui_request" &&
+                                it.string("method") == "notify"
+                        } ?: error("Missing extension notification in $afterResponse")
+
+                    assertTrue(response["success"]?.jsonPrimitive?.boolean ?: false)
+                    assertEquals("selected:two", notification.string("message"))
+                }
+            } finally {
+                server.close()
+                supervisor.shutdown()
+            }
+        }
+
+    @Test
     fun `rpc stream cli half closes after piped input`() =
         runTest {
             val root = Files.createTempDirectory("pi-kotlin-server-pipe")
@@ -301,4 +404,12 @@ class ServerIntegrationTest {
             )
         }
     }
+
+    private fun nodeAvailable(): Boolean =
+        runCatching {
+            val process = ProcessBuilder("node", "--version").start()
+            process.waitFor()
+            process.exitValue() == 0 &&
+                process.inputStream.bufferedReader().readText().trim().removePrefix("v").substringBefore('.').toInt() >= 22
+        }.getOrDefault(false)
 }

@@ -161,6 +161,8 @@ private fun printHelp() {
           pi-server rpc-stream <instance-id>
           pi-server --help
           pi-server --version
+
+        rpc-stream stdin accepts JSONL RPC commands and extension_ui_response messages.
         """.trimIndent(),
     )
 }

@@ -44,6 +44,8 @@ const tool = extension.tools.get("extension_echo")?.definition;
 if (!tool) throw new Error("extension_echo was not registered");
 const command = [...extension.commands.values()].find((value) => value.name === "record");
 if (!command) throw new Error("record was not registered");
+const dialogsCommand = [...extension.commands.values()].find((value) => value.name === "dialogs");
+if (!dialogsCommand) throw new Error("dialogs was not registered");
 const initialTools = [...extension.tools.values()];
 const initialCommands = [...extension.commands.values()];
 const initialFlags = [...extension.flags.values()];
@@ -54,6 +56,22 @@ function context(actions: unknown[]) {
 		mode: "print",
 		hasUI: false,
 		ui: {
+			async select(title: string, options: string[]) {
+				actions.push({ type: "ui_dialog", method: "select", title, options });
+				return "beta";
+			},
+			async confirm(title: string, message: string) {
+				actions.push({ type: "ui_dialog", method: "confirm", title, message });
+				return true;
+			},
+			async input(title: string, placeholder?: string) {
+				actions.push({ type: "ui_dialog", method: "input", title, placeholder });
+				return "Ada";
+			},
+			async editor(title: string, prefill?: string) {
+				actions.push({ type: "ui_dialog", method: "editor", title, prefill });
+				return "edited";
+			},
 			notify(message: string, notifyType = "info") {
 				actions.push({ type: "ui", method: "notify", message, notifyType });
 			},
@@ -94,6 +112,10 @@ const toolResult = await tool.execute(
 const commandActions: unknown[] = [];
 await command.handler("checkpoint", context(commandActions) as never);
 commandActions.unshift(...runtimeActions.splice(0));
+
+const dialogActions: unknown[] = [];
+await dialogsCommand.handler("", context(dialogActions) as never);
+dialogActions.unshift(...runtimeActions.splice(0));
 
 const sessionActions: unknown[] = [];
 for (const handler of extension.handlers.get("session_start") ?? []) {
@@ -151,6 +173,36 @@ for (const handler of extension.handlers.get("resources_discover") ?? []) {
 		{ type: "resources_discover", cwd: dirname(fixture), reason: "startup" },
 		context([]),
 	);
+}
+
+let userBashResult: unknown;
+for (const handler of extension.handlers.get("user_bash") ?? []) {
+	const handled = await handler(
+		{
+			type: "user_bash",
+			command: "hostname",
+			excludeFromContext: false,
+			cwd: dirname(fixture),
+		},
+		context([]),
+	);
+	if (handled?.result) {
+		userBashResult = handled.result;
+		break;
+	}
+	if (handled?.operations) {
+		const chunks: string[] = [];
+		const result = await handled.operations.exec("hostname", dirname(fixture), {
+			onData: data => chunks.push(data.toString("utf8")),
+		});
+		userBashResult = {
+			output: chunks.join(""),
+			exitCode: result.exitCode,
+			cancelled: false,
+			truncated: false,
+		};
+		break;
+	}
 }
 
 const resourceResult = resourcesDiscover as {
@@ -241,12 +293,14 @@ const output = {
 		updates,
 	},
 	commandActions,
+	dialogActions,
 	sessionActions,
 	projectTrust,
 	beforeAgentStart,
 	toolCall,
 	toolResult: toolResultPatch,
 	resourcesDiscover,
+	userBash: userBashResult,
 	composedResources: {
 		skills: loadedSkills.skills.map(skill => skill.name),
 		prompts: loadedPrompts.map(prompt => prompt.name),

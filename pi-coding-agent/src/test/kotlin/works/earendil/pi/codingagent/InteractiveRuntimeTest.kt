@@ -360,6 +360,63 @@ class InteractiveRuntimeTest {
             assertTrue(console.output.contains("trusted project extension loaded"))
         }
 
+    @Test
+    fun `interactive extension dialogs return selected confirmed and entered values`() =
+        runTest {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                nodeAvailable(),
+                "Node.js 22+ is required for extension runtime tests",
+            )
+            val root = Files.createTempDirectory("pi-kotlin-interactive-extension-dialogs")
+            val extension =
+                root.resolve("dialogs.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          pi.registerCommand("dialogs", {
+                            async handler(_args, ctx) {
+                              const choice = await ctx.ui.select("Choose", ["alpha", "beta"]);
+                              const confirmed = await ctx.ui.confirm("Confirm", "Continue?");
+                              const name = await ctx.ui.input("Name", "enter name");
+                              ctx.ui.notify(`${'$'}{choice}|${'$'}{confirmed}|${'$'}{name}`, "info");
+                            },
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val console = ScriptedConsole(listOf("/dialogs", "2", "y", "Ada", "/exit"))
+            val runtime =
+                InteractiveRuntime(
+                    Models(listOf(FauxProvider())),
+                    cwd = root,
+                    agentDir = Files.createDirectories(root.resolve("agent")),
+                    consoleFactory = { console },
+                )
+
+            val exit =
+                runtime.run(
+                    parseArgs(
+                        listOf(
+                            "--provider",
+                            "faux",
+                            "--model",
+                            "faux-1",
+                            "--no-session",
+                            "--extension",
+                            extension.toString(),
+                        ),
+                    ),
+                )
+
+            assertEquals(0, exit)
+            assertTrue(console.output.contains("Choose"))
+            assertTrue(console.output.contains("2. beta"))
+            assertTrue(console.output.contains("Continue?"))
+            assertTrue(console.output.contains("beta|true|Ada"))
+        }
+
     private fun nodeAvailable(): Boolean =
         runCatching {
             val process = ProcessBuilder("node", "--version").start()

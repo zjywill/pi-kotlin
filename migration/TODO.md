@@ -5,7 +5,7 @@ Last reviewed: July 29, 2026
 ## Completion gate
 
 - Source repository: `/Users/junyizhang/Git/pi`
-- Reviewed source commit: `027a5847901b5dde30270abaa1041046cd2b4b55`
+- Reviewed source commit: `cced6a21da273b26ee4a23a803680614bbe8dd1e`
 - Target repository: `/Users/junyizhang/Git/pi-kotlin`
 - The migration is complete only when:
 
@@ -54,20 +54,27 @@ Last reviewed: July 29, 2026
   - [x] Request-bound dynamic tool, command, flag, and provider refresh
   - [x] Fire-and-forget extension UI notifications and status actions
   - [x] Live `ctx.scopedModels` in print, RPC, and TUI contexts
-- [x] Upstream coding-agent synchronization through `027a584`
+  - [x] Awaited `select`, `confirm`, `input`, and `editor` dialogs in TUI and RPC
+  - [x] Function-valued `user_bash` `BashOperations` with streaming and cancellation
+- [x] Upstream coding-agent synchronization through `cced6a21`
   - [x] Preserve package and extension metadata across resource reloads
   - [x] Route RPC `user_bash` through extension direct-result interception
   - [x] Track and cancel concurrent user bash executions independently
   - [x] Remove partial git checkouts after clone or dependency failures
   - [x] Detach stale Agent subscriptions during session replacement
+  - [x] Avoid duplicate context files in nested linked worktrees
+  - [x] Accept nullable array schemas with `items`
 
-The latest implementation stage synchronized extension scoped-model contexts,
-resource metadata reloads, RPC `user_bash` direct-result routing, concurrent
-bash cancellation, failed git-install cleanup, and session replacement
-subscription ownership. `./gradlew clean test installDist` passes with 331
-tests and zero failures, errors, or skips; all 17 deterministic migration
-oracles pass. Installed `pi` and `pi-server` process smokes pass. The sync audit
-passes through `027a584`; the full audit now reaches the inventory and reports
+The latest implementation stage added a bidirectional Node/Kotlin extension
+protocol for awaited dialogs and function-valued `BashOperations`. RPC JSONL
+and server streams can receive `extension_ui_response` while the originating
+command is blocked; EOF and shutdown cancel pending requests. The extension
+oracle now compares dialog answers and custom bash execution against
+TypeScript. The source synchronization also covers nested-worktree context
+deduplication and TypeBox nullable arrays through `cced6a21`. `./gradlew clean
+test installDist` passes with 344 tests, and all 17 deterministic migration
+oracles pass. Installed CLI dialog/BashOperations and server lifecycle smokes
+also pass. The sync audit reaches `cced6a21`; the full audit remains nonzero on
 the seven partial areas listed below.
 
 ## Remaining
@@ -75,7 +82,7 @@ the seven partial areas listed below.
 ### 1. Upstream synchronization
 
 - [x] Review and classify every commit in
-      `cee5ff7520d8828bed9955ef00419e995d1f91e0..027a5847901b5dde30270abaa1041046cd2b4b55`
+      `027a5847901b5dde30270abaa1041046cd2b4b55..cced6a21da273b26ee4a23a803680614bbe8dd1e`
 - [x] OAuth five-minute refresh window and credential print commands
 - [x] OpenRouter manual redirect URL fallback
 - [x] Pending stop reason while streaming
@@ -94,6 +101,10 @@ the seven partial areas listed below.
       classified
 - [x] Advance `migration/sync-state.tsv` only after all required ports and
       classifications are complete
+- [x] Nested linked-worktree `AGENTS.md`/`CLAUDE.md` deduplication
+- [x] Nullable array schema validation with `items`
+- [x] Classify llama streaming usage, TUI image fallback, and contributor-only
+      commits against their existing migration gaps
 
 ### 2. CLI argument and print modes
 
@@ -112,23 +123,26 @@ the seven partial areas listed below.
 
 ### 4. Extension runtime
 
-- [ ] Bidirectional extension dialogs
-  - [ ] Make the Node JSONL reader accept `ui_response` messages while an
+- [x] Bidirectional extension dialogs
+  - [x] Make the Node JSONL reader accept `ui_response` messages while an
         extension invocation is awaiting a result
-  - [ ] Emit intermediate `ui_request` messages with stable request IDs
-  - [ ] Make `ExtensionHost.request()` process intermediate UI messages and
+  - [x] Emit intermediate `ui_request` messages with stable request IDs
+  - [x] Make `ExtensionHost.request()` process intermediate UI messages and
         continue waiting for the original invocation response
-  - [ ] Implement interactive responses for `select`, `confirm`, and `input`
-  - [ ] Implement RPC `extension_ui_response` routing without serial-reader
+  - [x] Implement interactive responses for `select`, `confirm`, `input`, and
+        `editor`
+  - [x] Implement RPC `extension_ui_response` routing without serial-reader
         deadlocks
-  - [ ] Define cancellation, timeout, EOF, shutdown, and startup behavior
-  - [ ] Compare awaited results with the TypeScript extension runtime
+  - [x] Define RPC cancellation, timeout, EOF, shutdown, and startup behavior
+  - [x] Compare awaited results with the TypeScript extension runtime
+- [ ] Interrupt a blocking TUI dialog when its extension timeout or
+      `AbortSignal` fires
 - [ ] jiti-complete TypeScript transpilation and module-loading compatibility
 - [ ] Function-based custom provider streaming and OAuth callbacks
 - [ ] Extension shortcuts
 - [ ] Message and session-entry renderers
 - [ ] Unsolicited background registration updates
-- [ ] Function-valued `user_bash` `BashOperations` over the JSON extension
+- [x] Function-valued `user_bash` `BashOperations` over the JSON extension
       host, including streaming updates and cancellation
 
 ### 5. Themes and resource composition
@@ -155,25 +169,31 @@ the seven partial areas listed below.
 - [ ] Process recovery
 - [ ] Full RPC command parity
 - [ ] Full event parity
-- [ ] Extension UI request/response support over JSONL and server streams
+- [x] Extension UI request/response support over JSONL and server streams
 
 ## Next stage
 
-Return to bidirectional extension dialogs and the extension-host callback
-protocol. The next coherent slice should carry interactive UI requests and
-function-valued `user_bash` operations over JSONL with stable IDs, streaming
-updates, cancellation, timeout, EOF, and shutdown behavior.
+Use the bidirectional extension protocol for function-based custom provider
+streaming and OAuth callbacks. The next coherent slice should carry provider
+request/stream callbacks, auth methods, cancellation, timeout, and lifecycle
+cleanup without serializing JavaScript functions.
 
-Required evidence for the completed synchronization stage:
+Required evidence for the completed dialog and BashOperations stage:
 
-- [x] Focused tests for base and TUI `ctx.scopedModels`
-- [x] Resource reload tests that retain source metadata
-- [x] RPC and concurrent bash cancellation tests
-- [x] Failed git-install cleanup tests
-- [x] Session replacement subscription regression test
-- [x] `./gradlew clean test installDist`
+- [x] Host-level correlated dialog response and timeout tests
+- [x] RPC, JSONL, TUI, and server-stream dialog tests
+- [x] Function-valued BashOperations streaming and cancellation tests
+- [x] UTF-8 BashOperations streaming across raw chunk boundaries
+- [x] JSONL EOF and runtime shutdown cancellation tests
+- [x] Nested linked-worktree context regression test
+- [x] Nullable array validation tests in Kotlin and the virtual TypeBox host
+- [x] Updated extension-runtime TypeScript/Kotlin oracle
+- [x] `./gradlew clean test installDist` with 344 tests and no failures,
+      errors, or skips
 - [x] All 17 deterministic migration oracles
-- [x] Installed CLI and server smoke tests
-- [x] `./migration/audit-migration.sh sync`
-- [x] `./migration/audit-migration.sh full` with the remaining partial areas
-      reported exactly
+- [x] Focused source tests for resource loading, validation, and terminal images
+- [x] Installed `pi` JSONL dialog and BashOperations smoke
+- [x] Installed `pi-server` lifecycle and piped stream smoke
+- [x] `./migration/audit-migration.sh sync` through `cced6a21`
+- [x] `./migration/audit-migration.sh full` confirms exactly seven remaining
+      partial areas

@@ -4,6 +4,7 @@ import java.nio.file.Files
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -14,10 +15,237 @@ import works.earendil.pi.ai.FauxProvider
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class ExtensionHostTest {
+    @Test
+    fun `final extension host responses require the active request id`() {
+        val error =
+            assertFailsWith<IllegalStateException> {
+                requireExtensionHostFinalResponse(
+                    buildJsonObject {
+                        put("id", "other")
+                        put("ok", true)
+                    },
+                    expectedId = "active",
+                )
+            }
+
+        assertEquals(
+            "Extension host response id mismatch: expected active, received other",
+            error.message,
+        )
+    }
+
+    @Test
+    fun `awaited extension UI requests receive correlated responses`() =
+        runTest {
+            assumeTrue(nodeAvailable(), "Node.js 22+ is required for extension runtime tests")
+            val root = Files.createTempDirectory("pi-kotlin-extension-ui")
+            val agentDir = Files.createDirectories(root.resolve("agent"))
+            val extension =
+                root.resolve("dialogs.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          pi.registerCommand("dialogs", {
+                            async handler(_args, ctx) {
+                              const choice = await ctx.ui.select("Choose", ["alpha", "beta"]);
+                              const confirmed = await ctx.ui.confirm("Confirm", "Continue?");
+                              const name = await ctx.ui.input("Name", "enter name");
+                              const edited = await ctx.ui.editor("Edit", "draft");
+                              pi.appendEntry("answers", { choice, confirmed, name, edited });
+                            },
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val requests = mutableListOf<JsonObject>()
+            val host =
+                assertNotNull(
+                    ExtensionHost.start(
+                        sources =
+                            listOf(
+                                ExtensionSource(
+                                    extension,
+                                    ResourceSourceInfo(extension, "local", baseDir = root),
+                                ),
+                            ),
+                        agentDir = agentDir,
+                        cwd = root,
+                        mode = ExtensionMode.RPC,
+                        projectTrusted = true,
+                        flagValues = emptyMap(),
+                        context = extensionTestContext(root),
+                        onUiRequest = { request, respond ->
+                            requests += request
+                            respond(
+                                when (request["method"]?.jsonPrimitive?.contentOrNull) {
+                                    "select" -> buildJsonObject { put("value", "beta") }
+                                    "confirm" -> buildJsonObject { put("confirmed", true) }
+                                    "input" -> buildJsonObject { put("value", "Ada") }
+                                    "editor" -> buildJsonObject { put("value", "edited") }
+                                    else -> buildJsonObject { put("cancelled", true) }
+                                },
+                            )
+                        },
+                    ),
+                )
+
+            host.use {
+                val invocation =
+                    host.invokeCommand(
+                        name = "dialogs",
+                        args = "",
+                        context = extensionTestContext(root),
+                    )
+                val answers =
+                    invocation.actions
+                        .single { it.type == "append_entry" }
+                        .data["data"]
+                        ?.jsonObject
+
+                assertEquals(
+                    listOf("select", "confirm", "input", "editor"),
+                    requests.map { it["method"]?.jsonPrimitive?.contentOrNull },
+                )
+                assertEquals(
+                    4,
+                    requests.mapNotNull { it["requestId"]?.jsonPrimitive?.contentOrNull }.distinct().size,
+                )
+                assertEquals("beta", answers?.get("choice")?.jsonPrimitive?.content)
+                assertEquals("true", answers?.get("confirmed")?.jsonPrimitive?.content)
+                assertEquals("Ada", answers?.get("name")?.jsonPrimitive?.content)
+                assertEquals("edited", answers?.get("edited")?.jsonPrimitive?.content)
+            }
+        }
+
+    @Test
+    fun `extension UI timeout cancels the pending host request`() =
+        runTest {
+            assumeTrue(nodeAvailable(), "Node.js 22+ is required for extension runtime tests")
+            val root = Files.createTempDirectory("pi-kotlin-extension-ui-timeout")
+            val agentDir = Files.createDirectories(root.resolve("agent"))
+            val extension =
+                root.resolve("timeout.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          pi.registerCommand("timeout", {
+                            async handler(_args, ctx) {
+                              const value = await ctx.ui.input("Wait", undefined, { timeout: 20 });
+                              pi.appendEntry("timeout", { value: value ?? "cancelled" });
+                            },
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val cancelled = mutableListOf<String>()
+            val host =
+                assertNotNull(
+                    ExtensionHost.start(
+                        sources =
+                            listOf(
+                                ExtensionSource(
+                                    extension,
+                                    ResourceSourceInfo(extension, "local", baseDir = root),
+                                ),
+                            ),
+                        agentDir = agentDir,
+                        cwd = root,
+                        mode = ExtensionMode.RPC,
+                        projectTrusted = true,
+                        flagValues = emptyMap(),
+                        context = extensionTestContext(root),
+                        onUiRequest = { _, _ -> },
+                        onUiCancelled = cancelled::add,
+                    ),
+                )
+
+            host.use {
+                val invocation =
+                    host.invokeCommand(
+                        name = "timeout",
+                        args = "",
+                        context = extensionTestContext(root),
+                    )
+                val value =
+                    invocation.actions
+                        .single { it.type == "append_entry" }
+                        .data["data"]
+                        ?.jsonObject
+                        ?.get("value")
+                        ?.jsonPrimitive
+                        ?.content
+
+                assertEquals("cancelled", value)
+                assertEquals(1, cancelled.size)
+            }
+        }
+
+    @Test
+    fun `virtual TypeBox compiler accepts nullable arrays with items`() =
+        runTest {
+            assumeTrue(nodeAvailable(), "Node.js 22+ is required for extension runtime tests")
+            val root = Files.createTempDirectory("pi-kotlin-extension-typebox-nullable")
+            val agentDir = Files.createDirectories(root.resolve("agent"))
+            val extension =
+                root.resolve("nullable.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        import { Compile } from "typebox/compile";
+                        export default function(pi) {
+                          const generated = new Function(
+                            Compile({ type: ["array", "null"], items: { type: "string" } }).Code()
+                          )();
+                          pi.on("session_start", () => ({
+                            nullAccepted: generated(null),
+                            valuesAccepted: generated(["a", "b"]),
+                            numbersRejected: generated([1]),
+                          }));
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val host =
+                assertNotNull(
+                    ExtensionHost.start(
+                        sources =
+                            listOf(
+                                ExtensionSource(
+                                    extension,
+                                    ResourceSourceInfo(extension, "local", baseDir = root),
+                                ),
+                            ),
+                        agentDir = agentDir,
+                        cwd = root,
+                        mode = ExtensionMode.PRINT,
+                        projectTrusted = true,
+                        flagValues = emptyMap(),
+                        context = extensionTestContext(root),
+                    ),
+                )
+
+            host.use {
+                val result =
+                    host.emit(
+                        buildJsonObject { put("type", "session_start") },
+                        extensionTestContext(root),
+                    ).result?.jsonObject
+
+                assertEquals("true", result?.get("nullAccepted")?.jsonPrimitive?.content)
+                assertEquals("true", result?.get("valuesAccepted")?.jsonPrimitive?.content)
+                assertEquals("false", result?.get("numbersRejected")?.jsonPrimitive?.content)
+            }
+        }
+
     @Test
     fun `extension context exposes an empty then live scoped model list`() =
         runTest {

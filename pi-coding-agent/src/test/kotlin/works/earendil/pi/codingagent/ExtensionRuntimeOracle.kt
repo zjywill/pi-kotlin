@@ -11,6 +11,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import works.earendil.pi.ai.Model
 import works.earendil.pi.ai.Models
@@ -24,6 +25,7 @@ fun main(args: Array<String>) {
     val root = Files.createTempDirectory("pi-extension-runtime-oracle")
     val agentDir = Files.createDirectories(root.resolve("agent"))
     val diagnostics = mutableListOf<ExtensionDiagnostic>()
+    val dialogRequests = mutableListOf<JsonObject>()
     val context = oracleExtensionContext(fixture.parent)
     val host =
         checkNotNull(
@@ -48,6 +50,25 @@ fun main(args: Array<String>) {
                 flagValues = mapOf("loud" to true),
                 context = context,
                 onDiagnostic = diagnostics::add,
+                onUiRequest = { request, respond ->
+                    dialogRequests +=
+                        buildJsonObject {
+                            put("type", "ui_dialog")
+                            request["method"]?.let { put("method", it) }
+                            listOf("title", "options", "message", "placeholder", "prefill").forEach { name ->
+                                request[name]?.let { put(name, it) }
+                            }
+                        }
+                    respond(
+                        when (request["method"]?.jsonPrimitive?.content) {
+                            "select" -> buildJsonObject { put("value", "beta") }
+                            "confirm" -> buildJsonObject { put("confirmed", true) }
+                            "input" -> buildJsonObject { put("value", "Ada") }
+                            "editor" -> buildJsonObject { put("value", "edited") }
+                            else -> buildJsonObject { put("cancelled", true) }
+                        },
+                    )
+                },
             ),
         )
     try {
@@ -68,6 +89,12 @@ fun main(args: Array<String>) {
             host.invokeCommand(
                 name = "record",
                 args = "checkpoint",
+                context = context,
+            )
+        val dialogs =
+            host.invokeCommand(
+                name = "dialogs",
+                args = "",
                 context = context,
             )
         val dynamicRegistration = host.registrations
@@ -144,6 +171,20 @@ fun main(args: Array<String>) {
                         put("reason", "startup")
                     },
                 context = context,
+            )
+        val bashUpdates = mutableListOf<String>()
+        val userBash =
+            host.emitUserBash(
+                event =
+                    buildJsonObject {
+                        put("type", "user_bash")
+                        put("command", "hostname")
+                        put("excludeFromContext", false)
+                        put("cwd", fixture.parent.toString())
+                    },
+                context = context,
+                onOperationStart = {},
+                onUpdate = bashUpdates::add,
             )
         val discoveredResources =
             discoverExtensionResources(
@@ -293,12 +334,36 @@ fun main(args: Array<String>) {
                     },
                 )
                 put("commandActions", normalizedActions(command.actions))
+                put(
+                    "dialogActions",
+                    JsonArray(
+                        normalizedActions(dialogs.actions).toList() +
+                            dialogRequests,
+                    ),
+                )
                 put("sessionActions", normalizedActions(session.actions))
                 put("projectTrust", requireNotNull(projectTrust.result))
                 put("beforeAgentStart", requireNotNull(before.result))
                 put("toolCall", requireNotNull(toolCall.result))
                 put("toolResult", requireNotNull(toolResult.result))
                 put("resourcesDiscover", requireNotNull(resources.result))
+                put(
+                    "userBash",
+                    buildJsonObject {
+                        put("output", bashUpdates.joinToString(""))
+                        val operationsResult =
+                            requireNotNull(userBash.result)
+                                .jsonObject
+                                .getValue("operationsResult")
+                                .jsonObject
+                        put("exitCode", operationsResult.getValue("exitCode"))
+                        put(
+                            "cancelled",
+                            operationsResult["cancelled"]?.jsonPrimitive?.content?.toBoolean() ?: false,
+                        )
+                        put("truncated", false)
+                    },
+                )
                 put(
                     "composedResources",
                     buildJsonObject {

@@ -127,6 +127,9 @@ class InteractiveRuntime(
                         projectTrustPrompt = { projectPath, labels ->
                             selectProjectTrust(projectPath, labels, console)
                         },
+                        extensionUiHandler = { request ->
+                            handleExtensionUiDialog(request, console)
+                        },
                     ),
                 )
             } catch (error: Exception) {
@@ -349,6 +352,96 @@ class InteractiveRuntime(
             "setTitle" -> event.string("title")?.let { console.println(it) }
         }
     }
+
+    private fun handleExtensionUiDialog(
+        request: JsonObject,
+        console: InteractiveConsole,
+    ): JsonObject {
+        return try {
+            when (request.string("method")) {
+                "select" -> handleExtensionSelect(request, console)
+                "confirm" -> handleExtensionConfirm(request, console)
+
+                "input" -> {
+                    request.string("title")?.let(console::println)
+                    val prompt = request.string("placeholder")?.let { "$it: " } ?: "> "
+                    val value = console.readLine(prompt) ?: return cancelledUiResponse()
+                    buildJsonObject { put("value", value) }
+                }
+
+                "editor" -> {
+                    request.string("title")?.let(console::println)
+                    val prefill = request.string("prefill")
+                    if (!prefill.isNullOrEmpty()) {
+                        console.println(prefill)
+                    }
+                    val value = console.readLine("Edit: ") ?: return cancelledUiResponse()
+                    buildJsonObject { put("value", value.ifEmpty { prefill.orEmpty() }) }
+                }
+
+                else -> cancelledUiResponse()
+            }
+        } catch (_: UserInterruptException) {
+            cancelledUiResponse()
+        } catch (_: EndOfFileException) {
+            cancelledUiResponse()
+        }
+    }
+
+    private fun handleExtensionSelect(
+        request: JsonObject,
+        console: InteractiveConsole,
+    ): JsonObject {
+        val options =
+            request["options"]
+                ?.jsonArray
+                .orEmpty()
+                .mapNotNull { it.jsonPrimitive.contentOrNull }
+        if (options.isEmpty()) {
+            return cancelledUiResponse()
+        }
+        request.string("title")?.let(console::println)
+        options.forEachIndexed { index, option ->
+            console.println("${index + 1}. $option")
+        }
+        while (true) {
+            val value =
+                console.readLine("Select 1-${options.size} (Enter cancels): ")
+                    ?.trim()
+                    ?: return cancelledUiResponse()
+            if (value.isEmpty()) {
+                return cancelledUiResponse()
+            }
+            val selected =
+                value.toIntOrNull()
+                    ?.takeIf { it in 1..options.size }
+                    ?.let { options[it - 1] }
+                    ?: options.firstOrNull { it == value }
+            if (selected != null) {
+                return buildJsonObject { put("value", selected) }
+            }
+            console.error("Select an option by number or label.")
+        }
+    }
+
+    private fun handleExtensionConfirm(
+        request: JsonObject,
+        console: InteractiveConsole,
+    ): JsonObject {
+        request.string("title")?.let(console::println)
+        request.string("message")?.let(console::println)
+        while (true) {
+            when (console.readLine("Confirm [y/N]: ")?.trim()?.lowercase()) {
+                null -> return cancelledUiResponse()
+                "", "n", "no" -> return buildJsonObject { put("confirmed", false) }
+                "y", "yes" -> return buildJsonObject { put("confirmed", true) }
+                else -> console.error("Enter yes or no.")
+            }
+        }
+    }
+
+    private fun cancelledUiResponse(): JsonObject =
+        buildJsonObject { put("cancelled", true) }
 
     private suspend fun sendPrompt(
         runtime: RpcRuntime,
