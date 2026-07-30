@@ -139,6 +139,63 @@ class ProviderFixtureTest {
         }
 
     @Test
+    fun `openai chat provider ignores empty custom payloads on function tool calls`() =
+        runTest {
+            val fixture =
+                fixtureServer(
+                    """
+                    data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"read","arguments":"{\"path\":\"README.md\"}"},"custom":{}}]},"finish_reason":"tool_calls"}]}
+
+                    data: [DONE]
+
+                    """.trimIndent(),
+                )
+            try {
+                val model =
+                    model(
+                        id = "fixture",
+                        api = "openai-completions",
+                        provider = "fixture",
+                        baseUrl = fixture.baseUrl,
+                    )
+                val provider =
+                    OpenAIChatProvider(
+                        "fixture",
+                        "Fixture",
+                        fixture.baseUrl,
+                        listOf(model),
+                        listOf("UNUSED"),
+                    )
+                val result =
+                    provider.stream(
+                        model,
+                        Context(
+                            messages = mutableListOf(UserMessage("hi")),
+                            tools =
+                                listOf(
+                                    ToolDefinition(
+                                        "read",
+                                        "Read a file",
+                                        buildJsonObject { put("type", "object") },
+                                    ),
+                                ),
+                        ),
+                        StreamOptions(apiKey = "test"),
+                    ).result()
+
+                val toolCall = result.content.filterIsInstance<ToolCall>().single()
+                assertEquals(StopReason.TOOL_USE, result.stopReason)
+                assertEquals("read", toolCall.name)
+                assertEquals(
+                    "README.md",
+                    (toolCall.arguments.getValue("path") as kotlinx.serialization.json.JsonPrimitive).content,
+                )
+            } finally {
+                fixture.close()
+            }
+        }
+
+    @Test
     fun `anthropic provider streams text and tool input`() =
         runTest {
             val fixture =

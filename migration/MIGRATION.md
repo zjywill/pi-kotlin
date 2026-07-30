@@ -13,7 +13,7 @@ The source commit is immutable for the first migration pass. Upstream changes
 land in a later synchronization pass so that parity failures have one cause.
 
 The latest reviewed synchronization pass reaches
-`d7b02636a0c7e8e615d0cff70679d18d2ff59573` (July 29, 2026). The original
+`71efc6f0c1909874ec8c944637a9ae7fc0e2d508` (July 30, 2026). The original
 baseline remains recorded so regressions can be attributed either to the first
 translation or to a later upstream sync.
 
@@ -74,7 +74,7 @@ features outside that slice remain migration work.
 | Gradle multi-module build | Functional slice | Six JVM 21 modules; `clean test installDist` passes with warnings as errors |
 | Core AI messages and stream protocol | Functional slice | Message, event-stream, provider-native raw stop reason, image-generation result, UUIDv7, tool validation, and faux-provider tests |
 | Model catalog | Functional slice | Hydrated schema-v3 manifest and 37 chat-provider files verify by SHA-256; all 1,110 static chat model records plus the credential-backed dynamic Radius catalog are exposed through 38 executable chat providers, including 29 credential-filtered GitHub Copilot models and Qwen Token Plan reasoning-control metadata; a separate immutable catalog exposes all 40 OpenRouter image models with an independent checksum |
-| Provider HTTP implementations | Functional slice | All 10 upstream chat API families plus `openrouter-images` have executable Kotlin paths. Coverage includes Google Generative AI, Google Vertex AI, Anthropic Messages plus Claude Pro/Max OAuth, OpenRouter Chat Completions and Images plus shared browser OAuth, xAI Chat Completions/Responses plus device OAuth, Kimi Coding Anthropic Messages plus device OAuth, Radius `pi-messages` plus discovered browser/device OAuth and dynamic models, OpenAI Chat Completions, OpenAI Responses, Azure OpenAI Responses, Mistral Conversations, Amazon Bedrock ConverseStream, OpenAI Codex Responses SSE/WebSocket plus browser/device OAuth, GitHub Copilot device OAuth and Anthropic/OpenAI Chat/OpenAI Responses delegates, Cloudflare Workers AI, and Cloudflare AI Gateway with independent payload/event/auth/image parity |
+| Provider HTTP implementations | Functional slice | All 10 upstream chat API families plus `openrouter-images` have executable Kotlin paths. Coverage includes Google Generative AI, Google Vertex AI, Anthropic Messages plus Claude Pro/Max OAuth, OpenRouter Chat Completions and Images plus shared browser OAuth, xAI Chat Completions/Responses plus device OAuth, Kimi Coding Anthropic Messages plus device OAuth, Radius `pi-messages` plus discovered browser/device OAuth and dynamic models, OpenAI Chat Completions including function-payload precedence over malformed empty `custom` objects, OpenAI Responses, Azure OpenAI Responses, Mistral Conversations, Amazon Bedrock ConverseStream, OpenAI Codex Responses SSE/WebSocket plus browser/device OAuth, GitHub Copilot device OAuth and Anthropic/OpenAI Chat/OpenAI Responses delegates, Cloudflare Workers AI, and Cloudflare AI Gateway with independent payload/event/auth/image parity |
 | Agent loop | Functional slice | Streaming, tool calls, parallel execution, steering, follow-up, abort, and session tests using the faux provider; coding-message projection has independent parity for bash/custom/branch/compaction messages |
 | CLI argument contract | Complete | Parser tests, byte-for-byte top-level/auth/package help, installed package/model-update error contracts, provider-prefixed and slash-containing model IDs, thinking suffixes, text/JSON/RPC/print modes, session selection/forking, resource/tool flags, offline behavior, quiet/verbose startup, credential print, and interactive OAuth/API-key login/logout are covered by independent CLI/package and RPC runtime oracles plus installed PTYs |
 | Context, skill, and prompt resources | Functional slice | Global and ancestor `AGENTS.md`/`CLAUDE.md`, nested linked-worktree context deduplication, `SYSTEM.md`/`APPEND_SYSTEM.md` content and source paths, recursive `.pi`/`.agents` skills, prompt templates, YAML frontmatter, collisions, manual skill commands, template arguments, trusted project precedence, persisted trust inheritance, CLI/RPC commands, startup Context display, and interactive reload have an independent resource-loading oracle |
@@ -92,11 +92,13 @@ features outside that slice remain migration work.
 
 ## Verification snapshot
 
-Verified on July 29, 2026 against source commit
-`d7b02636a0c7e8e615d0cff70679d18d2ff59573`:
+Verified on July 30, 2026 against source commit
+`71efc6f0c1909874ec8c944637a9ae7fc0e2d508`:
 
-- `./gradlew clean test installDist`: passed, 437 tests, 0 failures, 0 errors,
-  and 0 skipped.
+- `./gradlew clean test installDist --max-workers=1`: passed, 438 tests, 0
+  failures, 0 errors, and 0 skipped.
+- The source checkout passed model-data hydration, `npm run build:offline`, and
+  all 45 focused OpenAI Completions tool-choice tests while remaining clean.
 - `./migration/oracle/compare-cli-help.sh`: passed with byte-for-byte CLI help
   parity.
 - `./migration/oracle/compare-cli-package-runtime.sh`: passed for installed
@@ -168,8 +170,9 @@ Verified on July 29, 2026 against source commit
   model/thinking, prompts/queues, abort/retry terminal lifecycle, bash,
   extension UI/dialogs, compaction, message/stat/entry/tree queries,
   fork/clone/switch/new-session, and HTML export.
-- Provider payload/stream parity passed with Qwen Token Plan reasoning controls
-  and provider-native `rawStopReason` terminal fields.
+- Provider payload/stream parity passed with Qwen Token Plan reasoning controls,
+  provider-native `rawStopReason` terminal fields, and OpenAI function arguments
+  preserved when a malformed delta also includes an empty `custom` object.
 - All 30 deterministic migration oracles passed against the same source
   baseline.
 - Installed `pi --export` output was byte-identical to upstream with SHA-256
@@ -182,7 +185,8 @@ Verified on July 29, 2026 against source commit
   `accent=201` ANSI sequence, and listed `SYSTEM.md`, `APPEND_SYSTEM.md`, then
   `AGENTS.md` in startup Context order.
 - The installed `pi-server` completed `serve`, `spawn`, `status`,
-  `get_available_models`, `get_state`, and `stop` in an isolated directory.
+  `get_available_models`, `get_state`, `rpc-stream`, and `stop` in an isolated
+  directory; the offline instance exposed 776 available models.
 - The final RPC parity smoke completed isolated `spawn`, `status`, direct
   `get_state`, streamed `get_state`, `stop`, and empty-list read-back through
   the installed `pi-server`.
@@ -473,8 +477,12 @@ Verified on July 29, 2026 against source commit
   `footer-data-provider.test.ts`. That file predates the synchronized range,
   the source worktree remained clean, and an isolated rerun of the whole file
   passed all 8 tests.
+- The July 30 synchronization pass reviewed every source commit from
+  `d7b02636` through `71efc6f0`, ported the OpenAI malformed function/custom
+  delta fix, and classified the changelog, formatting-only TUI, release, and
+  post-release commits as non-runtime changes.
 - `./migration/audit-migration.sh sync` and
-  `./migration/audit-migration.sh full` pass through `d7b02636`.
+  `./migration/audit-migration.sh full` pass through `71efc6f0`.
 - The next July 29 synchronization pass reviewed every source commit through
   `cced6a21da273b26ee4a23a803680614bbe8dd1e`. Kotlin now avoids duplicate
   context files in nested linked worktrees and accepts nullable array schemas
@@ -618,12 +626,12 @@ Verified on July 29, 2026 against source commit
 
 ## Remaining major gaps
 
-None against the pinned source commit `d7b02636`. A future source update must
+None against the pinned source commit `71efc6f0`. A future source update must
 start a new synchronization range and rerun the complete rulebook.
 
 ## Completeness audit
 
-The migration inventory is complete through `d7b02636`; no row in
+The migration inventory is complete through `71efc6f0`; no row in
 `migration/inventory.tsv` remains `partial` or `missing`.
 
 ```bash

@@ -1,11 +1,11 @@
 # Migration TODO
 
-Last reviewed: July 29, 2026
+Last reviewed: July 30, 2026
 
 ## Completion gate
 
 - Source repository: `/Users/junyizhang/Git/pi`
-- Reviewed source commit: `d7b02636a0c7e8e615d0cff70679d18d2ff59573`
+- Reviewed source commit: `71efc6f0c1909874ec8c944637a9ae7fc0e2d508`
 - Target repository: `/Users/junyizhang/Git/pi-kotlin`
 - The migration is complete only when:
 
@@ -24,6 +24,8 @@ Last reviewed: July 29, 2026
   - [x] OpenAI Responses `final_answer` provisional stop and incomplete override
   - [x] Provider-native `rawStopReason` preservation across Anthropic, Bedrock,
         Google, Vertex, OpenAI Chat, OpenAI Responses, and Mistral
+  - [x] OpenAI Chat function arguments take precedence when malformed deltas
+        also contain an empty `custom` payload
 - [x] Built-in model catalog and remote catalog refresh
   - [x] Qwen Token Plan `enable_thinking`, supported `reasoning_effort` maps,
         and unsupported-model exclusions
@@ -103,7 +105,7 @@ Last reviewed: July 29, 2026
   - [x] Project-over-user active-theme settings
   - [x] Named and in-memory extension theme switching
   - [x] Persistent header/widget/footer rerendering after theme changes
-- [x] Upstream coding-agent synchronization through `d7b02636`
+- [x] Upstream synchronization through `71efc6f0`
   - [x] Preserve package and extension metadata across resource reloads
   - [x] Route RPC `user_bash` through extension direct-result interception
   - [x] Track and cancel concurrent user bash executions independently
@@ -115,14 +117,15 @@ Last reviewed: July 29, 2026
   - [x] Preserve raw provider stop reasons and generic provider-stop errors
   - [x] Port Qwen Token Plan reasoning controls
   - [x] Show system prompt file sources in startup Context output
+  - [x] Preserve OpenAI Chat function arguments beside empty `custom` payloads
+  - [x] Classify changelog, formatting-only TUI, release, and post-release commits
 
-The final implementation stage closes the remaining interactive extension and
-full-screen terminal gaps through `d7b02636`. The installed TypeScript and
-Kotlin runtimes now match for persistent surfaces, custom editors, raw terminal
-input, autocomplete delegation, overlay controls, and terminal rendering at 40,
-80, and 120 columns. `./gradlew clean test installDist` passes with 437 tests,
-all 30 deterministic migration oracles pass, and the full migration audit is
-complete.
+The July 30 synchronization pass advances the completed migration through
+`71efc6f0`. It ports the OpenAI Chat malformed-delta fix and classifies the
+remaining release-range commits as non-runtime changes. The installed
+TypeScript and Kotlin runtimes still match across every rulebook judge.
+`./gradlew clean test installDist --max-workers=1` passes with 438 tests, all 30
+deterministic migration oracles pass, and the full migration audit is complete.
 
 ## Completion checklist
 
@@ -130,6 +133,8 @@ complete.
 
 - [x] Review and classify every commit in
       `4f0437e2d58d651dd934119ecabea2893975f62f..d7b02636a0c7e8e615d0cff70679d18d2ff59573`
+- [x] Review and classify every commit in
+      `d7b02636a0c7e8e615d0cff70679d18d2ff59573..71efc6f0c1909874ec8c944637a9ae7fc0e2d508`
 - [x] OAuth five-minute refresh window and credential print commands
 - [x] OpenRouter manual redirect URL fallback
 - [x] Pending stop reason while streaming
@@ -155,6 +160,9 @@ complete.
 - [x] Raw Anthropic, Bedrock, Google, Vertex, OpenAI, and Mistral stop reasons
 - [x] Qwen Token Plan reasoning controls and catalog metadata
 - [x] Startup system/append prompt source display
+- [x] OpenAI Chat function payload precedence over malformed empty `custom`
+- [x] Documentation, formatting-only TUI, release, and changelog scaffolding
+      classifications
 
 ### 2. CLI argument and print modes
 
@@ -242,9 +250,26 @@ complete.
 
 ## Follow-up
 
-No migration gaps remain against source commit `d7b02636`. Future work starts
+No migration gaps remain against source commit `71efc6f0`. Future work starts
 only when the TypeScript source advances and a new synchronization range is
 recorded.
+
+Evidence for the July 30 upstream synchronization:
+
+- [x] Source model data hydration and `npm run build:offline` at `71efc6f0`
+      with a clean TypeScript worktree
+- [x] Upstream `openai-completions-tool-choice.test.ts`: 45 tests passed
+- [x] Kotlin malformed empty-`custom` regression test passed
+- [x] `./migration/oracle/compare-provider-stream-events.sh` includes the
+      malformed function/custom payload and passes with zero diff
+- [x] `./gradlew clean test installDist --max-workers=1` with 438 tests and no
+      failures, errors, or skips
+- [x] All 30 deterministic migration oracles
+- [x] Installed `pi` native-provider print smoke
+- [x] Installed `pi-server` lifecycle, 776-model offline catalog, direct RPC,
+      `rpc-stream`, stop, and empty-list read-back
+- [x] `./migration/audit-migration.sh sync` through `71efc6f0`
+- [x] `./migration/audit-migration.sh full`
 
 Evidence for the completed interactive extension and full-screen terminal stage:
 

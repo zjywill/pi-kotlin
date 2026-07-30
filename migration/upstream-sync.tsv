@@ -75,3 +75,8 @@ e5ef8d0654b57f559aa427b4d89b70cd9dab3c31	ported	OpenAI Responses terminal messag
 bff5ab71743b442efa234dbed369e0a96da791f3	ported	File-backed SYSTEM.md and APPEND_SYSTEM.md sources are retained and shown before AGENTS.md startup context
 5a2539a7bdb9be06ce70f9f7ce02decece89762a	ported	Provider stop errors use the shared Provider stopped with copy across Anthropic Bedrock Google and Mistral
 d7b02636a0c7e8e615d0cff70679d18d2ff59573	not-applicable	Merge commit containing the preceding preserved-stop-reason changes
+34239180ac5c80366def592b529a3a1b882b4a16	ported	OpenAI Chat Completions preserves function arguments when malformed deltas also include an empty custom payload
+f0499a63ff5563ff041c689f680ecbf01436a5e2	not-applicable	Changelog audit only; no runtime contract change
+44b26c9b44a0758d6610e1c5f722d773c1d9fd15	not-applicable	Formatting-only terminal image and test changes; no runtime contract change
+845d6ff1f6643aba440341cce877ce1c43ebbc39	not-applicable	Release metadata, package versions, and lockfile refresh only
+71efc6f0c1909874ec8c944637a9ae7fc0e2d508	not-applicable	Post-release Unreleased changelog scaffolding only

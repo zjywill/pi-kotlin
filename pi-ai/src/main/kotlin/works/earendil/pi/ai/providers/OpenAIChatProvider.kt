@@ -184,7 +184,9 @@ class OpenAIChatProvider(
                     tools.getOrPut(streamIndex) {
                         val contentIndex = blocks.size
                         val customInputProperty =
-                            custom?.let { grammarToolInputProperties[name] ?: "input" }
+                            custom
+                                ?.takeIf { function == null }
+                                ?.let { grammarToolInputProperties[name] ?: "input" }
                         val created =
                             StreamingTool(
                                 contentIndex = contentIndex,
@@ -202,7 +204,7 @@ class OpenAIChatProvider(
                 }
                 toolDelta.string("id")?.let { existing.id = it }
                 name.takeIf { existing.name.isEmpty() }?.let { existing.name = it }
-                if (custom != null && existing.customInputProperty == null) {
+                if (custom != null && function == null && existing.customInputProperty == null) {
                     existing.customInputProperty = grammarToolInputProperties[existing.name] ?: "input"
                     existing.grammarBuffer = GrammarToolInputJsonBuffer()
                     existing.arguments = ""
@@ -216,8 +218,7 @@ class OpenAIChatProvider(
                             existing.argumentsJson(),
                         )
                     stream.push(ToolCallDelta(existing.contentIndex, arguments, snapshot()))
-                }
-                custom?.string("input")?.let { inputDelta ->
+                } ?: custom?.string("input")?.let { inputDelta ->
                     val nextInput = existing.customInput + inputDelta
                     val delta =
                         appendGrammarToolInputJsonDelta(
