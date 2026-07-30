@@ -21,6 +21,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ExtensionHostTest {
@@ -230,6 +231,505 @@ class ExtensionHostTest {
                 assertEquals(1, requests.mapNotNull { it.testString("componentId") }.distinct().size)
                 assertEquals("beta", result?.testString("result"))
                 assertEquals("true", result?.get("disposed")?.jsonPrimitive?.content)
+            }
+        }
+
+    @Test
+    fun `custom overlay handle controls are delivered while the UI request is active`() =
+        runTest {
+            assumeTrue(nodeAvailable(), "Node.js 22+ is required for extension runtime tests")
+            val root = Files.createTempDirectory("pi-kotlin-extension-overlay-handle")
+            val extension =
+                root.resolve("overlay-handle.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        import { Key, matchesKey } from "@earendil-works/pi-tui";
+
+                        export default function(pi) {
+                          pi.registerCommand("overlay", {
+                            async handler(_args, ctx) {
+                              await ctx.ui.custom((_tui, _theme, _keybindings, done) => ({
+                                render(width) { return [`overlay:${'$'}{width}`]; },
+                                handleInput(input) {
+                                  if (matchesKey(input, Key.enter)) done();
+                                },
+                              }), {
+                                overlay: true,
+                                overlayOptions: {
+                                  width: "50%",
+                                  minWidth: 20,
+                                  margin: { left: 1, right: 2 },
+                                },
+                                onHandle(handle) {
+                                  handle.setHidden(true);
+                                  handle.setHidden(false);
+                                  handle.focus();
+                                  handle.unfocus({ target: null });
+                                },
+                              });
+                            },
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val controls = CopyOnWriteArrayList<JsonObject>()
+            val requests = CopyOnWriteArrayList<JsonObject>()
+            val host =
+                assertNotNull(
+                    ExtensionHost.start(
+                        sources =
+                            listOf(
+                                ExtensionSource(
+                                    extension,
+                                    ResourceSourceInfo(extension, "local", baseDir = root),
+                                ),
+                            ),
+                        agentDir = Files.createDirectories(root.resolve("agent")),
+                        cwd = root,
+                        mode = ExtensionMode.TUI,
+                        projectTrusted = true,
+                        flagValues = emptyMap(),
+                        context = extensionTestContext(root, uiWidth = 40, mode = ExtensionMode.TUI),
+                        onUiControl = controls::add,
+                        onUiRequest = { request, respond ->
+                            requests += request
+                            respond(buildJsonObject { put("input", "\r") })
+                        },
+                    ),
+                )
+
+            host.use {
+                host.invokeCommand(
+                    name = "overlay",
+                    args = "",
+                    context = extensionTestContext(root, uiWidth = 40, mode = ExtensionMode.TUI),
+                )
+
+                assertEquals(listOf("overlay:20"), requests.single().testStringList("lines"))
+                assertEquals(
+                    listOf("setHidden", "setHidden", "focus", "unfocus"),
+                    controls.mapNotNull { control -> control.testString("operation") },
+                )
+                assertEquals(
+                    listOf("true", "false"),
+                    controls
+                        .filter { control -> control.testString("operation") == "setHidden" }
+                        .map { control -> control["hidden"]?.jsonPrimitive?.content },
+                )
+                assertEquals(
+                    "true",
+                    controls
+                        .single { control -> control.testString("operation") == "unfocus" }["targetNull"]
+                        ?.jsonPrimitive
+                        ?.content,
+                )
+            }
+        }
+
+    @Test
+    fun `raw terminal input handlers rewrite consume and unsubscribe`() =
+        runTest {
+            assumeTrue(nodeAvailable(), "Node.js 22+ is required for extension runtime tests")
+            val root = Files.createTempDirectory("pi-kotlin-extension-terminal-input")
+            val extension =
+                root.resolve("terminal-input.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          let unsubscribe;
+                          pi.registerCommand("listen", {
+                            handler(_args, ctx) {
+                              unsubscribe = ctx.ui.onTerminalInput(data => {
+                                if (data === "x") return { consume: true };
+                                return { data: data.toUpperCase() };
+                              });
+                            },
+                          });
+                          pi.registerCommand("unlisten", {
+                            handler() {
+                              unsubscribe?.();
+                              unsubscribe = undefined;
+                            },
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val host =
+                assertNotNull(
+                    ExtensionHost.start(
+                        sources =
+                            listOf(
+                                ExtensionSource(
+                                    extension,
+                                    ResourceSourceInfo(extension, "local", baseDir = root),
+                                ),
+                            ),
+                        agentDir = Files.createDirectories(root.resolve("agent")),
+                        cwd = root,
+                        mode = ExtensionMode.TUI,
+                        projectTrusted = true,
+                        flagValues = emptyMap(),
+                        context = extensionTestContext(root, mode = ExtensionMode.TUI),
+                    ),
+                )
+
+            host.use {
+                val mounted =
+                    host.invokeCommand(
+                        name = "listen",
+                        args = "",
+                        context = extensionTestContext(root, mode = ExtensionMode.TUI),
+                    )
+                val listenerId =
+                    assertNotNull(
+                        mounted.actions
+                            .single { action ->
+                                action.type == "ui" &&
+                                    action.data.testString("method") == "terminal_input_add"
+                            }.data
+                            .testString("listenerId"),
+                    )
+
+                assertEquals("A", host.invokeTerminalInput(listenerId, "a")?.testString("data"))
+                assertEquals(
+                    "true",
+                    host.invokeTerminalInput(listenerId, "x")
+                        ?.get("consume")
+                        ?.jsonPrimitive
+                        ?.content,
+                )
+
+                val removed =
+                    host.invokeCommand(
+                        name = "unlisten",
+                        args = "",
+                        context = extensionTestContext(root, mode = ExtensionMode.TUI),
+                    )
+                assertEquals(
+                    listenerId,
+                    removed.actions
+                        .single { action ->
+                            action.type == "ui" &&
+                                action.data.testString("method") == "terminal_input_remove"
+                        }.data
+                        .testString("listenerId"),
+                )
+                assertNull(host.invokeTerminalInput(listenerId, "a")?.testString("data"))
+            }
+        }
+
+    @Test
+    fun `custom editor keeps state handles input submits and restores default editor`() =
+        runTest {
+            assumeTrue(nodeAvailable(), "Node.js 22+ is required for extension runtime tests")
+            val root = Files.createTempDirectory("pi-kotlin-extension-editor-component")
+            val extension =
+                root.resolve("editor-component.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        import { Editor } from "@earendil-works/pi-tui";
+
+                        export default function(pi) {
+                          pi.on("session_start", (_event, ctx) => {
+                            ctx.ui.setEditorComponent((tui, theme, keybindings) =>
+                              new Editor(tui, theme, keybindings)
+                            );
+                          });
+                          pi.registerCommand("editor-state", {
+                            handler(_args, ctx) {
+                              const before = ctx.ui.getEditorText();
+                              ctx.ui.setEditorText("set");
+                              ctx.ui.pasteToEditor("!");
+                              pi.appendEntry("editor-state", {
+                                before,
+                                after: ctx.ui.getEditorText(),
+                                configured: ctx.ui.getEditorComponent() !== undefined,
+                              });
+                            },
+                          });
+                          pi.registerCommand("editor-reset", {
+                            handler(_args, ctx) {
+                              ctx.ui.setEditorComponent(undefined);
+                            },
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val host =
+                assertNotNull(
+                    ExtensionHost.start(
+                        sources =
+                            listOf(
+                                ExtensionSource(
+                                    extension,
+                                    ResourceSourceInfo(extension, "local", baseDir = root),
+                                ),
+                            ),
+                        agentDir = Files.createDirectories(root.resolve("agent")),
+                        cwd = root,
+                        mode = ExtensionMode.TUI,
+                        projectTrusted = true,
+                        flagValues = emptyMap(),
+                        context = extensionTestContext(root, uiWidth = 31, mode = ExtensionMode.TUI),
+                    ),
+                )
+
+            host.use {
+                val started =
+                    host.emit(
+                        buildJsonObject {
+                            put("type", "session_start")
+                            put("reason", "startup")
+                        },
+                        extensionTestContext(root, uiWidth = 31, mode = ExtensionMode.TUI),
+                    )
+                val mounted =
+                    started.actions.single { action ->
+                        action.type == "ui" &&
+                            action.data.testString("method") == "setEditorComponent"
+                    }
+                val componentId = assertNotNull(mounted.data.testString("componentId"))
+
+                assertEquals(
+                    "hi",
+                    host.invokeEditorComponent(componentId, "input", 31, data = "h")
+                        ?.let { host.invokeEditorComponent(componentId, "input", 31, data = "i") }
+                        ?.testString("text"),
+                )
+                val submitted = host.invokeEditorComponent(componentId, "input", 31, data = "\r")
+                assertEquals("hi", submitted?.testString("submitted"))
+                assertTrue(submitted?.testStringList("lines").orEmpty().any { line -> "hi" in line })
+
+                val state =
+                    host.invokeCommand(
+                        name = "editor-state",
+                        args = "",
+                        context = extensionTestContext(root, uiWidth = 31, mode = ExtensionMode.TUI),
+                    )
+                val entry =
+                    state.actions
+                        .single { action -> action.type == "append_entry" }
+                        .data["data"]
+                        ?.jsonObject
+                assertEquals("hi", entry?.testString("before"))
+                assertEquals("set!", entry?.testString("after"))
+                assertEquals("true", entry?.get("configured")?.jsonPrimitive?.content)
+                assertTrue(
+                    state.actions.any { action ->
+                        action.type == "ui" &&
+                            action.data.testString("method") == "setEditorComponent" &&
+                            action.data.testString("text") == "set!"
+                    },
+                )
+
+                val reset =
+                    host.invokeCommand(
+                        name = "editor-reset",
+                        args = "",
+                        context = extensionTestContext(root, uiWidth = 31, mode = ExtensionMode.TUI),
+                    )
+                val restored =
+                    reset.actions.single { action ->
+                        action.type == "ui" &&
+                            action.data.testString("method") == "setEditorComponent"
+                    }
+                assertNull(restored.data.testString("componentId"))
+                assertEquals("set!", restored.data.testString("text"))
+            }
+        }
+
+    @Test
+    fun `autocomplete wrappers delegate to the Kotlin base provider`() =
+        runTest {
+            assumeTrue(nodeAvailable(), "Node.js 22+ is required for extension runtime tests")
+            val root = Files.createTempDirectory("pi-kotlin-extension-autocomplete")
+            val extension =
+                root.resolve("autocomplete.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          pi.on("session_start", (_event, ctx) => {
+                            ctx.ui.addAutocompleteProvider(current => ({
+                              triggerCharacters: ["#"],
+                              async getSuggestions(lines, line, col, options) {
+                                const before = (lines[line] ?? "").slice(0, col);
+                                if (before.startsWith("#")) {
+                                  return {
+                                    prefix: before,
+                                    items: [{ value: "#2983", label: "#2983", description: "issue" }],
+                                  };
+                                }
+                                return current.getSuggestions(lines, line, col, options);
+                              },
+                              applyCompletion(lines, line, col, item, prefix) {
+                                return current.applyCompletion(lines, line, col, item, prefix);
+                              },
+                              shouldTriggerFileCompletion(lines, line, col) {
+                                return current.shouldTriggerFileCompletion(lines, line, col);
+                              },
+                            }));
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val host =
+                assertNotNull(
+                    ExtensionHost.start(
+                        sources =
+                            listOf(
+                                ExtensionSource(
+                                    extension,
+                                    ResourceSourceInfo(extension, "local", baseDir = root),
+                                ),
+                            ),
+                        agentDir = Files.createDirectories(root.resolve("agent")),
+                        cwd = root,
+                        mode = ExtensionMode.TUI,
+                        projectTrusted = true,
+                        flagValues = emptyMap(),
+                        context = extensionTestContext(root, mode = ExtensionMode.TUI),
+                    ),
+                )
+
+            host.use {
+                host.emit(
+                    buildJsonObject {
+                        put("type", "session_start")
+                        put("reason", "startup")
+                    },
+                    extensionTestContext(root, mode = ExtensionMode.TUI),
+                )
+                assertEquals(1, host.registrations.autocompleteProviderCount)
+
+                fun invoke(
+                    method: String,
+                    payload: JsonObject,
+                ): JsonObject =
+                    assertNotNull(
+                        host.invokeAutocomplete(
+                            method = method,
+                            payload = payload,
+                            baseTriggerCharacters = listOf("@"),
+                        ) { request ->
+                            when (request.testString("method")) {
+                                "getSuggestions" ->
+                                    buildJsonObject {
+                                        put("prefix", "/mo")
+                                        put(
+                                            "items",
+                                            kotlinx.serialization.json.JsonArray(
+                                                listOf(
+                                                    buildJsonObject {
+                                                        put("value", "model")
+                                                        put("label", "model")
+                                                    },
+                                                ),
+                                            ),
+                                        )
+                                    }
+
+                                "applyCompletion" ->
+                                    buildJsonObject {
+                                        put(
+                                            "lines",
+                                            kotlinx.serialization.json.JsonArray(
+                                                listOf(JsonPrimitive("done")),
+                                            ),
+                                        )
+                                        put("cursorLine", 0)
+                                        put("cursorColumn", 4)
+                                    }
+
+                                "shouldTriggerFileCompletion" -> JsonPrimitive(true)
+                                else -> JsonPrimitive(false)
+                            }
+                        },
+                    )
+
+                val custom =
+                    invoke(
+                        "getSuggestions",
+                        buildJsonObject {
+                            put(
+                                "lines",
+                                kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive("#2"))),
+                            )
+                            put("cursorLine", 0)
+                            put("cursorColumn", 2)
+                        },
+                    )
+                assertEquals(
+                    "#2983",
+                    custom["result"]
+                        ?.jsonObject
+                        ?.get("items")
+                        ?.jsonArray
+                        ?.single()
+                        ?.jsonObject
+                        ?.testString("value"),
+                )
+
+                val delegated =
+                    invoke(
+                        "getSuggestions",
+                        buildJsonObject {
+                            put(
+                                "lines",
+                                kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive("/mo"))),
+                            )
+                            put("cursorLine", 0)
+                            put("cursorColumn", 3)
+                        },
+                    )
+                assertEquals(
+                    "model",
+                    delegated["result"]
+                        ?.jsonObject
+                        ?.get("items")
+                        ?.jsonArray
+                        ?.single()
+                        ?.jsonObject
+                        ?.testString("value"),
+                )
+
+                val applied =
+                    invoke(
+                        "applyCompletion",
+                        buildJsonObject {
+                            put(
+                                "lines",
+                                kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive("#2"))),
+                            )
+                            put("cursorLine", 0)
+                            put("cursorColumn", 2)
+                            put(
+                                "item",
+                                buildJsonObject {
+                                    put("value", "#2983")
+                                    put("label", "#2983")
+                                },
+                            )
+                            put("prefix", "#2")
+                        },
+                    )
+                assertEquals(
+                    "done",
+                    applied["result"]
+                        ?.jsonObject
+                        ?.get("lines")
+                        ?.jsonArray
+                        ?.single()
+                        ?.jsonPrimitive
+                        ?.content,
+                )
             }
         }
 

@@ -731,6 +731,9 @@ let pendingBackgroundActions = [];
 let backgroundPushScheduled = false;
 let currentProtocolRequestId = null;
 const pendingUiRequests = new Map();
+const terminalInputHandlers = new Map();
+const autocompleteProviderFactories = [];
+const pendingAutocompleteBaseRequests = new Map();
 const activeBashOperations = new Map();
 let providerCallbacks = new Map();
 const activeProviderOperations = new Map();
@@ -746,6 +749,8 @@ const persistentUiComponents = {
 	footer: undefined,
 };
 let activeCustomComponent;
+let editorComponentFactory;
+let activeEditorComponent;
 
 function createRendererTheme(descriptorProvider) {
 	const descriptor = () => descriptorProvider?.() ?? {};
@@ -846,13 +851,36 @@ function validateUiComponent(component, label) {
 	}
 }
 
-function renderUiComponent(component, label) {
+function renderUiComponent(component, label, width = normalizedUiWidth()) {
 	validateUiComponent(component, label);
-	const lines = component.render(normalizedUiWidth());
+	const lines = component.render(Math.max(1, Math.floor(width)));
 	if (!Array.isArray(lines) || lines.some(line => typeof line !== "string")) {
 		throw new Error(`${label} component returned invalid lines`);
 	}
 	return lines;
+}
+
+function resolveHostedOverlaySize(value, reference) {
+	if (Number.isFinite(value)) return Math.floor(value);
+	if (typeof value !== "string") return undefined;
+	const match = value.trim().match(/^(-?\d+(?:\.\d+)?)%$/);
+	return match ? Math.floor((reference * Number(match[1])) / 100) : undefined;
+}
+
+function hostedOverlayRenderWidth(options) {
+	const terminalWidth = normalizedUiWidth();
+	const rawMargin = options?.margin;
+	const margin =
+		Number.isFinite(rawMargin)
+			? { left: Math.floor(rawMargin), right: Math.floor(rawMargin) }
+			: {
+					left: Number.isFinite(rawMargin?.left) ? Math.floor(rawMargin.left) : 0,
+					right: Number.isFinite(rawMargin?.right) ? Math.floor(rawMargin.right) : 0,
+				};
+	const available = Math.max(1, terminalWidth - Math.max(0, margin.left) - Math.max(0, margin.right));
+	let width = resolveHostedOverlaySize(options?.width, terminalWidth) ?? Math.min(80, available);
+	if (Number.isFinite(options?.minWidth)) width = Math.max(width, Math.floor(options.minWidth));
+	return Math.max(1, Math.min(available, width));
 }
 
 function disposeUiComponent(record) {
@@ -965,6 +993,68 @@ function createPersistentUiComponent(kind, key, factory, options = {}) {
 	};
 	validateUiComponent(component, record.label);
 	return record;
+}
+
+function editorComponentPayload(record) {
+	return {
+		id: randomUUID(),
+		method: "setEditorComponent",
+		componentId: record.id,
+		lines: renderUiComponent(record.component, record.label),
+		text: typeof record.component.getText === "function" ? String(record.component.getText()) : state.editorText ?? "",
+	};
+}
+
+function emitEditorComponent(record) {
+	if (activeEditorComponent !== record || record.suppressRender) return;
+	action("ui", editorComponentPayload(record));
+}
+
+function disposeEditorComponent() {
+	const record = activeEditorComponent;
+	activeEditorComponent = undefined;
+	if (record) disposeUiComponent(record);
+}
+
+function setHostedEditorComponent(factory) {
+	const previousText =
+		typeof activeEditorComponent?.component?.getText === "function"
+			? String(activeEditorComponent.component.getText())
+			: state.editorText ?? "";
+	disposeEditorComponent();
+	editorComponentFactory = factory;
+	if (factory === undefined) {
+		action("ui", {
+			id: randomUUID(),
+			method: "setEditorComponent",
+			text: previousText,
+		});
+		return;
+	}
+	const record = {
+		id: randomUUID(),
+		kind: "editor",
+		component: undefined,
+		label: "Extension editor",
+		suppressRender: true,
+		submitted: undefined,
+	};
+	const tui = createVirtualTui(() => emitEditorComponent(record));
+	const component = factory(tui, rendererTheme, virtualKeybindings);
+	record.component = component;
+	validateUiComponent(component, record.label);
+	component.onSubmit = value => {
+		record.submitted = String(value ?? "");
+		state.editorText = record.submitted;
+	};
+	component.onChange = value => {
+		state.editorText = String(value ?? "");
+		emitEditorComponent(record);
+	};
+	if (typeof component.setText === "function") component.setText(previousText);
+	record.suppressRender = false;
+	activeEditorComponent = record;
+	action("ui", editorComponentPayload(record));
 }
 
 function currentGitBranch() {
@@ -1302,6 +1392,174 @@ function requestUI(method, payload, uiOptions, defaultValue, parseResponse) {
 	});
 }
 
+function sendUiControl(payload) {
+	if (currentProtocolRequestId) {
+		protocolWrite(
+			`${JSON.stringify({
+				type: "ui_control",
+				id: currentProtocolRequestId,
+				...jsonValue(payload),
+			})}\n`,
+		);
+	} else {
+		action("ui", payload);
+	}
+}
+
+function createHostedOverlayHandle(componentId) {
+	let hidden = false;
+	let focused = true;
+	let disposed = false;
+	const control = (operation, extra = {}) => {
+		if (disposed && operation !== "hide") return;
+		sendUiControl({
+			method: "custom_overlay_handle",
+			componentId,
+			operation,
+			...extra,
+		});
+	};
+	return {
+		hide() {
+			if (disposed) return;
+			disposed = true;
+			hidden = true;
+			focused = false;
+			control("hide");
+		},
+		setHidden(value) {
+			if (disposed) return;
+			hidden = value === true;
+			if (hidden) focused = false;
+			control("setHidden", { hidden });
+		},
+		isHidden() {
+			return hidden;
+		},
+		focus() {
+			if (disposed || hidden) return;
+			focused = true;
+			control("focus");
+		},
+		unfocus(options) {
+			if (disposed) return;
+			focused = false;
+			control("unfocus", {
+				targetNull: options && Object.hasOwn(options, "target") && options.target === null,
+			});
+		},
+		isFocused() {
+			return focused;
+		},
+	};
+}
+
+function requestAutocompleteBase(parentRequestId, method, payload) {
+	const requestId = randomUUID();
+	return new Promise((resolve, reject) => {
+		pendingAutocompleteBaseRequests.set(requestId, { resolve, reject });
+		protocolWrite(
+			`${JSON.stringify({
+				type: "autocomplete_base_request",
+				parentRequestId,
+				requestId,
+				method,
+				payload: jsonValue(payload),
+			})}\n`,
+		);
+	});
+}
+
+function createHostedAutocompleteProvider(parentRequestId, baseTriggerCharacters = []) {
+	let provider = {
+		triggerCharacters: baseTriggerCharacters,
+		getSuggestions(lines, cursorLine, cursorColumn, options) {
+			return requestAutocompleteBase(parentRequestId, "getSuggestions", {
+				lines,
+				cursorLine,
+				cursorColumn,
+				options,
+			});
+		},
+		applyCompletion(lines, cursorLine, cursorColumn, item, prefix) {
+			return requestAutocompleteBase(parentRequestId, "applyCompletion", {
+				lines,
+				cursorLine,
+				cursorColumn,
+				item,
+				prefix,
+			});
+		},
+		shouldTriggerFileCompletion(lines, cursorLine, cursorColumn) {
+			return requestAutocompleteBase(parentRequestId, "shouldTriggerFileCompletion", {
+				lines,
+				cursorLine,
+				cursorColumn,
+			});
+		},
+	};
+	for (const factory of autocompleteProviderFactories) {
+		provider = factory(provider);
+		if (!provider || typeof provider.getSuggestions !== "function" || typeof provider.applyCompletion !== "function") {
+			throw new Error("Extension autocomplete factory returned an invalid provider");
+		}
+	}
+	return provider;
+}
+
+async function handleAutocompleteRequest(request) {
+	let result;
+	let error;
+	try {
+		const provider = createHostedAutocompleteProvider(
+			request.requestId,
+			Array.isArray(request.baseTriggerCharacters) ? request.baseTriggerCharacters : [],
+		);
+		const payload = request.payload ?? {};
+		switch (request.method) {
+			case "metadata":
+				result = { triggerCharacters: provider.triggerCharacters ?? [] };
+				break;
+			case "getSuggestions":
+				result = await provider.getSuggestions(
+					payload.lines ?? [],
+					payload.cursorLine ?? 0,
+					payload.cursorColumn ?? 0,
+					payload.options,
+				);
+				break;
+			case "applyCompletion":
+				result = await provider.applyCompletion(
+					payload.lines ?? [],
+					payload.cursorLine ?? 0,
+					payload.cursorColumn ?? 0,
+					payload.item,
+					payload.prefix ?? "",
+				);
+				break;
+			case "shouldTriggerFileCompletion":
+				result = await provider.shouldTriggerFileCompletion?.(
+					payload.lines ?? [],
+					payload.cursorLine ?? 0,
+					payload.cursorColumn ?? 0,
+				);
+				break;
+			default:
+				throw new Error(`Unknown autocomplete operation: ${request.method}`);
+		}
+	} catch (caught) {
+		error = caught instanceof Error ? caught.message : String(caught);
+	}
+	protocolWrite(
+		`${JSON.stringify({
+			type: "autocomplete_response",
+			requestId: request.requestId,
+			result: result === undefined ? null : jsonValue(result),
+			...(error ? { error } : {}),
+		})}\n`,
+	);
+}
+
 function cancelAllUiRequests() {
 	for (const pending of [...pendingUiRequests.values()]) pending.cancel();
 }
@@ -1422,13 +1680,36 @@ function createUI() {
 			action("ui", { id: randomUUID(), method: "setTitle", title });
 		},
 		setEditorText(text) {
-			action("ui", { id: randomUUID(), method: "set_editor_text", text });
+			state.editorText = String(text ?? "");
+			const record = activeEditorComponent;
+			if (record && typeof record.component.setText === "function") {
+				record.suppressRender = true;
+				record.component.setText(state.editorText);
+				record.suppressRender = false;
+				action("ui", editorComponentPayload(record));
+			} else {
+				action("ui", { id: randomUUID(), method: "set_editor_text", text: state.editorText });
+			}
 		},
 		getEditorText() {
-			return "";
+			return typeof activeEditorComponent?.component?.getText === "function"
+				? String(activeEditorComponent.component.getText())
+				: state.editorText ?? "";
 		},
 		pasteToEditor(text) {
-			action("ui", { id: randomUUID(), method: "set_editor_text", text });
+			const value = String(text ?? "");
+			const record = activeEditorComponent;
+			if (record && typeof record.component.handleInput === "function") {
+				record.suppressRender = true;
+				record.component.handleInput(`\x1b[200~${value}\x1b[201~`);
+				record.suppressRender = false;
+				state.editorText =
+					typeof record.component.getText === "function" ? String(record.component.getText()) : state.editorText;
+				action("ui", editorComponentPayload(record));
+			} else {
+				state.editorText = (state.editorText ?? "") + value;
+				action("ui", { id: randomUUID(), method: "paste_to_editor", text: value });
+			}
 		},
 		setWorkingMessage(message) {
 			action("ui", { id: randomUUID(), method: "setWorkingMessage", message });
@@ -1442,15 +1723,38 @@ function createUI() {
 		setHiddenThinkingLabel(label) {
 			action("ui", { id: randomUUID(), method: "setHiddenThinkingLabel", label });
 		},
-		onTerminalInput() {
-			return () => {};
+		onTerminalInput(handler) {
+			if (state.mode !== "tui" || typeof handler !== "function") return () => {};
+			const listenerId = randomUUID();
+			terminalInputHandlers.set(listenerId, handler);
+			action("ui", {
+				id: randomUUID(),
+				method: "terminal_input_add",
+				listenerId,
+			});
+			return () => {
+				if (!terminalInputHandlers.delete(listenerId)) return;
+				action("ui", {
+					id: randomUUID(),
+					method: "terminal_input_remove",
+					listenerId,
+				});
+			};
 		},
-		addAutocompleteProvider() {},
-		setEditorComponent() {
-			action("unsupported", { method: "setEditorComponent" });
+		addAutocompleteProvider(factory) {
+			if (state.mode !== "tui" || typeof factory !== "function") return;
+			autocompleteProviderFactories.push(factory);
+			registrationChanged();
+		},
+		setEditorComponent(factory) {
+			if (state.mode !== "tui") return;
+			if (factory !== undefined && typeof factory !== "function") {
+				throw new Error("Extension editor must be a component factory");
+			}
+			setHostedEditorComponent(factory);
 		},
 		getEditorComponent() {
-			return undefined;
+			return editorComponentFactory;
 		},
 		async custom(factory, options) {
 			if (state.mode !== "tui" || typeof factory !== "function") return undefined;
@@ -1474,19 +1778,27 @@ function createUI() {
 			};
 			validateUiComponent(component, record.label);
 			activeCustomComponent = record;
-			try {
-				while (!completed) {
-					const response = await requestUI(
-						"custom",
-						{
-							componentId: record.id,
-							lines: renderUiComponent(component, record.label),
-							overlay: options?.overlay === true,
-							overlayOptions:
-								typeof options?.overlayOptions === "function"
-									? options.overlayOptions()
-									: options?.overlayOptions,
-						},
+			if (options?.overlay === true && typeof options?.onHandle === "function") {
+				options.onHandle(createHostedOverlayHandle(record.id));
+				}
+				try {
+					while (!completed) {
+						const overlayOptions =
+							typeof options?.overlayOptions === "function"
+								? options.overlayOptions()
+								: options?.overlayOptions;
+						const renderWidth =
+							options?.overlay === true
+								? hostedOverlayRenderWidth(overlayOptions)
+								: normalizedUiWidth();
+						const response = await requestUI(
+							"custom",
+							{
+								componentId: record.id,
+								lines: renderUiComponent(component, record.label, renderWidth),
+								overlay: options?.overlay === true,
+								overlayOptions,
+							},
 						undefined,
 						{ cancelled: true },
 						value => value,
@@ -1500,6 +1812,11 @@ function createUI() {
 			} finally {
 				if (activeCustomComponent === record) activeCustomComponent = undefined;
 				disposeUiComponent(record);
+				action("ui", {
+					id: randomUUID(),
+					method: "custom_close",
+					componentId: record.id,
+				});
 			}
 		},
 		getAllThemes() {
@@ -1774,8 +2091,8 @@ function commandMetadata() {
 function registrationMetadata() {
 	commands = new Map();
 	const commandList = commandMetadata();
-	return {
-		version: registrationVersion,
+		return {
+			version: registrationVersion,
 		extensions: extensions.map(extension => ({
 			path: extension.path,
 			events: [...extension.handlers.keys()],
@@ -1808,12 +2125,18 @@ function registrationMetadata() {
 		})),
 		commands: commandList,
 		flags: [...flags.values()].map(flag => jsonValue(flag)),
-		providers: [...providers.values()].map(providerRegistrationMetadata),
-	};
+			providers: [...providers.values()].map(providerRegistrationMetadata),
+			autocompleteProviderCount: autocompleteProviderFactories.length,
+		};
 }
 
 async function loadExtensions(request) {
 	resetPersistentUiComponents();
+	terminalInputHandlers.clear();
+	autocompleteProviderFactories.length = 0;
+	pendingAutocompleteBaseRequests.clear();
+	disposeEditorComponent();
+	editorComponentFactory = undefined;
 	extensions = [];
 	tools = new Map();
 	commands = new Map();
@@ -2660,6 +2983,11 @@ async function handle(request) {
 				break;
 			case "close":
 				resetPersistentUiComponents();
+				terminalInputHandlers.clear();
+				autocompleteProviderFactories.length = 0;
+				pendingAutocompleteBaseRequests.clear();
+				disposeEditorComponent();
+				editorComponentFactory = undefined;
 				response = { result: null };
 				break;
 			default:
@@ -2711,6 +3039,81 @@ input.on("line", line => {
 	}
 	if (request.type === "ui_response") {
 		pendingUiRequests.get(request.requestId)?.resolve(request);
+		return;
+	}
+	if (request.type === "terminal_input") {
+		let result;
+		let error;
+		try {
+			const handler = terminalInputHandlers.get(request.listenerId);
+			result = handler?.(String(request.data ?? ""));
+		} catch (caught) {
+			error = caught instanceof Error ? caught.message : String(caught);
+		}
+		protocolWrite(
+			`${JSON.stringify({
+				type: "terminal_input_response",
+				requestId: request.requestId,
+				...(result && typeof result === "object" ? jsonValue(result) : {}),
+				...(error ? { error } : {}),
+			})}\n`,
+		);
+		return;
+	}
+	if (request.type === "editor_component") {
+		let result = {};
+		let error;
+		const record = activeEditorComponent;
+		try {
+			if (!record || record.id !== request.componentId) {
+				throw new Error("Unknown extension editor component");
+			}
+			record.suppressRender = true;
+			state.uiWidth = Number.isInteger(request.width) ? request.width : state.uiWidth;
+			if (request.operation === "input") {
+				record.component.handleInput?.(String(request.data ?? ""));
+			} else if (request.operation === "set_text") {
+				record.component.setText?.(String(request.text ?? ""));
+			} else if (request.operation !== "render") {
+				throw new Error(`Unknown extension editor operation: ${request.operation}`);
+			}
+			record.suppressRender = false;
+			const text =
+				typeof record.component.getText === "function"
+					? String(record.component.getText())
+					: state.editorText ?? "";
+			state.editorText = text;
+			result = {
+				lines: renderUiComponent(record.component, record.label),
+				text,
+				...(record.submitted !== undefined ? { submitted: record.submitted } : {}),
+			};
+			record.submitted = undefined;
+		} catch (caught) {
+			if (record) record.suppressRender = false;
+			error = caught instanceof Error ? caught.message : String(caught);
+		}
+		protocolWrite(
+			`${JSON.stringify({
+				type: "editor_component_response",
+				requestId: request.requestId,
+				...jsonValue(result),
+				...(error ? { error } : {}),
+			})}\n`,
+		);
+		return;
+	}
+	if (request.type === "autocomplete") {
+		void handleAutocompleteRequest(request);
+		return;
+	}
+	if (request.type === "autocomplete_base_response") {
+		const pending = pendingAutocompleteBaseRequests.get(request.requestId);
+		if (pending) {
+			pendingAutocompleteBaseRequests.delete(request.requestId);
+			if (request.error) pending.reject(new Error(String(request.error)));
+			else pending.resolve(request.result ?? null);
+		}
 		return;
 	}
 	if (request.type === "bash_abort") {

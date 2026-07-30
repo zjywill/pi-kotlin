@@ -74,6 +74,7 @@ import works.earendil.pi.codingagent.session.SessionMessageEntry
 import works.earendil.pi.codingagent.session.SessionTreeNode
 import works.earendil.pi.codingagent.session.encodeEntry
 import works.earendil.pi.codingagent.tools.truncateTail
+import works.earendil.pi.tui.InputListenerResult
 import kotlin.math.max
 
 private const val DIRECT_EXTENSION_UI_CANCEL_WAIT_MS = 1_000L
@@ -323,6 +324,9 @@ class RpcRuntime(
             resolvedKeybindings = loadExtensionShortcutKeybindings(options.agentDir),
         )
 
+    internal fun extensionAutocompleteProviderCount(): Int =
+        extensionHost?.registrations?.autocompleteProviderCount ?: 0
+
     internal suspend fun invokeExtensionShortcut(id: String): Boolean {
         val host = extensionHost ?: return false
         val registration =
@@ -347,6 +351,51 @@ class RpcRuntime(
             )
         }.isSuccess
     }
+
+    internal fun invokeExtensionTerminalInput(
+        listenerId: String,
+        data: String,
+    ): InputListenerResult? {
+        val response = extensionHost?.invokeTerminalInput(listenerId, data) ?: return null
+        if (response.stringValue("error") != null) {
+            return null
+        }
+        val consume = response["consume"]?.jsonPrimitive?.booleanOrNull ?: false
+        val replacement = response.stringValue("data")
+        return if (!consume && replacement == null) {
+            null
+        } else {
+            InputListenerResult(consume = consume, data = replacement)
+        }
+    }
+
+    internal fun invokeExtensionEditorComponent(
+        componentId: String,
+        operation: String,
+        width: Int,
+        data: String? = null,
+        text: String? = null,
+    ): JsonObject? =
+        extensionHost?.invokeEditorComponent(
+            componentId = componentId,
+            operation = operation,
+            width = width,
+            data = data,
+            text = text,
+        )
+
+    internal fun invokeExtensionAutocomplete(
+        method: String,
+        payload: JsonObject,
+        baseTriggerCharacters: List<String>,
+        onBaseRequest: (JsonObject) -> JsonElement,
+    ): JsonObject? =
+        extensionHost?.invokeAutocomplete(
+            method = method,
+            payload = payload,
+            baseTriggerCharacters = baseTriggerCharacters,
+            onBaseRequest = onBaseRequest,
+        )
 
     internal fun renderExtensionTranscript() {
         sessionManager.getBranch().forEach(::emitExtensionRendering)
@@ -1678,6 +1727,7 @@ class RpcRuntime(
                 onBootstrapActions = ::applyBootstrapExtensionActions,
                 onUiRequest = ::handleHostedUiRequest,
                 onUiCancelled = ::handleHostedUiCancellation,
+                onUiControl = ::handleHostedUiControl,
                 onProjectTrustPrompt =
                     options.projectTrustPrompt?.let { prompt ->
                         { path, choices ->
@@ -2630,6 +2680,19 @@ class RpcRuntime(
     private fun handleHostedUiCancellation(requestId: String) {
         pendingExtensionUiRequests.remove(requestId)
         cancelDirectExtensionUiRequest(requestId)
+    }
+
+    private fun handleHostedUiControl(request: JsonObject) {
+        emit(
+            buildJsonObject {
+                put("type", "extension_ui_request")
+                request.forEach { (name, value) ->
+                    if (name != "type" && name != "id") {
+                        put(name, value)
+                    }
+                }
+            },
+        )
     }
 
     private fun cancelDirectExtensionUiRequest(requestId: String) {

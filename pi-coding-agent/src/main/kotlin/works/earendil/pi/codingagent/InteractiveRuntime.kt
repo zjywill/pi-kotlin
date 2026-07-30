@@ -44,6 +44,11 @@ import works.earendil.pi.ai.ModelsRefreshOptions
 import works.earendil.pi.ai.Provider
 import works.earendil.pi.ai.UserMessage
 import works.earendil.pi.codingagent.session.SessionManager
+import works.earendil.pi.tui.AutocompleteItem
+import works.earendil.pi.tui.AutocompleteProvider
+import works.earendil.pi.tui.CombinedAutocompleteProvider
+import works.earendil.pi.tui.SlashCommand
+import works.earendil.pi.tui.fuzzyFilter
 
 data class InteractiveShortcutBinding(
     val id: String,
@@ -96,7 +101,7 @@ class InteractiveRuntime(
     private val models: Models,
     private val cwd: Path = Path.of("").toAbsolutePath().normalize(),
     private val agentDir: Path = defaultAgentDirectory(),
-    private val consoleFactory: () -> InteractiveConsole = { JLineConsole() },
+    private val consoleFactory: () -> InteractiveConsole = { FullScreenConsole() },
     private val packageUpdateChecker: (Path, Path, Boolean) -> List<String> = ::checkPackageUpdates,
 ) {
     private val extensionSurfaceLock = Any()
@@ -213,6 +218,7 @@ class InteractiveRuntime(
             }
             renderLiveExtensionSurfaces = false
             defaultInteractiveHeaderText = "pi Kotlin ${currentModel(runtime)}"
+            configureFullScreenConsole(console, runtime)
             val settled = AtomicReference<CompletableDeferred<Unit>?>(null)
             val streamedText = AtomicBoolean(false)
             val unsubscribe =
@@ -340,6 +346,7 @@ class InteractiveRuntime(
                 var editorBuffer = ""
                 val reportedShortcutDiagnostics = mutableSetOf<String>()
                 while (true) {
+                    configureFullScreenConsole(console, runtime)
                     val shortcutResolution = runtime.extensionShortcuts()
                     shortcutResolution.diagnostics.forEach { diagnostic ->
                         if (reportedShortcutDiagnostics.add(diagnostic.error)) {
@@ -538,10 +545,79 @@ class InteractiveRuntime(
                 }
             }
 
-            "setTitle" -> event.string("title")?.let { console.println(it) }
+            "setTitle" ->
+                event.string("title")?.let { title ->
+                    (console as? FullScreenConsoleControl)?.setTitle(title)
+                        ?: console.println(title)
+                }
+
             "setWidget" -> updateExtensionWidget(event, console)
             "setHeader" -> updateExtensionHeader(event, console, runtime)
             "setFooter" -> updateExtensionFooter(event, console)
+            "custom_close" ->
+                event.string("componentId")
+                    ?.let { componentId ->
+                        (console as? FullScreenConsoleControl)?.closeExtensionCustom(componentId)
+                    }
+
+            "terminal_input_add" ->
+                event.string("listenerId")
+                    ?.let { listenerId ->
+                        (console as? FullScreenConsoleControl)?.setTerminalInputHandler(listenerId) { data ->
+                            runtime.invokeExtensionTerminalInput(listenerId, data)
+                        }
+                    }
+
+            "terminal_input_remove" ->
+                event.string("listenerId")
+                    ?.let { listenerId ->
+                        (console as? FullScreenConsoleControl)?.setTerminalInputHandler(listenerId, null)
+                    }
+
+            "setEditorComponent" -> {
+                val fullScreen = console as? FullScreenConsoleControl ?: return
+                val componentId = event.string("componentId")
+                fullScreen.setEditorComponent(
+                    componentId = componentId,
+                    lines = event.stringLines("lines").orEmpty(),
+                    text = event.string("text"),
+                    bridge =
+                        componentId?.let { id ->
+                            { operation, data, text ->
+                                runtime.invokeExtensionEditorComponent(
+                                    componentId = id,
+                                    operation = operation,
+                                    width = console.width(),
+                                    data = data,
+                                    text = text,
+                                )
+                            }
+                        },
+                )
+            }
+
+            "set_editor_text" ->
+                event.string("text")
+                    ?.let { text ->
+                        (console as? FullScreenConsoleControl)?.setEditorText(text)
+                    }
+
+            "paste_to_editor" ->
+                event.string("text")
+                    ?.let { text ->
+                        (console as? FullScreenConsoleControl)?.setEditorText(text, paste = true)
+                    }
+
+            "custom_overlay_handle" -> {
+                val componentId = event.string("componentId") ?: return
+                val operation = event.string("operation") ?: return
+                (console as? FullScreenConsoleControl)?.controlExtensionCustom(
+                    componentId = componentId,
+                    operation = operation,
+                    hidden = event["hidden"]?.jsonPrimitive?.booleanOrNull,
+                    targetNull = event["targetNull"]?.jsonPrimitive?.booleanOrNull ?: false,
+                )
+            }
         }
     }
 
@@ -566,6 +642,10 @@ class InteractiveRuntime(
                 target[key] = lines
             }
         }
+        (console as? FullScreenConsoleControl)?.let { fullScreen ->
+            fullScreen.setWidget(key, lines, placement)
+            return
+        }
         if (renderLiveExtensionSurfaces && lines != null) {
             renderExtensionLines(lines, console)
         }
@@ -579,6 +659,14 @@ class InteractiveRuntime(
         val lines = event.stringLines("headerLines") ?: event.stringLines("lines")
         synchronized(extensionSurfaceLock) {
             extensionHeader = lines
+        }
+        (console as? FullScreenConsoleControl)?.let { fullScreen ->
+            if (lines == null) {
+                fullScreen.setHeader(listOf(renderDefaultInteractiveHeaderText(console, runtime)))
+            } else {
+                fullScreen.setHeader(lines)
+            }
+            return
         }
         if (renderLiveExtensionSurfaces) {
             if (lines == null) {
@@ -597,6 +685,10 @@ class InteractiveRuntime(
         synchronized(extensionSurfaceLock) {
             extensionFooter = lines
         }
+        (console as? FullScreenConsoleControl)?.let { fullScreen ->
+            fullScreen.setFooter(lines)
+            return
+        }
         if (renderLiveExtensionSurfaces && lines != null) {
             renderExtensionLines(lines, console)
         }
@@ -607,6 +699,10 @@ class InteractiveRuntime(
         runtime: RpcRuntime,
     ) {
         val lines = synchronized(extensionSurfaceLock) { extensionHeader }
+        (console as? FullScreenConsoleControl)?.let { fullScreen ->
+            fullScreen.setHeader(lines ?: listOf(renderDefaultInteractiveHeaderText(console, runtime)))
+            return
+        }
         if (lines == null) {
             renderDefaultInteractiveHeader(console, runtime)
         } else {
@@ -618,17 +714,21 @@ class InteractiveRuntime(
         console: InteractiveConsole,
         runtime: RpcRuntime,
     ) {
-        val rendered =
-            if (!console.supportsAnsi()) {
-                defaultInteractiveHeaderText
-            } else {
-                val theme = runtime.currentTheme()
-                val prefix = "pi Kotlin"
-                val suffix = defaultInteractiveHeaderText.removePrefix(prefix)
-                theme.bold(theme.fg("accent", prefix)) + theme.fg("dim", suffix)
-        }
-        console.println(rendered)
+        console.println(renderDefaultInteractiveHeaderText(console, runtime))
     }
+
+    private fun renderDefaultInteractiveHeaderText(
+        console: InteractiveConsole,
+        runtime: RpcRuntime,
+    ): String =
+        if (!console.supportsAnsi()) {
+            defaultInteractiveHeaderText
+        } else {
+            val theme = runtime.currentTheme()
+            val prefix = "pi Kotlin"
+            val suffix = defaultInteractiveHeaderText.removePrefix(prefix)
+            theme.bold(theme.fg("accent", prefix)) + theme.fg("dim", suffix)
+        }
 
     private fun renderStartupContext(
         console: InteractiveConsole,
@@ -674,6 +774,9 @@ class InteractiveRuntime(
     ): String = if (console.supportsAnsi()) style(runtime.currentTheme(), text) else text
 
     private fun renderInitialExtensionSurfaces(console: InteractiveConsole) {
+        if (console is FullScreenConsoleControl) {
+            return
+        }
         val surfaces =
             synchronized(extensionSurfaceLock) {
                 buildList {
@@ -738,6 +841,9 @@ class InteractiveRuntime(
         console: InteractiveConsole,
         cancellation: ExtensionUiCancellation,
     ): JsonObject {
+        (console as? FullScreenConsoleControl)?.let { fullScreen ->
+            return fullScreen.readExtensionCustom(request, cancellation)
+        }
         request.stringLines("lines").orEmpty().forEach(console::println)
         val value = console.readLine("Custom input: ", cancellation)
             ?: return cancelledUiResponse()
@@ -1132,6 +1238,96 @@ class InteractiveRuntime(
         }
     }
 
+    private suspend fun configureFullScreenConsole(
+        console: InteractiveConsole,
+        runtime: RpcRuntime,
+    ) {
+        val fullScreen = console as? FullScreenConsoleControl ?: return
+        fullScreen.setTitle(defaultInteractiveHeaderText)
+        fullScreen.setAutocompleteProvider(createAutocompleteProvider(runtime))
+    }
+
+    private suspend fun createAutocompleteProvider(runtime: RpcRuntime): AutocompleteProvider {
+        val availableModels =
+            try {
+                models.getAvailable()
+            } catch (_: Exception) {
+                emptyList()
+            }
+        val loginProviders =
+            models
+                .getProviders()
+                .filter { provider ->
+                    provider.oauth != null || provider.apiKey?.supportsLogin == true
+                }
+        val logoutProviders =
+            try {
+                models.listCredentials().map { credential -> credential.providerId }
+            } catch (_: Exception) {
+                emptyList()
+            }
+        val builtIns =
+            interactiveSlashCommands(
+                modelCompletions = { prefix ->
+                    fuzzyFilter(availableModels, prefix) { model ->
+                        "${model.provider}/${model.id} ${model.name}"
+                    }.map { model ->
+                        AutocompleteItem(
+                            value = "${model.provider}/${model.id}",
+                            label = model.id,
+                            description = model.provider,
+                        )
+                    }
+                },
+                loginCompletions = { prefix ->
+                    fuzzyFilter(loginProviders, prefix) { provider ->
+                        "${provider.id} ${provider.name}"
+                    }.map { provider ->
+                        AutocompleteItem(
+                            value = provider.id,
+                            label = provider.id,
+                            description = provider.name,
+                        )
+                    }
+                },
+                logoutCompletions = { prefix ->
+                    fuzzyFilter(logoutProviders, prefix, String::toString)
+                        .map(::AutocompleteItem)
+                },
+            )
+        val builtInNames = builtIns.mapTo(mutableSetOf(), SlashCommand::name)
+        val resourceCommands =
+            runtime
+                .handle(buildJsonObject { put("type", "get_commands") })
+                ?.get("data")
+                ?.jsonObject
+                ?.get("commands")
+                ?.jsonArray
+                .orEmpty()
+                .mapNotNull { element ->
+                    val command = element as? JsonObject ?: return@mapNotNull null
+                    val name = command.string("name") ?: return@mapNotNull null
+                    if (name in builtInNames) {
+                        return@mapNotNull null
+                    }
+                    SlashCommand(
+                        name = name,
+                        description = command.string("description"),
+                    )
+                }
+                .distinctBy(SlashCommand::name)
+        val base =
+            CombinedAutocompleteProvider(
+            commands = builtIns + resourceCommands,
+            basePath = runtime.currentCwd(),
+        )
+        return if (runtime.extensionAutocompleteProviderCount() > 0) {
+            HostedAutocompleteProvider(base, runtime)
+        } else {
+            base
+        }
+    }
+
     private fun printCommandResponse(
         response: JsonObject?,
         console: InteractiveConsole,
@@ -1207,6 +1403,38 @@ private data class LoginOption(
     val provider: Provider,
     val authType: AuthType,
 )
+
+private fun interactiveSlashCommands(
+    modelCompletions: (String) -> List<AutocompleteItem>,
+    loginCompletions: (String) -> List<AutocompleteItem>,
+    logoutCompletions: (String) -> List<AutocompleteItem>,
+): List<SlashCommand> =
+    listOf(
+        SlashCommand("help", "Show commands"),
+        SlashCommand("hotkeys", "Show keyboard shortcuts"),
+        SlashCommand("new", "Start a new session"),
+        SlashCommand("clear", "Start a new session"),
+        SlashCommand("session", "Show session information"),
+        SlashCommand("stats", "Show token and cost totals"),
+        SlashCommand("reload", "Reload skills, prompt templates, extensions, themes, and context files"),
+        SlashCommand("name", "Set the session name", "<name>"),
+        SlashCommand("model", "Show or change the model", "<provider/model>", modelCompletions),
+        SlashCommand("login", "Sign in to a provider", "<provider>", loginCompletions),
+        SlashCommand("logout", "Remove stored provider credentials", "<provider>", logoutCompletions),
+        SlashCommand(
+            "thinking",
+            "Set the thinking level",
+            "<level>",
+        ) { prefix ->
+            fuzzyFilter(
+                listOf("off", "minimal", "low", "medium", "high", "xhigh", "max"),
+                prefix,
+                String::toString,
+            ).map(::AutocompleteItem)
+        },
+        SlashCommand("exit", "Exit"),
+        SlashCommand("quit", "Exit"),
+    )
 
 private class ConsoleAuthInteraction(
     private val console: InteractiveConsole,

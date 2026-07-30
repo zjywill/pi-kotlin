@@ -29,9 +29,11 @@ import works.earendil.pi.ai.Provider
 import works.earendil.pi.ai.RefreshModelsContext
 import works.earendil.pi.ai.fauxAssistantMessage
 import works.earendil.pi.codingagent.session.SessionManager
+import works.earendil.pi.tui.AutocompleteProvider
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class InteractiveRuntimeTest {
@@ -41,6 +43,186 @@ class InteractiveRuntimeTest {
         assertEquals(80, normalizeTerminalWidth(-1))
         assertEquals(72, normalizeTerminalWidth(72))
     }
+
+    @Test
+    fun `full screen console receives live command model resource and file autocomplete`() =
+        runTest {
+            val root = Files.createTempDirectory("pi-kotlin-interactive-autocomplete")
+            Files.writeString(root.resolve("README.md"), "")
+            val prompt =
+                root.resolve("review.md").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        ---
+                        description: Review the current change
+                        argument-hint: <focus>
+                        ---
+                        Review ${'$'}ARGUMENTS
+                        """.trimIndent(),
+                    )
+                }
+            val console = AutocompleteConsole()
+            val runtime =
+                InteractiveRuntime(
+                    Models(listOf(FauxProvider())),
+                    cwd = root,
+                    agentDir = Files.createDirectories(root.resolve("agent")),
+                    consoleFactory = { console },
+                )
+
+            val exit =
+                runtime.run(
+                    parseArgs(
+                        listOf(
+                            "--provider",
+                            "faux",
+                            "--model",
+                            "faux-1",
+                            "--no-session",
+                            "--prompt-template",
+                            prompt.toString(),
+                        ),
+                    ),
+                )
+
+            assertEquals(0, exit)
+            val provider = assertNotNull(console.provider)
+            assertTrue(
+                provider
+                    .getSuggestions(listOf("/mo"), 0, 3)
+                    .join()
+                    ?.items
+                    .orEmpty()
+                    .any { item -> item.value == "model" },
+            )
+            assertTrue(
+                provider
+                    .getSuggestions(listOf("/rev"), 0, 4)
+                    .join()
+                    ?.items
+                    .orEmpty()
+                    .any { item -> item.value == "review" },
+            )
+            assertTrue(
+                provider
+                    .getSuggestions(listOf("/model faux"), 0, 11)
+                    .join()
+                    ?.items
+                    .orEmpty()
+                    .any { item -> item.value == "faux/faux-1" },
+            )
+            assertTrue(
+                provider
+                    .getSuggestions(listOf("@READ"), 0, 5)
+                    .join()
+                    ?.items
+                    .orEmpty()
+                    .any { item -> item.value == "@README.md" },
+            )
+            assertTrue(console.capturedTitle.startsWith("pi Kotlin faux/faux-1"))
+        }
+
+    @Test
+    fun `interactive autocomplete composes extension wrappers with the Kotlin base provider`() =
+        runTest {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                nodeAvailable(),
+                "Node.js 22+ is required for extension runtime tests",
+            )
+            val root = Files.createTempDirectory("pi-kotlin-interactive-extension-autocomplete")
+            val extension =
+                root.resolve("autocomplete.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          pi.on("session_start", (_event, ctx) => {
+                            ctx.ui.addAutocompleteProvider(current => ({
+                              triggerCharacters: ["#"],
+                              async getSuggestions(lines, line, col, options) {
+                                const before = (lines[line] ?? "").slice(0, col);
+                                if (before.startsWith("#")) {
+                                  return {
+                                    prefix: before,
+                                    items: [{ value: "#2983", label: "#2983", description: "issue" }],
+                                  };
+                                }
+                                return current.getSuggestions(lines, line, col, options);
+                              },
+                              applyCompletion(lines, line, col, item, prefix) {
+                                return current.applyCompletion(lines, line, col, item, prefix);
+                              },
+                              shouldTriggerFileCompletion(lines, line, col) {
+                                return current.shouldTriggerFileCompletion(lines, line, col);
+                              },
+                            }));
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            var extensionValue: String? = null
+            var baseValue: String? = null
+            var appliedValue: String? = null
+            var triggerCharacters: List<String> = emptyList()
+            val console =
+                AutocompleteConsole { provider ->
+                    triggerCharacters = provider.triggerCharacters
+                    extensionValue =
+                        provider
+                            .getSuggestions(listOf("#2"), 0, 2)
+                            .join()
+                            ?.items
+                            ?.single()
+                            ?.value
+                    baseValue =
+                        provider
+                            .getSuggestions(listOf("/mo"), 0, 3)
+                            .join()
+                            ?.items
+                            ?.firstOrNull { item -> item.value == "model" }
+                            ?.value
+                    appliedValue =
+                        provider
+                            .applyCompletion(
+                                listOf("#2"),
+                                0,
+                                2,
+                                works.earendil.pi.tui.AutocompleteItem("#2983"),
+                                "#2",
+                            ).lines
+                            .single()
+                }
+            val runtime =
+                InteractiveRuntime(
+                    Models(listOf(FauxProvider())),
+                    cwd = root,
+                    agentDir = Files.createDirectories(root.resolve("agent")),
+                    consoleFactory = { console },
+                )
+
+            val exit =
+                runtime.run(
+                    parseArgs(
+                        listOf(
+                            "--provider",
+                            "faux",
+                            "--model",
+                            "faux-1",
+                            "--no-session",
+                            "--extension",
+                            extension.toString(),
+                        ),
+                    ),
+                )
+
+            assertEquals(0, exit)
+            assertTrue("#" in triggerCharacters)
+            assertEquals("#2983", extensionValue)
+            assertEquals("model", baseValue)
+            assertEquals("#2983", appliedValue)
+        }
 
     @Test
     fun `interactive mode passes terminal width to extension renderers`() =
@@ -1074,6 +1256,44 @@ class InteractiveRuntimeTest {
         override fun width(): Int = terminalWidth
 
         override fun supportsAnsi(): Boolean = ansi
+    }
+
+    private class AutocompleteConsole(
+        private val probe: ((AutocompleteProvider) -> Unit)? = null,
+    ) :
+        InteractiveConsole,
+        FullScreenConsoleControl {
+        var provider: AutocompleteProvider? = null
+        var capturedTitle: String = ""
+        private var probed = false
+
+        override fun setAutocompleteProvider(provider: AutocompleteProvider?) {
+            this.provider = provider
+        }
+
+        override fun setTitle(title: String) {
+            capturedTitle = title
+        }
+
+        override fun readLine(prompt: String): String = "/exit"
+
+        override fun readLineWithShortcuts(
+            prompt: String,
+            shortcuts: List<InteractiveShortcutBinding>,
+            initialBuffer: String,
+        ): InteractiveReadResult {
+            if (!probed) {
+                provider?.let { current -> probe?.invoke(current) }
+                probed = true
+            }
+            return InteractiveReadResult.Line("/exit")
+        }
+
+        override fun print(text: String) = Unit
+
+        override fun println(text: String) = Unit
+
+        override fun error(text: String) = Unit
     }
 
     private class CancellingDialogConsole : InteractiveConsole {

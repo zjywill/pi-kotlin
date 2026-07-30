@@ -44,6 +44,7 @@ through the commit recorded in `sync-state.tsv`.
 - `./migration/oracle/compare-html-builtin-tool-renderer.sh`
 - `./migration/oracle/compare-html-export.sh`
 - `./migration/oracle/compare-html-tool-renderer.sh`
+- `./migration/oracle/compare-interactive-tui.sh`
 - `./migration/oracle/compare-kimi-coding-oauth.sh`
 - `./migration/oracle/compare-model-catalog-runtime.sh`
 - `./migration/oracle/compare-openai-codex-oauth.sh`

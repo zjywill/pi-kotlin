@@ -87,6 +87,14 @@ Last reviewed: July 29, 2026
   - [x] Unsolicited background registration updates after the originating
         extension invocation has returned
   - [x] Provider cancellation and extension-host lifecycle cleanup
+  - [x] Custom editor replacement, text read-back, paste, submit, and restore
+  - [x] Raw terminal input consume, rewrite, unsubscribe, and editor delegation
+  - [x] Dynamic autocomplete composition with Kotlin base-provider delegation
+  - [x] Overlay sizing, positioning, visibility, focus, queued controls, and close
+- [x] Full-screen interactive terminal
+  - [x] Component-tree header, transcript, widgets, editor, footer, and overlays
+  - [x] Upstream-compatible editor input, history, undo, kill/yank, and autocomplete
+  - [x] Multi-width installed TypeScript/Kotlin PTY and terminal-screen parity
 - [x] Themes and resource composition
   - [x] Upstream-compatible theme JSON validation and variable resolution
   - [x] Built-in dark/light themes and automatic terminal appearance selection
@@ -108,18 +116,15 @@ Last reviewed: July 29, 2026
   - [x] Port Qwen Token Plan reasoning controls
   - [x] Show system prompt file sources in startup Context output
 
-The latest implementation stage closes CLI argument/print behavior and package
-management through `d7b02636`. Installed TypeScript and Kotlin CLIs now match
-for package help, parsing errors, local package lifecycle, offline native
-provider print, masked API-key persistence, and config-selector settings
-mutation. Source self-update, legacy global package lookup, available-update
-checks, and git/npm recovery paths are covered by focused tests. Direct RPC
-command/event parity and server process recovery remain covered by their
-independent oracles. `./gradlew clean test installDist` passes with 405 tests
-and all 29 deterministic migration oracles pass. The full audit remains
-nonzero on the two partial areas listed below.
+The final implementation stage closes the remaining interactive extension and
+full-screen terminal gaps through `d7b02636`. The installed TypeScript and
+Kotlin runtimes now match for persistent surfaces, custom editors, raw terminal
+input, autocomplete delegation, overlay controls, and terminal rendering at 40,
+80, and 120 columns. `./gradlew clean test installDist` passes with 437 tests,
+all 30 deterministic migration oracles pass, and the full migration audit is
+complete.
 
-## Remaining
+## Completion checklist
 
 ### 1. Upstream synchronization
 
@@ -197,11 +202,11 @@ nonzero on the two partial areas listed below.
         listener compatibility
   - [x] Focused `ctx.ui.custom()` render/input/rerender/done loop
   - [x] Functional virtual key constants and basic `Editor`/`CustomEditor`
-- [ ] Remaining interactive extension integration
-  - [ ] Custom editor replacement parity
-  - [ ] Raw terminal input listeners
-  - [ ] Autocomplete provider composition
-  - [ ] Overlay positioning, visibility handles, and full-screen placement
+- [x] Remaining interactive extension integration
+  - [x] Custom editor replacement parity
+  - [x] Raw terminal input listeners
+  - [x] Autocomplete provider composition
+  - [x] Overlay positioning, visibility handles, and full-screen placement
 - [x] Unsolicited background registration updates
 - [x] Function-valued `user_bash` `BashOperations` over the JSON extension
       host, including streaming updates and cancellation
@@ -216,11 +221,11 @@ nonzero on the two partial areas listed below.
 
 ### 6. Interactive terminal
 
-- [ ] Full-screen component model
-- [ ] Overlays and selectors
-- [ ] Upstream-compatible editor and custom editor replacement behavior
-- [ ] Raw terminal input and autocomplete composition
-- [ ] Transcript and rendering parity at multiple terminal widths
+- [x] Full-screen component model
+- [x] Overlays and selectors
+- [x] Upstream-compatible editor and custom editor replacement behavior
+- [x] Raw terminal input and autocomplete composition
+- [x] Transcript and rendering parity at multiple terminal widths
 
 ### 7. HTML export
 
@@ -235,10 +240,29 @@ nonzero on the two partial areas listed below.
 - [x] Full event parity
 - [x] Extension UI request/response support over JSONL and server streams
 
-## Next stage
+## Follow-up
 
-Continue the remaining interactive extension and full-screen terminal gaps as
-separately audited slices.
+No migration gaps remain against source commit `d7b02636`. Future work starts
+only when the TypeScript source advances and a new synchronization range is
+recorded.
+
+Evidence for the completed interactive extension and full-screen terminal stage:
+
+- [x] Full-screen TUI is the default installed interactive console
+- [x] Persistent extension header, widgets, footer, and transcript component tree
+- [x] Custom editor set/read/paste/input/submit/restore behavior
+- [x] Raw terminal consume/rewrite/unsubscribe behavior
+- [x] Extension autocomplete wrapping and Kotlin base-provider delegation
+- [x] Overlay width, top-right placement, focus/unfocus, hide/show, input, close,
+      queued controls, and final screen coordinates
+- [x] Exact slash-command argument submission while autocomplete is active
+- [x] `./migration/oracle/compare-interactive-tui.sh` across TypeScript and
+      Kotlin at 40, 80, and 120 columns
+- [x] `./gradlew clean test installDist` with 437 tests and no failures, errors,
+      or skips
+- [x] All 30 deterministic migration oracles
+- [x] `./migration/audit-migration.sh sync` through `d7b02636`
+- [x] `./migration/audit-migration.sh full`
 
 Evidence for the completed CLI and package-management stage:
 

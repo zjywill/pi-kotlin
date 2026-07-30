@@ -235,10 +235,21 @@ if {$env(LOGIN_RUNTIME) eq "typescript"} {
   }
 }
 after 1000
-send -- "\004"
+if {$env(LOGIN_RUNTIME) eq "typescript"} {
+  after 1000
+  send -- "/quit\r"
+} else {
+  expect {
+    -exact "> " {}
+    timeout { puts stderr "Kotlin login editor did not become ready for exit"; exit 9 }
+    eof { puts stderr "Kotlin login exited before the final editor prompt"; exit 9 }
+  }
+  after 100
+  send -- "/exit\r"
+}
 expect {
   eof {}
-  timeout { puts stderr "Login PTY did not exit after Ctrl-D"; exit 9 }
+  timeout { puts stderr "Login PTY did not exit after the explicit exit command"; exit 10 }
 }
 catch wait result
 exit [lindex $result 3]

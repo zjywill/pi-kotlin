@@ -80,10 +80,10 @@ features outside that slice remain migration work.
 | Context, skill, and prompt resources | Functional slice | Global and ancestor `AGENTS.md`/`CLAUDE.md`, nested linked-worktree context deduplication, `SYSTEM.md`/`APPEND_SYSTEM.md` content and source paths, recursive `.pi`/`.agents` skills, prompt templates, YAML frontmatter, collisions, manual skill commands, template arguments, trusted project precedence, persisted trust inheritance, CLI/RPC commands, startup Context display, and interactive reload have an independent resource-loading oracle |
 | Package settings and resources | Complete | User/project `settings.json`, local/npm/git identities and managed paths, install/remove/update/list/config commands, package manifests and filters, top-level overrides, project precedence, package-sourced resources, source metadata, npm/pnpm legacy global lookup, available-update checks, scoped npm batching, targeted suggestions, upstream-specific git reconciliation, failed-checkout cleanup, and source-distribution self-update have independent package-resource and installed CLI/package runtime oracles plus focused tests |
 | Themes and resource composition | Functional slice | Upstream-compatible JSON validation, recursive variables, cycle/missing-reference failures, built-in dark/light themes, automatic terminal appearance, truecolor/256-color ANSI output, project/user/package/extension precedence, collision diagnostics, persisted settings, extension named/in-memory switching, and persistent-surface rerendering have independent theme-runtime and extension-theme oracles |
-| JavaScript/TypeScript extensions | Partial | A bundled Node 22 JSONL host ships the official jiti 2.7.0 static runtime and MIT license. It loads `.js`/`.cjs`/`.mjs`/`.ts`/`.cts`/`.mts`/`.tsx`, extensionless imports, directory indexes, local TypeScript and extension-owned bare-package dependencies, ESM/CommonJS interop, and common pi/TypeBox virtual modules with `moduleCache: false`; JSX stays disabled like upstream by default. Tools, commands, flags, shortcuts, message/session-entry renderers, package discovery, lifecycle/tool hooks, command actions, project trust, resource composition, serializable and direct native provider registration, request-bound and unsolicited background registration refresh, live `ctx.scopedModels`, awaited `select`/`confirm`/`input`/`editor` dialogs with request-scoped blocking TUI timeout/AbortSignal interruption, persistent widget/header/footer component factories with stable IDs, width, `requestRender()`, replace/clear/dispose, status/git footer data, focused `ctx.ui.custom()` input loops, basic virtual `Key`/`Editor`/`CustomEditor`, RPC and server UI responses, `user_bash` direct results, function-valued `BashOperations`, native `stream`/`streamSimple`, legacy extension OAuth, native API-key `login`/`check`/`resolve`, function-valued `refreshModels(context.store)`, cancellation/lifecycle cleanup, and fire-and-forget UI events run through CLI/RPC/interactive paths with independent extension-runtime, custom-UI, renderer, shortcut, and jiti compatibility oracles. Custom editor replacement, raw terminal input, autocomplete composition, and overlay/full-screen parity remain |
+| JavaScript/TypeScript extensions | Complete | The bundled Node 22 JSONL host and official jiti 2.7.0 runtime cover module loading, virtual imports, tools, commands, flags, shortcuts, renderers, lifecycle hooks, resources, providers, dialogs, persistent surfaces, focused custom UI, custom editor replacement, raw terminal input, autocomplete wrapping, overlays, RPC/server UI, OAuth, bash, streaming callbacks, cancellation, and cleanup. Independent extension oracles plus the installed multi-width TUI judge cover the complete extension boundary |
 | Session JSONL compatibility | Functional slice | Independent TypeScript/Kotlin JSONL parity covers current/v1/v2 parsing, rewrite, migration, branching, compaction, model/thinking state, custom/tool/bash messages, and explicit empty-leaf context |
 | Built-in coding tools | Functional slice | Read, write, edit, bash, grep, find, and ls behavior tests with path and truncation handling |
-| Interactive terminal UI | Partial | Installed JLine process enters a PTY; themed headers/prompts/stream output/tool labels, startup Context paths, initial `@text-file`/`@image` prompts, `/help`, session/model/thinking commands, shell commands, extension surfaces, focused custom components, basic extension editor input, and `/exit` are covered; full-screen layout, overlays, custom editor replacement, raw terminal input, autocomplete composition, and transcript parity are not ported |
+| Interactive terminal UI | Complete | The installed JLine process uses the full-screen component tree by default and covers themed transcript/editor rendering, persistent extension surfaces, custom editors, raw terminal input, dynamic autocomplete, overlay placement and controls, prompt lifecycle, and clean exit. The TypeScript/Kotlin installed PTY matrix verifies core, editor, and overlay scenarios at 40, 80, and 120 columns, including terminal-screen row and column placement |
 | TUI utilities | Functional slice | ANSI-aware text layout, grapheme/CJK/emoji width, colors, key parsing, keybindings, word navigation, kill ring, and undo tests |
 | Compaction | Functional slice | Token estimation, safe cut points, split turns, tool-result truncation, standalone summaries, events, persistence, and reload tests |
 | HTML export | Complete | Exact upstream standalone HTML/CSS/JavaScript, vendored Markdown and syntax-highlighting runtimes, recursive theme variables and export colors, session tree/branch/label/filter/statistics views, extension and built-in tool renderers, strict escaping, safe links, whitespace, and validated image data have byte-for-byte and browser-runtime parity evidence |
@@ -95,7 +95,7 @@ features outside that slice remain migration work.
 Verified on July 29, 2026 against source commit
 `d7b02636a0c7e8e615d0cff70679d18d2ff59573`:
 
-- `./gradlew clean test installDist`: passed, 405 tests, 0 failures, 0 errors,
+- `./gradlew clean test installDist`: passed, 437 tests, 0 failures, 0 errors,
   and 0 skipped.
 - `./migration/oracle/compare-cli-help.sh`: passed with byte-for-byte CLI help
   parity.
@@ -138,6 +138,10 @@ Verified on July 29, 2026 against source commit
 - `./migration/oracle/compare-extension-custom-ui.sh`: passed for startup
   widgets/header/footer, width-changing `requestRender()`, clear/dispose,
   focused down/enter selection, and virtual editor text submission.
+- `./migration/oracle/compare-interactive-tui.sh`: passed for installed
+  TypeScript/Kotlin core, custom-editor, raw-input, autocomplete, and overlay
+  behavior at 40, 80, and 120 columns, including actual terminal-screen
+  placement.
 - `./migration/oracle/compare-theme-runtime.sh`: passed for parsing,
   validation, variables, errors, fallbacks, ANSI modes, built-ins, automatic
   appearance selection, resource precedence, diagnostics, and settings.
@@ -166,7 +170,7 @@ Verified on July 29, 2026 against source commit
   fork/clone/switch/new-session, and HTML export.
 - Provider payload/stream parity passed with Qwen Token Plan reasoning controls
   and provider-native `rawStopReason` terminal fields.
-- All 29 deterministic migration oracles passed against the same source
+- All 30 deterministic migration oracles passed against the same source
   baseline.
 - Installed `pi --export` output was byte-identical to upstream with SHA-256
   `3613ceef433cc31040a5413427db35c4fd5b1d480aab0988b1613f634809bcb6`.
@@ -469,9 +473,8 @@ Verified on July 29, 2026 against source commit
   `footer-data-provider.test.ts`. That file predates the synchronized range,
   the source worktree remained clean, and an isolated rerun of the whole file
   passed all 8 tests.
-- `./migration/audit-migration.sh sync` passes through `d7b02636`.
-  `./migration/audit-migration.sh full` intentionally remains nonzero on two
-  partial areas: extension runtime and interactive terminal.
+- `./migration/audit-migration.sh sync` and
+  `./migration/audit-migration.sh full` pass through `d7b02636`.
 - The next July 29 synchronization pass reviewed every source commit through
   `cced6a21da273b26ee4a23a803680614bbe8dd1e`. Kotlin now avoids duplicate
   context files in nested linked worktrees and accepts nullable array schemas
@@ -581,11 +584,24 @@ Verified on July 29, 2026 against source commit
 - The installed 67-column JLine PTY rendered header/footer/widgets, selected
   `beta`, submitted `Ada` through the virtual editor, restored the main prompt,
   and exited normally.
+- The final full-screen implementation makes the TUI component tree the default
+  interactive console, with persistent header/widget/footer surfaces, transcript,
+  editor, autocomplete, and overlays.
+- Custom editor replacement supports set/read/paste/input/submit/restore. Raw
+  terminal listeners can consume, rewrite, and unsubscribe before editor input,
+  and extension autocomplete wrappers delegate to the Kotlin base provider.
+- Overlay rendering resolves percentage width and margins before invoking the
+  extension component, serializes queued/live controls, delays the first frame
+  until queued state is applied, and preserves focus across hide/show/unfocus.
+- The installed TypeScript/Kotlin PTY matrix passed core, editor, and overlay
+  scenarios at 40, 80, and 120 columns; terminal emulation verified the overlay
+  row and column rather than only matching raw output.
 - Every parsed CLI field now reaches the text/JSON/RPC/interactive, session,
   model/tool/resource, trust, offline, or extension runtime that owns it.
   `quietStartup` is loaded from settings and `--verbose` overrides it.
 - Interactive API-key login uses masked JLine input, honors offline refresh,
-  persists owner-only credentials, and exits cleanly after Ctrl-D.
+  persists owner-only credentials, and exits cleanly after the next prompt is
+  ready.
 - Package commands preserve upstream help, validation priority, exit codes, and
   local install/list/remove settings behavior. The full-screen config selector
   supports global/project modes, search, navigation, top-level and package
@@ -602,26 +618,17 @@ Verified on July 29, 2026 against source commit
 
 ## Remaining major gaps
 
-- Finish extension parity beyond the migrated Node host by adding custom editor
-  replacement, raw terminal input listeners, autocomplete composition, and
-  overlay/full-screen placement. Core package manifests/filters/settings,
-  config selection, self-update, skills, prompt templates, persisted trust
-  lookup, extension resource composition, awaited RPC/TUI dialogs,
-  function-valued `user_bash`, direct native and named provider callbacks,
-  legacy extension OAuth, and interactive resource reload are migrated.
-- Port the full-screen terminal component and rendering model, then compare
-  terminal transcripts at multiple widths.
+None against the pinned source commit `d7b02636`. A future source update must
+start a new synchronization range and rerun the complete rulebook.
 
 ## Completeness audit
 
-The migration is not complete while any row in `migration/inventory.tsv` is
-`partial` or `missing`. This is intentional: compilation and the existing
-oracles prove the migrated slices, but cannot prove features that have no target
-implementation.
+The migration inventory is complete through `d7b02636`; no row in
+`migration/inventory.tsv` remains `partial` or `missing`.
 
 ```bash
 ./migration/audit-migration.sh sync  # verifies reviewed upstream coverage
-./migration/audit-migration.sh full  # exits non-zero until all areas are complete
+./migration/audit-migration.sh full  # verifies every inventory area is complete
 ```
 
 The rulebook in `migration/RULEBOOK.md` defines what may be treated as a JVM

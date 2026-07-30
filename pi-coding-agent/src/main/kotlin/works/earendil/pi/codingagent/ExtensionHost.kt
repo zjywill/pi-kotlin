@@ -7,8 +7,10 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
@@ -130,6 +132,7 @@ internal data class ExtensionRegistrations(
     val commands: List<ExtensionCommandRegistration> = emptyList(),
     val flags: List<ExtensionFlagRegistration> = emptyList(),
     val providers: List<JsonObject> = emptyList(),
+    val autocompleteProviderCount: Int = 0,
 )
 
 internal data class ExtensionInvocation(
@@ -169,6 +172,7 @@ internal class ExtensionHost private constructor(
     private val onDiagnostic: (ExtensionDiagnostic) -> Unit,
     private val onUiRequest: (JsonObject, (JsonObject) -> Unit) -> Unit,
     private val onUiCancelled: (String) -> Unit,
+    private val onUiControl: (JsonObject) -> Unit,
 ) : AutoCloseable {
     private val requestIds = AtomicLong()
     private val outputLock = Any()
@@ -181,6 +185,10 @@ internal class ExtensionHost private constructor(
     private val registrationLock = Any()
     private val backgroundActionLock = Any()
     private val pendingBackgroundActions = ArrayDeque<ExtensionAction>()
+    private val pendingTerminalInputRequests = ConcurrentHashMap<String, CompletableFuture<JsonObject>>()
+    private val pendingEditorComponentRequests = ConcurrentHashMap<String, CompletableFuture<JsonObject>>()
+    private val pendingAutocompleteRequests = ConcurrentHashMap<String, CompletableFuture<JsonObject>>()
+    private val autocompleteBaseHandlers = ConcurrentHashMap<String, (JsonObject) -> JsonElement>()
     private val responseQueue = LinkedBlockingQueue<ExtensionHostRead>()
     @Volatile
     private var backgroundActionHandler: ((List<ExtensionAction>) -> Unit)? = null
@@ -411,6 +419,101 @@ internal class ExtensionHost private constructor(
             },
         )
 
+    fun invokeTerminalInput(
+        listenerId: String,
+        data: String,
+    ): JsonObject? {
+        if (closed) {
+            return null
+        }
+        val requestId = "terminal-${requestIds.incrementAndGet()}"
+        val response = CompletableFuture<JsonObject>()
+        pendingTerminalInputRequests[requestId] = response
+        return try {
+            writePayload(
+                buildJsonObject {
+                    put("type", "terminal_input")
+                    put("requestId", requestId)
+                    put("listenerId", listenerId)
+                    put("data", data)
+                },
+            )
+            response.get(TERMINAL_INPUT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        } catch (_: Exception) {
+            null
+        } finally {
+            pendingTerminalInputRequests.remove(requestId, response)
+        }
+    }
+
+    fun invokeEditorComponent(
+        componentId: String,
+        operation: String,
+        width: Int,
+        data: String? = null,
+        text: String? = null,
+    ): JsonObject? {
+        if (closed) {
+            return null
+        }
+        val requestId = "editor-${requestIds.incrementAndGet()}"
+        val response = CompletableFuture<JsonObject>()
+        pendingEditorComponentRequests[requestId] = response
+        return try {
+            writePayload(
+                buildJsonObject {
+                    put("type", "editor_component")
+                    put("requestId", requestId)
+                    put("componentId", componentId)
+                    put("operation", operation)
+                    put("width", width)
+                    data?.let { put("data", it) }
+                    text?.let { put("text", it) }
+                },
+            )
+            response.get(EDITOR_COMPONENT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        } catch (_: Exception) {
+            null
+        } finally {
+            pendingEditorComponentRequests.remove(requestId, response)
+        }
+    }
+
+    fun invokeAutocomplete(
+        method: String,
+        payload: JsonObject,
+        baseTriggerCharacters: List<String>,
+        onBaseRequest: (JsonObject) -> JsonElement,
+    ): JsonObject? {
+        if (closed) {
+            return null
+        }
+        val requestId = "autocomplete-${requestIds.incrementAndGet()}"
+        val response = CompletableFuture<JsonObject>()
+        pendingAutocompleteRequests[requestId] = response
+        autocompleteBaseHandlers[requestId] = onBaseRequest
+        return try {
+            writePayload(
+                buildJsonObject {
+                    put("type", "autocomplete")
+                    put("requestId", requestId)
+                    put("method", method)
+                    put("payload", payload)
+                    put(
+                        "baseTriggerCharacters",
+                        JsonArray(baseTriggerCharacters.map(::JsonPrimitive)),
+                    )
+                },
+            )
+            response.get(AUTOCOMPLETE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        } catch (_: Exception) {
+            null
+        } finally {
+            pendingAutocompleteRequests.remove(requestId, response)
+            autocompleteBaseHandlers.remove(requestId)
+        }
+    }
+
     fun invokeRenderer(
         kind: String,
         rendererId: String,
@@ -508,6 +611,19 @@ internal class ExtensionHost private constructor(
         }
         closing = true
         activeProviderRequests.toList().forEach(::abortProviderOperation)
+        pendingTerminalInputRequests.values.forEach { request ->
+            request.complete(JsonObject(emptyMap()))
+        }
+        pendingTerminalInputRequests.clear()
+        pendingEditorComponentRequests.values.forEach { request ->
+            request.complete(JsonObject(emptyMap()))
+        }
+        pendingEditorComponentRequests.clear()
+        pendingAutocompleteRequests.values.forEach { request ->
+            request.complete(JsonObject(emptyMap()))
+        }
+        pendingAutocompleteRequests.clear()
+        autocompleteBaseHandlers.clear()
         synchronized(this) {
             if (closed) {
                 return
@@ -722,6 +838,8 @@ internal class ExtensionHost private constructor(
 
                 "ui_cancel" ->
                     response.string("requestId")?.let(onUiCancelled)
+
+                "ui_control" -> onUiControl(response)
 
                 else -> {
                     if (requireExtensionHostFinalResponse(response, id)) {
@@ -979,10 +1097,26 @@ internal class ExtensionHost private constructor(
                         )
                         continue
                     }
-                if (message.string("type") == "background_actions") {
-                    handleBackgroundActions(message)
-                } else {
-                    responseQueue.put(ExtensionHostRead.Message(message))
+                when (message.string("type")) {
+                    "background_actions" -> handleBackgroundActions(message)
+                    "terminal_input_response" ->
+                        message.string("requestId")
+                            ?.let(pendingTerminalInputRequests::remove)
+                            ?.complete(message)
+
+                    "editor_component_response" ->
+                        message.string("requestId")
+                            ?.let(pendingEditorComponentRequests::remove)
+                            ?.complete(message)
+
+                    "autocomplete_response" ->
+                        message.string("requestId")
+                            ?.let(pendingAutocompleteRequests::remove)
+                            ?.complete(message)
+
+                    "autocomplete_base_request" -> handleAutocompleteBaseRequest(message)
+
+                    else -> responseQueue.put(ExtensionHostRead.Message(message))
                 }
             }
             responseQueue.put(
@@ -1009,6 +1143,29 @@ internal class ExtensionHost private constructor(
             is ExtensionHostRead.Message -> read.value
             is ExtensionHostRead.Failure -> throw read.error
         }
+
+    private fun handleAutocompleteBaseRequest(message: JsonObject) {
+        val requestId = message.string("requestId") ?: return
+        val parentRequestId = message.string("parentRequestId")
+        val handler = parentRequestId?.let(autocompleteBaseHandlers::get)
+        val result =
+            if (handler == null) {
+                Result.failure(IllegalStateException("Unknown autocomplete parent request"))
+            } else {
+                runCatching { handler(message) }
+            }
+        writePayload(
+            buildJsonObject {
+                put("type", "autocomplete_base_response")
+                put("requestId", requestId)
+                result
+                    .onSuccess { value -> put("result", value) }
+                    .onFailure { error ->
+                        put("error", error.message ?: "Autocomplete base provider failed")
+                    }
+            },
+        )
+    }
 
     private fun parseRegistrations(value: JsonObject): ExtensionRegistrations {
         val extensions =
@@ -1105,6 +1262,12 @@ internal class ExtensionHost private constructor(
             commands = commands,
             flags = flags,
             providers = value["providers"]?.jsonArray.orEmpty().map(JsonElement::jsonObject),
+            autocompleteProviderCount =
+                value["autocompleteProviderCount"]
+                    ?.jsonPrimitive
+                    ?.contentOrNull
+                    ?.toIntOrNull()
+                    ?: 0,
         )
     }
 
@@ -1152,6 +1315,7 @@ internal class ExtensionHost private constructor(
                 respond(buildJsonObject { put("cancelled", true) })
             },
             onUiCancelled: (String) -> Unit = {},
+            onUiControl: (JsonObject) -> Unit = {},
         ): ExtensionHost? {
             if (sources.isEmpty()) {
                 return null
@@ -1213,6 +1377,7 @@ internal class ExtensionHost private constructor(
                     onDiagnostic = onDiagnostic,
                     onUiRequest = onUiRequest,
                     onUiCancelled = onUiCancelled,
+                    onUiControl = onUiControl,
                 )
             return try {
                 val response =
@@ -1603,3 +1768,6 @@ private fun emptyObjectSchema(): JsonObject =
     }
 
 private const val MAX_STDERR_LINES = 100
+private const val TERMINAL_INPUT_TIMEOUT_MS = 1_000L
+private const val EDITOR_COMPONENT_TIMEOUT_MS = 2_000L
+private const val AUTOCOMPLETE_TIMEOUT_MS = 15_000L

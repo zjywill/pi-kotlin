@@ -9,8 +9,10 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 cd "$ROOT"
 PI_TYPESCRIPT_ROOT="$TS_ROOT" NODE_NO_WARNINGS=1 \
   node --experimental-strip-types migration/oracle/extension-custom-ui.ts \
-  | jq --sort-keys . > "$TMP_DIR/typescript.json"
+  | jq --sort-keys '(.startup, .refresh, .custom, .editor) |= map(select(.method != "custom_close"))' \
+  > "$TMP_DIR/typescript.json"
 ./gradlew -q :pi-coding-agent:extensionCustomUiOracle \
-  | jq --sort-keys . > "$TMP_DIR/kotlin.json"
+  | jq --sort-keys '(.startup, .refresh, .custom, .editor) |= map(select(.method != "custom_close"))' \
+  > "$TMP_DIR/kotlin.json"
 
 diff -u "$TMP_DIR/typescript.json" "$TMP_DIR/kotlin.json"
