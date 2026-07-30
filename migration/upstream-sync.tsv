@@ -80,3 +80,4 @@ f0499a63ff5563ff041c689f680ecbf01436a5e2	not-applicable	Changelog audit only; no
 44b26c9b44a0758d6610e1c5f722d773c1d9fd15	not-applicable	Formatting-only terminal image and test changes; no runtime contract change
 845d6ff1f6643aba440341cce877ce1c43ebbc39	not-applicable	Release metadata, package versions, and lockfile refresh only
 71efc6f0c1909874ec8c944637a9ae7fc0e2d508	not-applicable	Post-release Unreleased changelog scaffolding only
+05558a79280a2f1356bd390a573aeb28726d26b5	ported	OpenCode Go provider display name matches the upstream provider registry

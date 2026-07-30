@@ -13,7 +13,7 @@ The source commit is immutable for the first migration pass. Upstream changes
 land in a later synchronization pass so that parity failures have one cause.
 
 The latest reviewed synchronization pass reaches
-`71efc6f0c1909874ec8c944637a9ae7fc0e2d508` (July 30, 2026). The original
+`05558a79280a2f1356bd390a573aeb28726d26b5` (July 30, 2026). The original
 baseline remains recorded so regressions can be attributed either to the first
 translation or to a later upstream sync.
 
@@ -93,7 +93,7 @@ features outside that slice remain migration work.
 ## Verification snapshot
 
 Verified on July 30, 2026 against source commit
-`71efc6f0c1909874ec8c944637a9ae7fc0e2d508`:
+`05558a79280a2f1356bd390a573aeb28726d26b5`:
 
 - `./gradlew clean test installDist --max-workers=1`: passed, 438 tests, 0
   failures, 0 errors, and 0 skipped.
@@ -481,8 +481,12 @@ Verified on July 30, 2026 against source commit
   `d7b02636` through `71efc6f0`, ported the OpenAI malformed function/custom
   delta fix, and classified the changelog, formatting-only TUI, release, and
   post-release commits as non-runtime changes.
+- The latest July 30 synchronization pass fast-forwarded the source from
+  `71efc6f0` through `05558a79`. The contributor-approval metadata change is
+  outside the migrated package paths, and Kotlin now exposes the upstream
+  `OpenCode Go` provider display name with regression coverage.
 - `./migration/audit-migration.sh sync` and
-  `./migration/audit-migration.sh full` pass through `71efc6f0`.
+  `./migration/audit-migration.sh full` pass through `05558a79`.
 - The next July 29 synchronization pass reviewed every source commit through
   `cced6a21da273b26ee4a23a803680614bbe8dd1e`. Kotlin now avoids duplicate
   context files in nested linked worktrees and accepts nullable array schemas
@@ -626,12 +630,12 @@ Verified on July 30, 2026 against source commit
 
 ## Remaining major gaps
 
-None against the pinned source commit `71efc6f0`. A future source update must
+None against the pinned source commit `05558a79`. A future source update must
 start a new synchronization range and rerun the complete rulebook.
 
 ## Completeness audit
 
-The migration inventory is complete through `71efc6f0`; no row in
+The migration inventory is complete through `05558a79`; no row in
 `migration/inventory.tsv` remains `partial` or `missing`.
 
 ```bash

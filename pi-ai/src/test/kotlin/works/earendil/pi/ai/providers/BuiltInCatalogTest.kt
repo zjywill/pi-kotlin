@@ -156,6 +156,8 @@ class BuiltInCatalogTest {
         val codex = providers.single { it.id == "openai-codex" }
         assertEquals("OpenAI Codex", codex.name)
         assertEquals(7, codex.getModels().size)
+        val opencodeGo = providers.single { it.id == "opencode-go" }
+        assertEquals("OpenCode Go", opencodeGo.name)
         assertNotNull(providers.single { it.id == "anthropic" }.oauth)
         val openRouter = providers.single { it.id == "openrouter" }
         assertEquals("Sign in with OpenRouter", assertNotNull(openRouter.oauth).loginLabel)

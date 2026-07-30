@@ -429,7 +429,7 @@ private val PROVIDER_NAMES =
         "openai" to "OpenAI",
         "openai-codex" to "OpenAI Codex",
         "opencode" to "OpenCode Zen",
-        "opencode-go" to "OpenCode Zen Go",
+        "opencode-go" to "OpenCode Go",
         "openrouter" to "OpenRouter",
         "qwen-token-plan" to "Qwen Token Plan",
         "qwen-token-plan-cn" to "Qwen Token Plan CN",

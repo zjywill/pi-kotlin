@@ -5,7 +5,7 @@ Last reviewed: July 30, 2026
 ## Completion gate
 
 - Source repository: `/Users/junyizhang/Git/pi`
-- Reviewed source commit: `71efc6f0c1909874ec8c944637a9ae7fc0e2d508`
+- Reviewed source commit: `05558a79280a2f1356bd390a573aeb28726d26b5`
 - Target repository: `/Users/junyizhang/Git/pi-kotlin`
 - The migration is complete only when:
 
@@ -105,7 +105,7 @@ Last reviewed: July 30, 2026
   - [x] Project-over-user active-theme settings
   - [x] Named and in-memory extension theme switching
   - [x] Persistent header/widget/footer rerendering after theme changes
-- [x] Upstream synchronization through `71efc6f0`
+- [x] Upstream synchronization through `05558a79`
   - [x] Preserve package and extension metadata across resource reloads
   - [x] Route RPC `user_bash` through extension direct-result interception
   - [x] Track and cancel concurrent user bash executions independently
@@ -119,13 +119,16 @@ Last reviewed: July 30, 2026
   - [x] Show system prompt file sources in startup Context output
   - [x] Preserve OpenAI Chat function arguments beside empty `custom` payloads
   - [x] Classify changelog, formatting-only TUI, release, and post-release commits
+  - [x] Match the upstream `OpenCode Go` provider display name
 
-The July 30 synchronization pass advances the completed migration through
-`71efc6f0`. It ports the OpenAI Chat malformed-delta fix and classifies the
-remaining release-range commits as non-runtime changes. The installed
-TypeScript and Kotlin runtimes still match across every rulebook judge.
-`./gradlew clean test installDist --max-workers=1` passes with 438 tests, all 30
-deterministic migration oracles pass, and the full migration audit is complete.
+The July 30 synchronization passes advance the completed migration through
+`05558a79`. They port the OpenAI Chat malformed-delta fix and the `OpenCode Go`
+provider display name while classifying release and repository-metadata changes
+outside the runtime migration. The installed TypeScript and Kotlin runtimes
+still match across every rulebook judge. The full
+`./gradlew clean test installDist --max-workers=1` gate passes with 438 tests,
+all 30 deterministic migration oracles pass, and the full migration audit is
+complete.
 
 ## Completion checklist
 
@@ -135,6 +138,8 @@ deterministic migration oracles pass, and the full migration audit is complete.
       `4f0437e2d58d651dd934119ecabea2893975f62f..d7b02636a0c7e8e615d0cff70679d18d2ff59573`
 - [x] Review and classify every commit in
       `d7b02636a0c7e8e615d0cff70679d18d2ff59573..71efc6f0c1909874ec8c944637a9ae7fc0e2d508`
+- [x] Review and classify every migration-package commit in
+      `71efc6f0c1909874ec8c944637a9ae7fc0e2d508..05558a79280a2f1356bd390a573aeb28726d26b5`
 - [x] OAuth five-minute refresh window and credential print commands
 - [x] OpenRouter manual redirect URL fallback
 - [x] Pending stop reason while streaming
@@ -250,11 +255,26 @@ deterministic migration oracles pass, and the full migration audit is complete.
 
 ## Follow-up
 
-No migration gaps remain against source commit `71efc6f0`. Future work starts
+No migration gaps remain against source commit `05558a79`. Future work starts
 only when the TypeScript source advances and a new synchronization range is
 recorded.
 
-Evidence for the July 30 upstream synchronization:
+Evidence for the latest July 30 upstream synchronization:
+
+- [x] Source fast-forwarded from `71efc6f0` through `05558a79` with a clean
+      TypeScript worktree
+- [x] Contributor-approval metadata classified outside the migrated package
+      paths
+- [x] Kotlin provider registry and regression test expose `OpenCode Go`
+- [x] Secret input is cleared before its mask is removed, and asynchronous TUI
+      tests wait for the active input prompt before sending keys
+- [x] `./gradlew clean test installDist --max-workers=1` with 438 tests and no
+      failures, errors, or skips
+- [x] All 30 deterministic migration oracles
+- [x] `./migration/audit-migration.sh sync` through `05558a79`
+- [x] `./migration/audit-migration.sh full`
+
+Evidence for the earlier July 30 OpenAI tool-call synchronization:
 
 - [x] Source model data hydration and `npm run build:offline` at `71efc6f0`
       with a clean TypeScript worktree

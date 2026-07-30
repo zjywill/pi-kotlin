@@ -167,7 +167,7 @@ class FullScreenConsoleTest {
             }
         }
         val result = CompletableFuture.supplyAsync { console.readLine("> ") }
-        terminal.awaitOutput("remote-editor:")
+        terminal.awaitOutput("> ")
 
         terminal.sendInput("h")
         terminal.sendInput("i")
@@ -285,6 +285,7 @@ class FullScreenConsoleTest {
                 }
             }
         terminal.awaitOutput("Type /help for commands.")
+        terminal.awaitOutput("> ")
 
         terminal.sendText("/help")
         terminal.awaitOutput("Show commands")

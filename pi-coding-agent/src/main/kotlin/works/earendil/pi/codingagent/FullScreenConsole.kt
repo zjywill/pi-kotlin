@@ -215,12 +215,13 @@ internal class FullScreenConsole(
             registration?.close()
             reading = false
             this.prompt.text = ""
-            editor.maskCharacter = null
             if (secret) {
                 editor.setText("")
+                editor.maskCharacter = null
                 editorSlot.component = editorBeforeSecret
                 tui.setFocus(editorBeforeSecret)
             } else {
+                editor.maskCharacter = null
                 setPrimaryEditorText("")
             }
             tui.requestRender()
