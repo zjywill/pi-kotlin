@@ -24,6 +24,13 @@ internal enum class SettingsScope {
     PROJECT,
 }
 
+enum class UiMode(
+    val wireValue: String,
+) {
+    REGULAR("regular"),
+    FULLSCREEN("fullscreen"),
+}
+
 internal data class PackageSourceConfig(
     val source: String,
     val autoload: Boolean? = null,
@@ -74,6 +81,9 @@ internal data class SettingsSnapshot(
     val enabledModels: List<String>? = null,
     val npmCommand: List<String>? = null,
     val quietStartup: Boolean? = null,
+    val uiMode: UiMode? = null,
+    val fullscreenScrollbar: works.earendil.pi.tui.ScrollViewScrollbar? = null,
+    val autocompleteMaxVisible: Int? = null,
 ) {
     fun resourceEntries(type: PackageResourceType): List<String> =
         when (type) {
@@ -123,6 +133,18 @@ internal class SettingsStore(
         }.packages
 
     fun mergedThemeSetting(): String? = project().theme ?: global().theme
+
+    fun mergedUiMode(): UiMode = project().uiMode ?: global().uiMode ?: UiMode.REGULAR
+
+    fun mergedFullscreenScrollbar(): works.earendil.pi.tui.ScrollViewScrollbar =
+        project().fullscreenScrollbar
+            ?: global().fullscreenScrollbar
+            ?: works.earendil.pi.tui.ScrollViewScrollbar.AUTO
+
+    fun mergedAutocompleteMaxVisible(): Int =
+        project().autocompleteMaxVisible
+            ?: global().autocompleteMaxVisible
+            ?: DEFAULT_AUTOCOMPLETE_MAX_VISIBLE
 
     fun agentRuntimeSettings(): AgentRuntimeSettings {
         val global = global().raw
@@ -191,6 +213,18 @@ internal class SettingsStore(
 
     fun setTheme(theme: String) {
         updateGlobal { put("theme", theme) }
+    }
+
+    fun setUiMode(mode: UiMode) {
+        updateGlobal { put("uiMode", mode.wireValue) }
+    }
+
+    fun setFullscreenScrollbar(mode: works.earendil.pi.tui.ScrollViewScrollbar) {
+        updateGlobal { put("fullscreenScrollbar", mode.wireValue) }
+    }
+
+    fun setAutocompleteMaxVisible(value: Int) {
+        updateGlobal { put("autocompleteMaxVisible", value.coerceIn(3, 20)) }
     }
 
     fun setPackages(
@@ -267,6 +301,29 @@ internal class SettingsStore(
                         .getOrNull()
                 },
             quietStartup = raw["quietStartup"].booleanValue(),
+            uiMode =
+                when (raw["uiMode"].stringValue()) {
+                    UiMode.FULLSCREEN.wireValue -> UiMode.FULLSCREEN
+                    UiMode.REGULAR.wireValue -> UiMode.REGULAR
+                    else -> null
+                },
+            fullscreenScrollbar =
+                when (raw["fullscreenScrollbar"].stringValue()) {
+                    works.earendil.pi.tui.ScrollViewScrollbar.HIDDEN.wireValue ->
+                        works.earendil.pi.tui.ScrollViewScrollbar.HIDDEN
+
+                    works.earendil.pi.tui.ScrollViewScrollbar.ALWAYS.wireValue ->
+                        works.earendil.pi.tui.ScrollViewScrollbar.ALWAYS
+
+                    works.earendil.pi.tui.ScrollViewScrollbar.AUTO.wireValue ->
+                        works.earendil.pi.tui.ScrollViewScrollbar.AUTO
+
+                    else -> null
+                },
+            autocompleteMaxVisible =
+                raw["autocompleteMaxVisible"]
+                    .intValue()
+                    ?.coerceIn(3, 20),
         )
     }
 
@@ -374,6 +431,8 @@ internal class SettingsStore(
                 .getOrNull()
         }
 }
+
+private const val DEFAULT_AUTOCOMPLETE_MAX_VISIBLE = 5
 
 private fun JsonElement?.stringValue(): String? =
     (this as? JsonPrimitive)

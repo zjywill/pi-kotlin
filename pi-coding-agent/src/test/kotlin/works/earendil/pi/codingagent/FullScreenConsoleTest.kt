@@ -22,6 +22,28 @@ import works.earendil.pi.ai.Models
 
 class FullScreenConsoleTest {
     @Test
+    fun `fullscreen UI uses alternate screen and restores it on close`() {
+        val terminal = ConsoleTerminal(columns = 30, rows = 6)
+        val console =
+            FullScreenConsole(
+                terminalAdapter = terminal,
+                closeTerminal = null,
+                uiMode = UiMode.FULLSCREEN,
+                fullscreenScrollbar = works.earendil.pi.tui.ScrollViewScrollbar.ALWAYS,
+            )
+
+        assertTrue(terminal.output().contains("\u001B[?1049h"))
+        val result = CompletableFuture.supplyAsync { console.readLine("> ") }
+        terminal.awaitOutput("> ")
+        terminal.sendText("done")
+        terminal.sendInput("\r")
+        assertEquals("done", result.get(2, TimeUnit.SECONDS))
+
+        console.close()
+        assertTrue(terminal.output().contains("\u001B[?1049l"))
+    }
+
+    @Test
     fun `full screen console reads raw editor input and renders transcript`() {
         val terminal = ConsoleTerminal(columns = 40, rows = 12)
         val console = FullScreenConsole(terminal, closeTerminal = null)
@@ -35,6 +57,25 @@ class FullScreenConsoleTest {
         assertEquals("hello", result.get(2, TimeUnit.SECONDS))
         assertTrue(terminal.output().contains("header"))
         assertTrue(terminal.output().contains("> "))
+        console.close()
+    }
+
+    @Test
+    fun `clipboard shortcut inserts text from the platform reader`() {
+        val terminal = ConsoleTerminal()
+        val console =
+            FullScreenConsole(
+                terminalAdapter = terminal,
+                closeTerminal = null,
+                clipboardTextReader = { "Wayland text" },
+            )
+        val result = CompletableFuture.supplyAsync { console.readLine("> ") }
+        terminal.awaitOutput("> ")
+
+        terminal.sendInput("\u0016")
+        terminal.sendInput("\r")
+
+        assertEquals("Wayland text", result.get(2, TimeUnit.SECONDS))
         console.close()
     }
 

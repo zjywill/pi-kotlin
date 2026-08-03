@@ -14,7 +14,7 @@ class SessionTest {
     fun `session builds branch context and tracks state`() =
         runTest {
             val metadata = SessionMetadata("session-1", "2026-01-01T00:00:00Z")
-            val session = Session(InMemorySessionStorage(metadata))
+            val session = createSession(InMemorySessionStorage(metadata))
             val root = session.appendMessage(UserMessage("root", 1))
             session.appendThinkingLevelChange("high")
             session.appendModelChange("test", "model-1")
@@ -35,7 +35,7 @@ class SessionTest {
     fun `compaction keeps summary retained tail and later messages`() =
         runTest {
             val session =
-                Session(
+                createSession(
                     InMemorySessionStorage(
                         SessionMetadata("session-1", "2026-01-01T00:00:00Z"),
                     ),
@@ -75,10 +75,65 @@ class SessionTest {
         }
 
     @Test
+    fun `repository search returns matching session entries`() =
+        runTest {
+            val repository = InMemorySessionRepository()
+            val matching = repository.create(InMemoryCreateOptions("matching"))
+            matching.appendMessage(UserMessage("Needle in a session", 1))
+            repository.create(InMemoryCreateOptions("other")).appendMessage(UserMessage("different", 2))
+
+            val search = createScanningSessionSearch(repository)
+            val hits = search.search(SessionSearchOptions("needle"))
+
+            assertEquals(listOf("matching"), hits.map { it.metadata.id })
+            assertEquals(emptyList(), search.search(SessionSearchOptions("needle", cwd = "/workspace")))
+        }
+
+    @Test
+    fun `bounded branch queries preserve traversal bounds and filters`() =
+        runTest {
+            val repository = InMemorySessionRepository()
+            val session = repository.create(InMemoryCreateOptions("branch-query"))
+            val root = session.appendMessage(UserMessage("root", 1))
+            val assistant = session.appendMessage(assistant("assistant", 2))
+            session.appendCustomEntry("marker")
+            val leaf = session.appendMessage(UserMessage("leaf", 3))
+
+            assertEquals(
+                listOf(leaf, assistant),
+                session
+                    .findEntriesOnBranch(
+                        SessionBranchQuery(
+                            stopAtId = assistant,
+                            type = "message",
+                        ),
+                    ).map(SessionTreeEntry::id),
+            )
+            assertEquals(
+                listOf(root, assistant),
+                session
+                    .findEntriesOnBranch(
+                        SessionBranchQuery(
+                            stopAtId = assistant,
+                            type = "message",
+                            order = SessionBranchOrder.OLDEST_FIRST,
+                        ),
+                    ).map(SessionTreeEntry::id),
+            )
+            assertEquals(
+                "marker",
+                (session.findEntryOnBranch(SessionBranchQuery(customType = "marker")) as CustomEntry).customType,
+            )
+            assertFailsWith<IllegalArgumentException> {
+                SessionBranchQuery(limit = 0)
+            }
+        }
+
+    @Test
     fun `stats include assistant and summary usage`() =
         runTest {
             val session =
-                Session(
+                createSession(
                     InMemorySessionStorage(
                         SessionMetadata("session-1", "2026-01-01T00:00:00Z"),
                     ),

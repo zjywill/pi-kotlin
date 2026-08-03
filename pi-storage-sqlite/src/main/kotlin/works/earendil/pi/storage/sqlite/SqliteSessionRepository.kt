@@ -9,6 +9,7 @@ import works.earendil.pi.agent.session.SessionErrorCode
 import works.earendil.pi.agent.session.SessionException
 import works.earendil.pi.agent.session.SessionForkOptions
 import works.earendil.pi.agent.session.SessionRepository
+import works.earendil.pi.agent.session.createSession
 import works.earendil.pi.agent.session.getEntriesToFork
 import works.earendil.pi.ai.uuidv7
 
@@ -29,7 +30,7 @@ class SqliteSessionRepository(
                     parentSessionId = options.parentSessionId,
                     metadata = options.metadata,
                 )
-            return Session(SqliteSessionStorage.create(connection, metadata))
+            return createSession(SqliteSessionStorage.create(connection, metadata))
         } catch (error: Exception) {
             connection.close()
             throw error
@@ -42,7 +43,7 @@ class SqliteSessionRepository(
         }
         val connection = openDatabase()
         try {
-            return Session(SqliteSessionStorage.open(connection, metadata))
+            return createSession(SqliteSessionStorage.open(connection, metadata))
         } catch (error: Exception) {
             connection.close()
             throw error
@@ -92,6 +93,7 @@ class SqliteSessionRepository(
         openDatabase().use { connection ->
             connection.transaction {
                 listOf(
+                    "branch_tips",
                     "branch_entries",
                     "session_entries",
                     "entry_materialized",
@@ -115,29 +117,35 @@ class SqliteSessionRepository(
         }
     }
 
-    suspend fun fork(
-        sourceMetadata: SqliteSessionMetadata,
+    override suspend fun fork(
+        source: SqliteSessionMetadata,
         createOptions: SqliteSessionCreateOptions,
-        forkOptions: SessionForkOptions = SessionForkOptions(),
+        forkOptions: SessionForkOptions,
     ): Session<SqliteSessionMetadata> {
-        val source = open(sourceMetadata)
+        val sourceSession = open(source)
         val entries =
             try {
-                getEntriesToFork(source.getStorage(), forkOptions)
+                getEntriesToFork(sourceSession.getStorage(), forkOptions)
             } finally {
-                source.close()
+                sourceSession.close()
             }
         val target =
             create(
                 createOptions.copy(
                     id = forkOptions.id ?: createOptions.id,
-                    parentSessionId = createOptions.parentSessionId ?: sourceMetadata.id,
-                    metadata = createOptions.metadata ?: sourceMetadata.metadata,
+                    parentSessionId = createOptions.parentSessionId ?: source.id,
+                    metadata = createOptions.metadata ?: source.metadata,
                 ),
             )
         entries.forEach { target.getStorage().appendEntry(it) }
-        return target
+        return createSession(target.getStorage())
     }
+
+    suspend fun fork(
+        source: SqliteSessionMetadata,
+        createOptions: SqliteSessionCreateOptions,
+    ): Session<SqliteSessionMetadata> =
+        fork(source, createOptions, SessionForkOptions())
 
     private fun openDatabase(): Connection {
         databasePath.parent?.let(Files::createDirectories)
@@ -151,4 +159,5 @@ class SqliteSessionRepository(
             throw error
         }
     }
+
 }

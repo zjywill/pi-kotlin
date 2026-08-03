@@ -543,7 +543,13 @@ private fun graphemeWidth(segment: String): Int {
         return TAB_WIDTH
     }
     val codePoints = segment.codePoints().toArray()
-    if (codePoints.isEmpty() || codePoints.all(::isZeroWidth)) {
+    if (codePoints.isEmpty()) {
+        return 0
+    }
+    if (codePoints.all(::isTerminalSpacingMark)) {
+        return codePoints.size
+    }
+    if (codePoints.all(::isZeroWidth)) {
         return 0
     }
     if (
@@ -560,19 +566,58 @@ private fun graphemeWidth(segment: String): Int {
             EastAsianWidth.FULLWIDTH, EastAsianWidth.WIDE -> 2
             else -> 1
         }
+    var followsMark = false
     codePoints.drop(1).forEach { codePoint ->
-        val eastAsianWidth = UCharacter.getIntPropertyValue(codePoint, UProperty.EAST_ASIAN_WIDTH)
-        if (
-            eastAsianWidth == EastAsianWidth.FULLWIDTH ||
-            eastAsianWidth == EastAsianWidth.WIDE ||
-            codePoint == 0x0E33 ||
-            codePoint == 0x0EB3
-        ) {
-            width++
+        when {
+            isTerminalSpacingMark(codePoint) -> {
+                width++
+                followsMark = false
+            }
+
+            isMark(codePoint) -> followsMark = true
+            !isNonPrinting(codePoint) -> {
+                val eastAsianWidth = UCharacter.getIntPropertyValue(codePoint, UProperty.EAST_ASIAN_WIDTH)
+                if (followsMark) {
+                    width += if (eastAsianWidth == EastAsianWidth.FULLWIDTH || eastAsianWidth == EastAsianWidth.WIDE) 2 else 1
+                } else if (eastAsianWidth == EastAsianWidth.FULLWIDTH || eastAsianWidth == EastAsianWidth.WIDE) {
+                    width += 2
+                } else if (codePoint == 0x0E33 || codePoint == 0x0EB3) {
+                    width++
+                }
+                followsMark = false
+            }
         }
     }
     return width
 }
+
+private fun isTerminalSpacingMark(codePoint: Int): Boolean =
+    (
+        UCharacter.getType(codePoint) == UCharacterCategory.COMBINING_SPACING_MARK.toInt() &&
+            codePoint !in setOf(0x1734, 0x302E, 0x302F)
+    ) ||
+        codePoint == 0x065F ||
+        codePoint == 0x0F7F ||
+        codePoint == 0x102B ||
+        codePoint == 0x102C ||
+        codePoint == 0x1031 ||
+        codePoint in 0x1033..0x1035 ||
+        codePoint == 0x1038 ||
+        codePoint in 0x103A..0x103E
+
+private fun isMark(codePoint: Int): Boolean =
+    when (UCharacter.getType(codePoint)) {
+        UCharacterCategory.NON_SPACING_MARK.toInt(),
+        UCharacterCategory.COMBINING_SPACING_MARK.toInt(),
+        UCharacterCategory.ENCLOSING_MARK.toInt(),
+        -> true
+
+        else -> false
+    }
+
+private fun isNonPrinting(codePoint: Int): Boolean =
+    isZeroWidth(codePoint) ||
+        UCharacter.getType(codePoint) == UCharacterCategory.FORMAT.toInt()
 
 private fun isZeroWidth(codePoint: Int): Boolean {
     if (UCharacter.hasBinaryProperty(codePoint, UProperty.DEFAULT_IGNORABLE_CODE_POINT)) {

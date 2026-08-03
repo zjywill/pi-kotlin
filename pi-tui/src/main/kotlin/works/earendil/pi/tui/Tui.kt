@@ -1,5 +1,7 @@
 package works.earendil.pi.tui
 
+import java.util.Base64
+import kotlin.concurrent.thread
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
@@ -161,9 +163,38 @@ data class InputListenerResult(
     val data: String? = null,
 )
 
+private data class SelectionPoint(
+    val row: Int,
+    val column: Int,
+)
+
+private data class SgrMouseEvent(
+    val button: Int,
+    val x: Int,
+    val y: Int,
+    val release: Boolean,
+)
+
+private data class FlashEntry(
+    val id: Long,
+    val message: String,
+)
+
+private data class PreparedKittyScreen(
+    val lines: List<String>,
+    val staleImageDeletion: String,
+)
+
+enum class TuiScreenMode {
+    MAIN,
+    ALTERNATE,
+}
+
 class Tui(
     val terminal: Terminal,
     private val showHardwareCursor: Boolean = false,
+    private val screenMode: TuiScreenMode = TuiScreenMode.MAIN,
+    private val imageProtocol: TerminalImageProtocol? = detectTerminalCapabilities().images,
 ) : Container() {
     private val inputListeners = linkedSetOf<(String) -> InputListenerResult?>()
     private val overlayStack = mutableListOf<OverlayEntry>()
@@ -176,6 +207,13 @@ class Tui(
     private var rendering = false
     private var renderPending = false
     private var stopped = true
+    private var alternateBaseLines: List<String> = emptyList()
+    private var selectionAnchor: SelectionPoint? = null
+    private var selectionFocus: SelectionPoint? = null
+    private var selectionPressActive = false
+    private val flashes = mutableListOf<FlashEntry>()
+    private var flashSequence = 0L
+    private val uploadedKittyImages = linkedMapOf<Long, Long>()
 
     var fullRedraws: Int = 0
         private set
@@ -299,6 +337,11 @@ class Tui(
     fun start() {
         stopped = false
         terminal.start(::dispatchInput, ::requestRender)
+        if (screenMode == TuiScreenMode.ALTERNATE) {
+            clearSelection()
+            uploadedKittyImages.clear()
+            terminal.write(ENTER_ALT_SCREEN + DISABLE_AUTOWRAP + ENABLE_MOUSE + "\u001B[2J\u001B[H")
+        }
         terminal.hideCursor()
         requestRender(force = true)
     }
@@ -308,6 +351,38 @@ class Tui(
             return
         }
         stopped = true
+        if (screenMode == TuiScreenMode.ALTERNATE) {
+            clearSelection()
+            val width = terminal.columns.coerceAtLeast(1)
+            val document =
+                children.flatMap { component ->
+                    if (component is ViewportComponent) {
+                        component.renderDocument(width)
+                    } else {
+                        component.render(width)
+                    }
+                }
+            val buffer =
+                buildString {
+                    append(SYNC_START)
+                    if (imageProtocol == TerminalImageProtocol.KITTY) {
+                        append(deleteAllKittyImages())
+                    }
+                    append(DISABLE_MOUSE)
+                    append(ENABLE_AUTOWRAP)
+                    append(EXIT_ALT_SCREEN)
+                    document.forEachIndexed { index, line ->
+                        if (index > 0) append("\r\n")
+                        append("\r\u001B[2K")
+                        append(normalizeTerminalOutput(line.replace(CURSOR_MARKER, "")))
+                        append(SEGMENT_RESET)
+                    }
+                    append("\r\n")
+                    append(SYNC_END)
+                }
+            terminal.write(buffer)
+            uploadedKittyImages.clear()
+        }
         terminal.showCursor()
         terminal.stop()
     }
@@ -356,14 +431,62 @@ class Tui(
         }
     }
 
+    fun flash(
+        message: String,
+        durationMs: Long = 1_000,
+    ) {
+        if (screenMode != TuiScreenMode.ALTERNATE || message.isEmpty()) {
+            return
+        }
+        val entry =
+            synchronized(flashes) {
+                FlashEntry(++flashSequence, message).also(flashes::add)
+            }
+        requestRender()
+        thread(name = "pi-alt-screen-flash", isDaemon = true) {
+            Thread.sleep(durationMs.coerceAtLeast(0))
+            synchronized(flashes) {
+                flashes.removeAll { it.id == entry.id }
+            }
+            requestRender()
+        }
+    }
+
     fun renderFrame(): List<String> {
         val width = terminal.columns.coerceAtLeast(1)
         val height = terminal.rows.coerceAtLeast(1)
-        return compositeOverlays(render(width), width, height)
+        val base =
+            children.flatMap { component ->
+                if (screenMode == TuiScreenMode.ALTERNATE && component is ViewportComponent) {
+                    component.bindRenderRequest(::requestRender)
+                    component.renderViewport(width, height)
+                } else {
+                    component.render(width)
+                }
+            }
+        val frame = compositeOverlays(base, width, height)
+        return if (screenMode == TuiScreenMode.ALTERNATE) {
+            frame.takeLast(height).toMutableList().also { lines ->
+                while (lines.size < height) {
+                    lines.add(0, "")
+                }
+            }
+        } else {
+            frame
+        }
     }
 
     private fun dispatchInput(initialData: String) {
         var data = initialData
+        if (
+            screenMode == TuiScreenMode.ALTERNATE &&
+            children.filterIsInstance<ViewportComponent>().any { it.handleViewportInput(data) }
+        ) {
+            return
+        }
+        if (screenMode == TuiScreenMode.ALTERNATE && handleAlternateScreenInput(data)) {
+            return
+        }
         inputListeners.toList().forEach { listener ->
             val result = listener(data)
             if (result?.consume == true) {
@@ -393,6 +516,10 @@ class Tui(
             rawLines.map { line ->
                 normalizeTerminalOutput(line) + SEGMENT_RESET
             }
+        if (screenMode == TuiScreenMode.ALTERNATE) {
+            renderAlternateScreen(lines, width, height)
+            return
+        }
         val widthChanged = previousWidth > 0 && previousWidth != width
         val heightChanged = previousHeight > 0 && previousHeight != height
         if (previousLines.isEmpty()) {
@@ -444,6 +571,255 @@ class Tui(
         hardwareCursorRow = min(lastChanged, lines.lastIndex).coerceAtLeast(0)
         positionHardwareCursor(lines.size)
         remember(lines, width, height)
+    }
+
+    private fun renderAlternateScreen(
+        lines: List<String>,
+        width: Int,
+        height: Int,
+    ) {
+        alternateBaseLines = lines
+        val displayLines = compositeFlashes(applySelection(lines), width, height)
+        val fullRedraw =
+            previousLines.isEmpty() ||
+                previousWidth != width ||
+                previousHeight != height
+        val imagesNeedRedraw =
+            (0 until height).any { row ->
+                val line = displayLines.getOrElse(row) { "" }
+                val previous = previousLines.getOrElse(row) { "" }
+                line != previous && (isImageLine(line) || isImageLine(previous))
+            }
+        val redrawImages = fullRedraw || imagesNeedRedraw
+        val hadUploadedKittyImages = uploadedKittyImages.isNotEmpty()
+        val prepared =
+            if (redrawImages && imageProtocol == TerminalImageProtocol.KITTY) {
+                prepareKittyScreen(displayLines)
+            } else {
+                PreparedKittyScreen(displayLines, "")
+            }
+        val buffer = StringBuilder(SYNC_START)
+        if (fullRedraw) {
+            fullRedraws++
+            buffer.append(
+                if (imageProtocol == TerminalImageProtocol.KITTY && hadUploadedKittyImages) {
+                    deleteAllKittyPlacements()
+                } else if (imageProtocol == TerminalImageProtocol.KITTY) {
+                    deleteAllKittyImages()
+                } else {
+                    ""
+                },
+            )
+            buffer.append("\u001B[2J")
+        } else if (imagesNeedRedraw && imageProtocol == TerminalImageProtocol.KITTY) {
+            buffer.append(deleteAllKittyPlacements())
+        }
+        buffer.append(prepared.staleImageDeletion)
+        for (row in 0 until height) {
+            val sourceLine = displayLines.getOrElse(row) { "" }
+            if (!fullRedraw && !imagesNeedRedraw && sourceLine == previousLines.getOrElse(row) { "" }) {
+                continue
+            }
+            buffer
+                .append("\u001B[")
+                .append(row + 1)
+                .append(";1H\u001B[2K")
+                .append(prepared.lines.getOrElse(row) { "" })
+        }
+        val position = cursorPosition
+        if (position == null) {
+            buffer.append("\u001B[?25l")
+        } else {
+            buffer
+                .append("\u001B[")
+                .append(position.row.coerceIn(0, height - 1) + 1)
+                .append(';')
+                .append(position.column.coerceIn(0, width - 1) + 1)
+                .append('H')
+                .append(if (showHardwareCursor) "\u001B[?25h" else "\u001B[?25l")
+        }
+        buffer.append(SYNC_END)
+        terminal.write(buffer.toString())
+        hardwareCursorRow = position?.row ?: 0
+        remember(displayLines, width, height)
+    }
+
+    private fun prepareKittyScreen(lines: List<String>): PreparedKittyScreen {
+        val visibleImageIds = mutableSetOf<Long>()
+        val preparedLines =
+            lines.map { line ->
+                val placement = getKittyImagePlacement(line) ?: return@map line
+                visibleImageIds += placement.imageId
+                if (uploadedKittyImages[placement.imageId] == placement.transmissionGeneration) {
+                    placement.replacementLine
+                } else {
+                    uploadedKittyImages[placement.imageId] = placement.transmissionGeneration
+                    line
+                }
+            }
+        val stale =
+            buildString {
+                val iterator = uploadedKittyImages.iterator()
+                while (iterator.hasNext()) {
+                    val entry = iterator.next()
+                    if (entry.key in visibleImageIds) continue
+                    append(deleteKittyImage(entry.key))
+                    iterator.remove()
+                }
+            }
+        return PreparedKittyScreen(preparedLines, stale)
+    }
+
+    private fun handleAlternateScreenInput(data: String): Boolean {
+        if (data == FOCUS_OUT) {
+            clearSelection()
+            requestRender()
+            return true
+        }
+        if (data == FOCUS_IN) {
+            return true
+        }
+        val event = parseSgrMouseEvent(data) ?: return false
+        if (event.button and 3 != 0) {
+            return true
+        }
+        val point =
+            SelectionPoint(
+                row = event.y.coerceIn(0, terminal.rows.coerceAtLeast(1) - 1),
+                column = event.x.coerceIn(0, terminal.columns.coerceAtLeast(1) - 1),
+            )
+        if (event.release) {
+            if (!selectionPressActive) {
+                return true
+            }
+            selectionPressActive = false
+            selectionFocus = point
+            copySelection()
+            requestRender()
+            return true
+        }
+        if (event.button and 32 != 0) {
+            if (!selectionPressActive || selectionAnchor == null) {
+                return true
+            }
+            selectionFocus = point
+            requestRender()
+            return true
+        }
+        selectionPressActive = true
+        selectionAnchor = point
+        selectionFocus = point
+        requestRender()
+        return true
+    }
+
+    private fun parseSgrMouseEvent(data: String): SgrMouseEvent? {
+        val match = SGR_MOUSE.matchEntire(data) ?: return null
+        return SgrMouseEvent(
+            button = match.groupValues[1].toIntOrNull() ?: return null,
+            x = match.groupValues[2].toIntOrNull()?.minus(1) ?: return null,
+            y = match.groupValues[3].toIntOrNull()?.minus(1) ?: return null,
+            release = match.groupValues[4] == "m",
+        )
+    }
+
+    private fun applySelection(lines: List<String>): List<String> {
+        val bounds = selectionBounds() ?: return lines
+        return lines.mapIndexed { row, line ->
+            if (row !in bounds.first.row..bounds.second.row) {
+                return@mapIndexed line
+            }
+            val lineWidth = visibleWidth(line)
+            val start = if (row == bounds.first.row) bounds.first.column.coerceAtMost(lineWidth) else 0
+            val end =
+                if (row == bounds.second.row) {
+                    (bounds.second.column + 1).coerceAtMost(lineWidth)
+                } else {
+                    lineWidth
+                }
+            if (end <= start) {
+                return@mapIndexed line
+            }
+            val before = sliceByColumn(line, 0, start, strict = true)
+            val selected = sliceByColumn(line, start, end - start, strict = true)
+            val after = sliceByColumn(line, end, max(0, lineWidth - end), strict = true)
+            "$before\u001B[7m$selected\u001B[27m$after"
+        }
+    }
+
+    private fun selectionBounds(): Pair<SelectionPoint, SelectionPoint>? {
+        val anchor = selectionAnchor ?: return null
+        val focus = selectionFocus ?: return null
+        if (anchor == focus) {
+            return null
+        }
+        return if (
+            anchor.row < focus.row ||
+            (anchor.row == focus.row && anchor.column < focus.column)
+        ) {
+            anchor to focus
+        } else {
+            focus to anchor
+        }
+    }
+
+    private fun copySelection() {
+        val bounds = selectionBounds() ?: return
+        val selected =
+            (bounds.first.row..bounds.second.row).map { row ->
+                val line = alternateBaseLines.getOrElse(row) { "" }
+                val lineWidth = visibleWidth(line)
+                val start = if (row == bounds.first.row) bounds.first.column.coerceAtMost(lineWidth) else 0
+                val end =
+                    if (row == bounds.second.row) {
+                        (bounds.second.column + 1).coerceAtMost(lineWidth)
+                    } else {
+                        lineWidth
+                    }
+                stripTerminalSequences(
+                    sliceByColumn(line, start, max(0, end - start), strict = true),
+                ).trimEnd()
+            }.joinToString("\n")
+        if (selected.isEmpty()) {
+            return
+        }
+        val encoded = Base64.getEncoder().encodeToString(selected.toByteArray(Charsets.UTF_8))
+        terminal.write("\u001B]52;c;$encoded\u0007")
+        flash("Copied!")
+    }
+
+    private fun clearSelection() {
+        selectionAnchor = null
+        selectionFocus = null
+        selectionPressActive = false
+    }
+
+    private fun compositeFlashes(
+        lines: List<String>,
+        width: Int,
+        height: Int,
+    ): List<String> {
+        val entries = synchronized(flashes) { flashes.toList() }
+        if (entries.isEmpty()) {
+            return lines
+        }
+        val result = lines.toMutableList()
+        while (result.size < height) {
+            result += ""
+        }
+        entries.take(height).forEachIndexed { row, entry ->
+            val message = truncateToWidth(entry.message, width.coerceAtLeast(1))
+            val messageWidth = visibleWidth(message)
+            result[row] =
+                compositeLineAt(
+                    baseLine = result[row],
+                    overlayLine = message,
+                    startColumn = max(0, width - messageWidth),
+                    overlayWidth = messageWidth,
+                    totalWidth = width,
+                )
+        }
+        return result
     }
 
     private fun fullRender(
@@ -770,6 +1146,30 @@ private fun resolveAnchorColumn(
     }
 
 private val PERCENT_PATTERN = Regex("""^(\d+(?:\.\d+)?)%$""")
+private val SGR_MOUSE = Regex("""^\u001B\[<(\d+);(\d+);(\d+)([Mm])$""")
 private const val SYNC_START = "\u001B[?2026h"
 private const val SYNC_END = "\u001B[?2026l"
 private const val SEGMENT_RESET = "\u001B[0m\u001B]8;;\u0007"
+private const val ENTER_ALT_SCREEN = "\u001B[?1049h"
+private const val EXIT_ALT_SCREEN = "\u001B[?1049l"
+private const val DISABLE_AUTOWRAP = "\u001B[?7l"
+private const val ENABLE_AUTOWRAP = "\u001B[?7h"
+private const val ENABLE_MOUSE = "\u001B[?1000h\u001B[?1002h\u001B[?1003h\u001B[?1004h\u001B[?1006h"
+private const val DISABLE_MOUSE = "\u001B[?1006l\u001B[?1004l\u001B[?1003l\u001B[?1002l\u001B[?1000l"
+private const val FOCUS_IN = "\u001B[I"
+private const val FOCUS_OUT = "\u001B[O"
+
+private fun stripTerminalSequences(value: String): String {
+    val result = StringBuilder()
+    var index = 0
+    while (index < value.length) {
+        val ansi = extractAnsiCode(value, index)
+        if (ansi != null) {
+            index += ansi.length
+        } else {
+            result.append(value[index])
+            index++
+        }
+    }
+    return result.toString()
+}

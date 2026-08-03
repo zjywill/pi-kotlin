@@ -35,11 +35,20 @@ git -C "$SOURCE_REPO" log \
   packages/tui \
   packages/storage/sqlite-node \
   packages/coding-agent \
+  packages/protocol \
+  packages/client \
   packages/server >"$expected"
 tail -n +2 "$SYNC" | cut -f1 >"$recorded"
 
+if [[ "$(wc -l <"$recorded")" -ne "$(sort -u "$recorded" | wc -l)" ]]; then
+  printf 'Upstream sync manifest contains duplicate commit IDs.\n' >&2
+  exit 1
+fi
+
+sort -o "$expected" "$expected"
+sort -o "$recorded" "$recorded"
 if ! diff -u "$expected" "$recorded"; then
-  printf 'Upstream sync manifest does not match the recorded source range.\n' >&2
+  printf 'Upstream sync manifest commit set does not match the recorded source range.\n' >&2
   exit 1
 fi
 
@@ -56,6 +65,12 @@ fi
 if [[ "$MODE" != "full" ]]; then
   printf 'Usage: %s [sync|full]\n' "$0" >&2
   exit 2
+fi
+
+known_gaps="$(awk -F '\t' 'NR > 1 && $2 == "covered-by-known-gap" { print }' "$SYNC")"
+if [[ -n "$known_gaps" ]]; then
+  printf 'Migration still has known upstream gaps:\n%s\n' "$known_gaps" >&2
+  exit 1
 fi
 
 incomplete="$(awk -F '\t' 'NR > 1 && $4 != "complete" && $4 != "not-applicable" { print }' "$INVENTORY")"

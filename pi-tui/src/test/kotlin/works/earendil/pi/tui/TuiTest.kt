@@ -7,6 +7,155 @@ import kotlin.test.assertTrue
 
 class TuiTest {
     @Test
+    fun `alternate screen reuses kitty uploads when an image moves`() {
+        val terminal = TestTerminal(columns = 20, rows = 4)
+        val imageId = 4242L
+        registerKittyImageMetadata(
+            KittyImageMetadata(
+                imageId = imageId,
+                columns = 2,
+                rows = 2,
+                widthPx = 100,
+                heightPx = 100,
+            ),
+        )
+        val image =
+            encodeKitty(
+                base64Data = "A".repeat(8_192),
+                columns = 2,
+                rows = 2,
+                imageId = imageId,
+                moveCursor = false,
+            )
+        val content = MutableLinesComponent(listOf("header", image, "", "dock"))
+        val tui =
+            Tui(
+                terminal = terminal,
+                screenMode = TuiScreenMode.ALTERNATE,
+                imageProtocol = TerminalImageProtocol.KITTY,
+            )
+        tui.addChild(content)
+        tui.start()
+        assertTrue(terminal.writes().contains("\u001B_Ga=T"))
+
+        terminal.clearWrites()
+        content.lines = listOf("header", "second", image, "")
+        tui.requestRender()
+        val redraw = terminal.writes()
+
+        assertTrue(redraw.contains(deleteAllKittyPlacements()))
+        assertTrue(redraw.contains("\u001B_Ga=p,q=2"))
+        assertFalse(redraw.contains("\u001B_Ga=T"))
+    }
+
+    @Test
+    fun `alternate screen keeps dock fixed while scrolling the document`() {
+        val terminal = TestTerminal(columns = 20, rows = 6)
+        val document = MutableLinesComponent((0..9).map { "line-$it" })
+        val dock = LinesComponent(listOf("editor"))
+        val tui = Tui(terminal, screenMode = TuiScreenMode.ALTERNATE)
+        tui.addChild(
+            ViewportLayout(
+                document = document,
+                dock = dock,
+                scrollbar = ScrollViewScrollbar.HIDDEN,
+            ),
+        )
+
+        tui.start()
+
+        assertTrue(terminal.writes().contains("\u001B[?1049h"))
+        assertEquals(listOf("line-5", "line-6", "line-7", "line-8", "line-9", "editor"), tui.renderFrame())
+
+        terminal.sendInput("\u001B[5~")
+        assertEquals(listOf("line-4", "line-5", "line-6", "line-7", "line-8", "editor"), tui.renderFrame())
+
+        terminal.sendInput("\u001B[F")
+        assertEquals(listOf("line-5", "line-6", "line-7", "line-8", "line-9", "editor"), tui.renderFrame())
+
+        tui.stop()
+        assertTrue(terminal.writes().contains("\u001B[?1049l"))
+    }
+
+    @Test
+    fun `alternate screen jumps between prompt markers`() {
+        val terminal = TestTerminal(columns = 20, rows = 6)
+        val prompt = "\u001B]133;A\u0007"
+        val document =
+            MutableLinesComponent(
+                listOf(
+                    "${prompt}prompt-0",
+                    "line-1",
+                    "line-2",
+                    "${prompt}prompt-3",
+                    "line-4",
+                    "line-5",
+                    "line-6",
+                    "${prompt}prompt-7",
+                    "line-8",
+                    "line-9",
+                ),
+            )
+        val viewport =
+            ViewportLayout(
+                document = document,
+                dock = LinesComponent(listOf("editor")),
+                scrollbar = ScrollViewScrollbar.HIDDEN,
+            )
+        val tui = Tui(terminal, screenMode = TuiScreenMode.ALTERNATE)
+        tui.addChild(viewport)
+        tui.start()
+
+        assertEquals(5, viewport.viewportTop)
+        terminal.sendInput("\u001B[1;6A")
+        assertEquals(3, viewport.viewportTop)
+        terminal.sendInput("\u001B[1;6B")
+        assertEquals(5, viewport.viewportTop)
+    }
+
+    @Test
+    fun `alternate screen copies only an active mouse selection`() {
+        val terminal = TestTerminal(columns = 20, rows = 3)
+        val tui = Tui(terminal, screenMode = TuiScreenMode.ALTERNATE)
+        tui.addChild(LinesComponent(listOf("hello world")))
+        tui.start()
+        terminal.clearWrites()
+
+        terminal.sendInput("\u001B[<0;5;3m")
+        assertFalse(terminal.writes().contains("\u001B]52;c;"))
+
+        terminal.sendInput("\u001B[<0;1;3M")
+        terminal.sendInput("\u001B[<32;5;3M")
+        terminal.sendInput("\u001B[<0;5;3m")
+
+        assertTrue(terminal.writes().contains("\u001B]52;c;aGVsbG8=\u0007"))
+        assertTrue(terminal.writes().contains("Copied!"))
+    }
+
+    @Test
+    fun `alternate screen scrollbar drag changes viewport position`() {
+        val terminal = TestTerminal(columns = 20, rows = 6)
+        val viewport =
+            ViewportLayout(
+                document = MutableLinesComponent((0..19).map { "line-$it" }),
+                dock = LinesComponent(listOf("editor")),
+                scrollbar = ScrollViewScrollbar.ALWAYS,
+            )
+        val tui = Tui(terminal, screenMode = TuiScreenMode.ALTERNATE)
+        tui.addChild(viewport)
+        tui.start()
+
+        assertEquals(15, viewport.viewportTop)
+        terminal.sendInput("\u001B[H")
+        assertEquals(0, viewport.viewportTop)
+        terminal.sendInput("\u001B[<0;20;1M")
+        terminal.sendInput("\u001B[<32;20;5M")
+        terminal.sendInput("\u001B[<0;20;5m")
+
+        assertTrue(viewport.viewportTop > 0)
+    }
+
+    @Test
     fun `centers overlay against terminal when base content is short`() {
         val terminal = TestTerminal(columns = 40, rows = 10)
         val tui = Tui(terminal)

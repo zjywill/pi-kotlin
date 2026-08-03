@@ -3,6 +3,7 @@ package works.earendil.pi.ai.providers
 import java.net.URLEncoder
 import java.net.http.HttpClient
 import java.nio.charset.StandardCharsets
+import java.util.Base64
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonArray
@@ -249,10 +250,13 @@ class GoogleProvider(
             model,
             context,
             options,
-            googleContents(context),
+            googleContents(model, context),
         )
 
-    private fun googleContents(context: Context): JsonArray =
+    private fun googleContents(
+        model: Model,
+        context: Context,
+    ): JsonArray =
         buildJsonArray {
             context.messages.forEach { message ->
                 when (message) {
@@ -264,47 +268,7 @@ class GoogleProvider(
                             },
                         )
 
-                    is AssistantMessage ->
-                        add(
-                            buildJsonObject {
-                                put("role", "model")
-                                put(
-                                    "parts",
-                                    buildJsonArray {
-                                        message.content.forEach { block ->
-                                            when (block) {
-                                                is TextContent -> add(buildJsonObject { put("text", block.text) })
-                                                is ThinkingContent ->
-                                                    add(
-                                                        buildJsonObject {
-                                                            put("text", block.thinking)
-                                                            put("thought", true)
-                                                            block.thinkingSignature?.let { put("thoughtSignature", it) }
-                                                        },
-                                                    )
-
-                                                is ToolCall ->
-                                                    add(
-                                                        buildJsonObject {
-                                                            put(
-                                                                "functionCall",
-                                                                buildJsonObject {
-                                                                    put("id", block.id)
-                                                                    put("name", block.name)
-                                                                    put("args", block.arguments)
-                                                                },
-                                                            )
-                                                            block.thoughtSignature?.let { put("thoughtSignature", it) }
-                                                        },
-                                                    )
-
-                                                else -> Unit
-                                            }
-                                        }
-                                    },
-                                )
-                            },
-                        )
+                    is AssistantMessage -> googleAssistantContent(model, message)?.let(::add)
 
                     is works.earendil.pi.ai.ToolResultMessage ->
                         add(
@@ -365,6 +329,85 @@ class GoogleProvider(
             }
         }
 
+    private fun googleAssistantContent(
+        model: Model,
+        message: AssistantMessage,
+    ): JsonObject? {
+        val sameProviderAndModel = message.provider == model.provider && message.model == model.id
+        val parts =
+            buildJsonArray {
+                message.content.forEach { block ->
+                    when (block) {
+                        is TextContent -> {
+                            val signature =
+                                validGoogleHistorySignature(
+                                    sameProviderAndModel,
+                                    block.textSignature,
+                                )
+                            if (block.text.isBlank() && signature == null) {
+                                return@forEach
+                            }
+                            add(
+                                buildJsonObject {
+                                    put("text", sanitizeGoogleSurrogates(block.text))
+                                    signature?.let { put("thoughtSignature", it) }
+                                },
+                            )
+                        }
+
+                        is ThinkingContent -> {
+                            if (sameProviderAndModel) {
+                                val signature =
+                                    validGoogleHistorySignature(
+                                        true,
+                                        block.thinkingSignature,
+                                    )
+                                if (block.thinking.isBlank() && signature == null) {
+                                    return@forEach
+                                }
+                                add(
+                                    buildJsonObject {
+                                        put("text", sanitizeGoogleSurrogates(block.thinking))
+                                        put("thought", true)
+                                        signature?.let { put("thoughtSignature", it) }
+                                    },
+                                )
+                            } else if (block.thinking.isNotBlank()) {
+                                add(buildJsonObject { put("text", sanitizeGoogleSurrogates(block.thinking)) })
+                            }
+                        }
+
+                        is ToolCall ->
+                            add(
+                                buildJsonObject {
+                                    put(
+                                        "functionCall",
+                                        buildJsonObject {
+                                            put("id", block.id)
+                                            put("name", block.name)
+                                            put("args", block.arguments)
+                                        },
+                                    )
+                                    validGoogleHistorySignature(
+                                        sameProviderAndModel,
+                                        block.thoughtSignature,
+                                    )?.let { put("thoughtSignature", it) }
+                                },
+                            )
+
+                        else -> Unit
+                    }
+                }
+            }
+        if (parts.isEmpty()) {
+            return null
+        }
+        return buildJsonObject {
+            put("role", "model")
+            put("parts", parts)
+        }
+    }
+
     private fun googleUserParts(content: MessageContent): JsonArray =
         buildJsonArray {
             when (content) {
@@ -391,6 +434,45 @@ class GoogleProvider(
                     }
             }
         }
+}
+
+private fun validGoogleHistorySignature(
+    sameProviderAndModel: Boolean,
+    signature: String?,
+): String? {
+    if (!sameProviderAndModel || signature.isNullOrEmpty() || signature.length % 4 != 0) {
+        return null
+    }
+    return runCatching {
+        Base64.getDecoder().decode(signature)
+        signature
+    }.getOrNull()
+}
+
+private fun sanitizeGoogleSurrogates(value: String): String {
+    val output = StringBuilder(value.length)
+    var index = 0
+    while (index < value.length) {
+        val current = value[index]
+        when {
+            Character.isHighSurrogate(current) -> {
+                val next = value.getOrNull(index + 1)
+                if (next != null && Character.isLowSurrogate(next)) {
+                    output.append(current).append(next)
+                    index += 2
+                } else {
+                    index++
+                }
+            }
+
+            Character.isLowSurrogate(current) -> index++
+            else -> {
+                output.append(current)
+                index++
+            }
+        }
+    }
+    return output.toString()
 }
 
 internal fun buildGoogleRequestBody(

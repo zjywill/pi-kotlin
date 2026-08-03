@@ -17,6 +17,8 @@ rootProject.name = "pi-kotlin"
 include(
     "pi-ai",
     "pi-agent-core",
+    "pi-protocol",
+    "pi-client",
     "pi-tui",
     "pi-storage-sqlite",
     "pi-coding-agent",

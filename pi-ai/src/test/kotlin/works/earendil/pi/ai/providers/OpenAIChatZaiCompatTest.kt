@@ -13,7 +13,7 @@ class OpenAIChatZaiCompatTest {
     @Test
     fun `generated ZAI models send max tokens`() {
         listOf("zai", "zai-coding-cn").forEach { provider ->
-            listOf("glm-5.1", "glm-5.2").forEach { modelId ->
+            listOf("glm-5-turbo", "glm-5.2").forEach { modelId ->
                 val model = builtInModels(provider).single { it.id == modelId }
                 assertEquals(
                     "max_tokens",

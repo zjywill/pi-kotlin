@@ -12,6 +12,8 @@ class KeybindingsTest {
         assertTrue(keybindings.matches("\n", "tui.input.newLine"))
         assertEquals(listOf("enter"), keybindings.getKeys("tui.select.confirm"))
         assertEquals(listOf("up"), keybindings.getKeys("tui.editor.cursorUp"))
+        assertEquals(listOf("pageUp"), keybindings.getKeys("tui.altScreen.pageUp"))
+        assertEquals(listOf("ctrl+shift+down"), keybindings.getKeys("tui.altScreen.nextPrompt"))
     }
 
     @Test

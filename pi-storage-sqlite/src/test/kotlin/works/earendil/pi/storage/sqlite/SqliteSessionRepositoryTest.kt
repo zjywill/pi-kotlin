@@ -10,7 +10,10 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import works.earendil.pi.agent.session.SessionErrorCode
 import works.earendil.pi.agent.session.SessionException
+import works.earendil.pi.agent.session.SessionBranchOrder
+import works.earendil.pi.agent.session.SessionBranchQuery
 import works.earendil.pi.agent.session.SessionForkOptions
+import works.earendil.pi.agent.session.SessionSearchOptions
 import works.earendil.pi.ai.AssistantMessage
 import works.earendil.pi.ai.Cost
 import works.earendil.pi.ai.StopReason
@@ -57,7 +60,7 @@ class SqliteSessionRepositoryTest {
                             }
                         }
 
-                assertEquals(listOf("001_initial.sql"), migrationIds)
+                assertEquals(listOf("001_initial.sql", "002_branch_tips.sql"), migrationIds)
                 assertTrue(
                     setOf(
                         "migrations",
@@ -65,6 +68,7 @@ class SqliteSessionRepositoryTest {
                         "session_entries",
                         "session_sequences",
                         "branch_entries",
+                        "branch_tips",
                         "session_materialized",
                         "entry_materialized",
                     ).all(tables::containsKey),
@@ -73,6 +77,7 @@ class SqliteSessionRepositoryTest {
                     "sessions",
                     "session_sequences",
                     "branch_entries",
+                    "branch_tips",
                     "session_materialized",
                     "entry_materialized",
                 ).forEach { table ->
@@ -152,7 +157,7 @@ class SqliteSessionRepositoryTest {
                         }
 
                 assertEquals(branchId, sessionRow)
-                assertEquals(3, branchCount)
+                assertEquals(2, branchCount)
                 assertEquals("Review Session", materialized["name"]?.jsonPrimitive?.content)
                 assertEquals(3, materialized["messageCount"]?.jsonPrimitive?.content?.toInt())
                 assertEquals("anthropic", materialized["currentModel"]?.jsonObject
@@ -186,10 +191,36 @@ class SqliteSessionRepositoryTest {
             source.appendMessage(UserMessage("three", 3))
             val sourceMetadata = source.getMetadata()
 
-            assertEquals(2, source.getEntries(works.earendil.pi.agent.session.SessionEntryCursorOptions(limit = 2)).size)
+            assertEquals(
+                listOf("one", "two"),
+                source
+                    .getEntries(works.earendil.pi.agent.session.SessionEntryCursorOptions(limit = 2))
+                    .filterIsInstance<works.earendil.pi.agent.session.MessageEntry>()
+                    .map { messageText(it.message) },
+            )
+            assertEquals(
+                listOf("three"),
+                source
+                    .getEntries(
+                        works.earendil.pi.agent.session.SessionEntryCursorOptions(
+                            afterEntrySeq = 2,
+                            limit = 2,
+                        ),
+                    ).filterIsInstance<works.earendil.pi.agent.session.MessageEntry>()
+                    .map { messageText(it.message) },
+            )
             assertEquals(
                 works.earendil.pi.agent.session.SessionStats(3, 3, 14, 19, 0.5),
                 source.getSessionStats(),
+            )
+            val search = createSqliteSessionSearch(database)
+            assertEquals(
+                listOf("source"),
+                search.search(SessionSearchOptions("three", cwd = root.toString())).map { it.metadata.id },
+            )
+            assertEquals(
+                emptyList(),
+                search.search(SessionSearchOptions("three", cwd = root.resolve("other").toString())),
             )
             source.close()
 
@@ -213,6 +244,73 @@ class SqliteSessionRepositoryTest {
                     repository.open(forkMetadata)
                 }
             assertEquals(SessionErrorCode.NOT_FOUND, error.code)
+        }
+
+    @Test
+    fun `bounded branch queries rebuild damaged derived caches`() =
+        runTest {
+            val root = Files.createTempDirectory("pi-kotlin-sqlite-branch-query")
+            val database = root.resolve("sessions.sqlite")
+            val repository = SqliteSessionRepository(database)
+            val session = repository.create(SqliteSessionCreateOptions(root, id = "branch-query"))
+            val rootId = session.appendMessage(UserMessage("root", 1))
+            val assistantId = session.appendMessage(assistant("assistant", 2))
+            session.appendCustomEntry("marker")
+            val leafId = session.appendMessage(UserMessage("leaf", 3))
+
+            assertEquals(
+                listOf(leafId, assistantId),
+                session
+                    .findEntriesOnBranch(
+                        SessionBranchQuery(
+                            stopAtId = assistantId,
+                            type = "message",
+                        ),
+                    ).map { it.id },
+            )
+            assertEquals(
+                listOf(rootId, assistantId),
+                session
+                    .findEntriesOnBranch(
+                        SessionBranchQuery(
+                            stopAtId = assistantId,
+                            type = "message",
+                            order = SessionBranchOrder.OLDEST_FIRST,
+                        ),
+                    ).map { it.id },
+            )
+
+            DriverManager.getConnection("jdbc:sqlite:$database").use { connection ->
+                connection.prepareStatement(
+                    "DELETE FROM branch_entries WHERE session_id = ? AND entry_id = ?",
+                ).use { statement ->
+                    statement.setString(1, "branch-query")
+                    statement.setString(2, leafId)
+                    statement.executeUpdate()
+                }
+            }
+
+            assertEquals(
+                listOf(leafId),
+                session
+                    .findEntriesOnBranch(SessionBranchQuery(limit = 1))
+                    .map { it.id },
+            )
+            DriverManager.getConnection("jdbc:sqlite:$database").use { connection ->
+                val repaired =
+                    connection.prepareStatement(
+                        "SELECT COUNT(*) AS count FROM branch_entries WHERE session_id = ? AND entry_id = ?",
+                    ).use { statement ->
+                        statement.setString(1, "branch-query")
+                        statement.setString(2, leafId)
+                        statement.executeQuery().use { rows ->
+                            assertTrue(rows.next())
+                            rows.getInt("count")
+                        }
+                    }
+                assertEquals(1, repaired)
+            }
+            session.close()
         }
 
     private fun assistant(

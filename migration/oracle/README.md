@@ -40,6 +40,7 @@ Run the available comparisons from the Kotlin repository:
 ./migration/oracle/compare-package-resources.sh
 ./migration/oracle/compare-provider-payloads.sh
 ./migration/oracle/compare-provider-stream-events.sh
+./migration/oracle/compare-protocol-runtime.sh
 ./migration/oracle/compare-radius.sh
 ./migration/oracle/compare-resource-loading.sh
 ./migration/oracle/compare-rpc-runtime.sh
@@ -216,6 +217,16 @@ OpenAI Codex Responses over SSE and WebSocket.
 OpenAI Chat payload cases additionally compare Qwen Token Plan
 `enable_thinking`, supported `reasoning_effort` mappings, and unsupported-model
 omission.
+
+The protocol runtime comparison covers CBOR encoding and decoding for nulls,
+booleans, safe integers, floating-point edge cases, UTF-8 text, byte strings,
+arrays and objects; exact framed client/server bytes; byte-at-a-time decoding;
+protocol-version support; cyclic values; trailing CBOR data; strict message
+schemas; and frame-size limits.
+
+The terminal image runtime comparison covers cell sizing, fallback text,
+Kitty transmission, clipping, placement-only redraws and deletion, plus iTerm2
+inline encoding.
 Vertex independently compares SDK
 parameters, public stream events, the collection-scoped request URL, and
 `x-goog-api-key`; Kotlin unit fixtures additionally cover ADC bearer tokens and

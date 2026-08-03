@@ -26,7 +26,7 @@ try {
 	writeFileSync(stubPath, "export function readStoredCredential() { return undefined; }\n");
 	const esbuild = await import(pathToFileURL(resolve(sourceRoot, "node_modules/esbuild/lib/main.js")).href);
 	await esbuild.build({
-		entryPoints: [resolve(sourceRoot, "packages/server/src/supervisor.ts")],
+		entryPoints: [resolve(sourceRoot, "packages/server/src/legacy/supervisor.ts")],
 		outfile: bundlePath,
 		bundle: true,
 		format: "esm",

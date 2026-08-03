@@ -49,6 +49,7 @@ import works.earendil.pi.tui.AutocompleteProvider
 import works.earendil.pi.tui.CombinedAutocompleteProvider
 import works.earendil.pi.tui.SlashCommand
 import works.earendil.pi.tui.fuzzyFilter
+import works.earendil.pi.tui.renderTerminalImageLines
 
 data class InteractiveShortcutBinding(
     val id: String,
@@ -101,7 +102,7 @@ class InteractiveRuntime(
     private val models: Models,
     private val cwd: Path = Path.of("").toAbsolutePath().normalize(),
     private val agentDir: Path = defaultAgentDirectory(),
-    private val consoleFactory: () -> InteractiveConsole = { FullScreenConsole() },
+    private val consoleFactory: (() -> InteractiveConsole)? = null,
     private val packageUpdateChecker: (Path, Path, Boolean) -> List<String> = ::checkPackageUpdates,
 ) {
     private val extensionSurfaceLock = Any()
@@ -126,7 +127,7 @@ class InteractiveRuntime(
         val resumedPath =
             if (args.resume) {
                 try {
-                    consoleFactory().use { console -> selectResumeSession(console, sessionDirectory) }
+                    createConsole(args).use { console -> selectResumeSession(console, sessionDirectory) }
                 } catch (error: IllegalStateException) {
                     System.err.println("Error: ${error.message}")
                     return 1
@@ -150,7 +151,7 @@ class InteractiveRuntime(
                         return 1
                     }
             }
-        val console = consoleFactory()
+        val console = createConsole(args)
         val runtime =
             try {
                 RpcRuntime(
@@ -221,15 +222,69 @@ class InteractiveRuntime(
             configureFullScreenConsole(console, runtime)
             val settled = AtomicReference<CompletableDeferred<Unit>?>(null)
             val streamedText = AtomicBoolean(false)
+            val streamedMarkdown = AtomicReference("")
             val unsubscribe =
                 runtime.subscribe { event ->
                     when (event.string("type")) {
                         "message_update" -> {
                             val assistantEvent = event["assistantMessageEvent"] as? JsonObject
-                            if (assistantEvent?.string("type") == "text_delta") {
-                                assistantEvent.string("delta")?.let { delta ->
-                                    console.print(themeForeground(runtime, console, "text", delta))
-                                    streamedText.set(true)
+                            when (assistantEvent?.string("type")) {
+                                "text_start" -> {
+                                    if (runtime.extensionMarkdownTransformerCount() > 0) {
+                                        streamedMarkdown.set("")
+                                        (console as? FullScreenConsoleControl)?.setStreamingText("")
+                                    }
+                                }
+
+                                "text_delta" -> {
+                                    assistantEvent.string("delta")?.let { delta ->
+                                        if (runtime.extensionMarkdownTransformerCount() == 0) {
+                                            console.print(themeForeground(runtime, console, "text", delta))
+                                        } else {
+                                            val source =
+                                                streamedMarkdown.updateAndGet { current ->
+                                                    current + delta
+                                                }
+                                            val transformed =
+                                                runCatching {
+                                                    runtime.transformMarkdown(
+                                                        markdown = source,
+                                                        messageType = "assistant",
+                                                        isStreaming = true,
+                                                        availableWidth = (console.width() - 2).coerceAtLeast(1),
+                                                    )
+                                                }.getOrDefault(source)
+                                            (console as? FullScreenConsoleControl)?.setStreamingText(
+                                                themeForeground(runtime, console, "text", transformed),
+                                            )
+                                        }
+                                        streamedText.set(true)
+                                    }
+                                }
+
+                                "text_end" -> {
+                                    if (runtime.extensionMarkdownTransformerCount() > 0) {
+                                        val source = assistantEvent.string("content") ?: streamedMarkdown.get()
+                                        val transformed =
+                                            runCatching {
+                                                runtime.transformMarkdown(
+                                                    markdown = source,
+                                                    messageType = "assistant",
+                                                    isStreaming = false,
+                                                    availableWidth = (console.width() - 2).coerceAtLeast(1),
+                                                )
+                                            }.getOrDefault(source)
+                                        val styled = themeForeground(runtime, console, "text", transformed)
+                                        val fullScreen = console as? FullScreenConsoleControl
+                                        if (fullScreen == null) {
+                                            console.println(styled)
+                                        } else {
+                                            fullScreen.setStreamingText(styled)
+                                            fullScreen.commitStreamingText()
+                                        }
+                                        streamedMarkdown.set("")
+                                        streamedText.set(false)
+                                    }
                                 }
                             }
                         }
@@ -247,6 +302,7 @@ class InteractiveRuntime(
                         }
 
                         "tool_execution_end" -> {
+                            renderToolResultImages(event, console)
                             if (event["isError"]?.jsonPrimitive?.booleanOrNull == true) {
                                 console.error("${event.string("toolName").orEmpty()} failed")
                             }
@@ -914,6 +970,21 @@ class InteractiveRuntime(
         settled: AtomicReference<CompletableDeferred<Unit>?>,
         streamedText: AtomicBoolean,
     ): Boolean {
+        if (runtime.extensionMarkdownTransformerCount() > 0) {
+            val source = works.earendil.pi.ai.contentText(message.content)
+            if (source.isNotEmpty()) {
+                val transformed =
+                    runCatching {
+                        runtime.transformMarkdown(
+                            markdown = source,
+                            messageType = "user",
+                            isStreaming = false,
+                            availableWidth = (console.width() - 2).coerceAtLeast(1),
+                        )
+                    }.getOrDefault(source)
+                console.println(transformed)
+            }
+        }
         val completion = CompletableDeferred<Unit>()
         settled.set(completion)
         streamedText.set(false)
@@ -932,6 +1003,37 @@ class InteractiveRuntime(
             return false
         }
         completion.await()
+        if (runtime.extensionMarkdownTransformerCount() > 0) {
+            val pending = streamedText.getAndSet(false)
+            if (pending) {
+                val source =
+                    runtime.handle(buildJsonObject { put("type", "get_last_assistant_text") })
+                        ?.get("data")
+                        ?.jsonObject
+                        ?.string("text")
+                        .orEmpty()
+                if (source.isNotEmpty()) {
+                    val transformed =
+                        runCatching {
+                            runtime.transformMarkdown(
+                                markdown = source,
+                                messageType = "assistant",
+                                isStreaming = false,
+                                availableWidth = (console.width() - 2).coerceAtLeast(1),
+                            )
+                        }.getOrDefault(source)
+                    val styled = themeForeground(runtime, console, "text", transformed)
+                    val fullScreen = console as? FullScreenConsoleControl
+                    if (fullScreen == null) {
+                        console.println(styled)
+                    } else {
+                        fullScreen.setStreamingText(styled)
+                        fullScreen.commitStreamingText()
+                    }
+                }
+            }
+            return true
+        }
         if (streamedText.getAndSet(false)) {
             console.println()
         } else {
@@ -1244,7 +1346,18 @@ class InteractiveRuntime(
     ) {
         val fullScreen = console as? FullScreenConsoleControl ?: return
         fullScreen.setTitle(defaultInteractiveHeaderText)
+        fullScreen.setScrollbarStyle { text -> runtime.currentTheme().bg("scrollbarThumb", text) }
         fullScreen.setAutocompleteProvider(createAutocompleteProvider(runtime))
+    }
+
+    private fun createConsole(args: Args): InteractiveConsole {
+        consoleFactory?.let { return it() }
+        val settings = SettingsStore(cwd, agentDir, projectTrusted = false)
+        return FullScreenConsole(
+            uiMode = args.uiMode ?: settings.mergedUiMode(),
+            fullscreenScrollbar = settings.mergedFullscreenScrollbar(),
+            autocompleteMaxVisible = settings.mergedAutocompleteMaxVisible(),
+        )
     }
 
     private suspend fun createAutocompleteProvider(runtime: RpcRuntime): AutocompleteProvider {
@@ -1855,6 +1968,28 @@ private fun formatShortcutKey(key: String): String =
                 else -> part.replaceFirstChar(Char::uppercase)
             }
         }
+
+private fun renderToolResultImages(
+    event: JsonObject,
+    console: InteractiveConsole,
+) {
+    val content =
+        (event["result"] as? JsonObject)
+            ?.get("content")
+            ?.let { it as? kotlinx.serialization.json.JsonArray }
+            .orEmpty()
+    content.forEach { value ->
+        val block = value as? JsonObject ?: return@forEach
+        if (block.string("type") != "image") return@forEach
+        val data = block.string("data") ?: return@forEach
+        val mimeType = block.string("mimeType") ?: return@forEach
+        renderTerminalImageLines(
+            base64Data = data,
+            mimeType = mimeType,
+            width = console.width(),
+        ).forEach(console::println)
+    }
+}
 
 private fun JsonObject.string(name: String): String? = (this[name] as? JsonPrimitive)?.contentOrNull
 

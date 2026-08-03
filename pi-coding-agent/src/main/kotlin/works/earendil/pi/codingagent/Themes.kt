@@ -163,6 +163,12 @@ internal class Theme internal constructor(
                     ?.jsonObject
                     ?.mapValues { (_, ansi) -> ansi.jsonPrimitive.content }
                     .orEmpty()
+                    .toMutableMap()
+                    .also { colors ->
+                        colors["selectedBg"]?.let { selected ->
+                            colors.putIfAbsent("scrollbarThumb", selected)
+                        }
+                    }
             require(FOREGROUND_COLOR_TOKENS.all(foreground::containsKey)) {
                 "In-memory theme is missing foreground color tokens"
             }
@@ -572,6 +578,7 @@ private fun createTheme(
             parseColorValue(color, "/colors/$key")
         }.toMutableMap()
     parsed.putIfAbsent("thinkingMax", parsed.getValue("thinkingXhigh"))
+    parsed.putIfAbsent("scrollbarThumb", parsed.getValue("selectedBg"))
     val resolved =
         parsed.mapValues { (_, color) ->
             resolveColor(color, vars)
@@ -849,6 +856,7 @@ private val TOP_LEVEL_KEYS = setOf("\$schema", "name", "vars", "colors", "export
 private val BACKGROUND_COLOR_TOKENS =
     setOf(
         "selectedBg",
+        "scrollbarThumb",
         "userMessageBg",
         "customMessageBg",
         "toolPendingBg",
@@ -905,7 +913,7 @@ private val FOREGROUND_COLOR_TOKENS =
         "bashMode",
     )
 private val ALL_COLOR_TOKENS = FOREGROUND_COLOR_TOKENS + BACKGROUND_COLOR_TOKENS
-private val REQUIRED_COLOR_TOKENS = ALL_COLOR_TOKENS - "thinkingMax"
+private val REQUIRED_COLOR_TOKENS = ALL_COLOR_TOKENS - setOf("thinkingMax", "scrollbarThumb")
 private val EXPORT_COLOR_TOKENS = setOf("pageBg", "cardBg", "infoBg")
 private val HEX_COLOR = Regex("^#([0-9a-fA-F]{6})$")
 private val ANSI_RGB = Regex("^\\u001B\\[(?:38|48);2;(\\d+);(\\d+);(\\d+)m$")

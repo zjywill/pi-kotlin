@@ -19,6 +19,7 @@ application {
 dependencies {
     api(project(":pi-agent-core"))
     api(project(":pi-ai"))
+    api(project(":pi-client"))
     api(project(":pi-tui"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")

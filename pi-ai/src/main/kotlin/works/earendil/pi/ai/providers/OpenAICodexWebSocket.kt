@@ -198,7 +198,7 @@ internal class OpenAICodexWebSocketTransport(
     private val maxAgeMs: Long = OPENAI_CODEX_WEBSOCKET_MAX_AGE_MS,
 ) {
     private val lock = Any()
-    private val sessions = mutableMapOf<String, CachedConnection>()
+    private val sessions = mutableMapOf<CacheKey, CachedConnection>()
     private val sseFallbackSessions = mutableSetOf<String>()
 
     suspend fun stream(
@@ -207,6 +207,7 @@ internal class OpenAICodexWebSocketTransport(
         headers: Map<String, String>,
         transport: Transport,
         cacheSessionId: String?,
+        accountId: String = "",
         idleTimeoutMs: Long?,
         connectTimeoutMs: Long?,
         onEvent: (JsonObject) -> Unit,
@@ -230,6 +231,7 @@ internal class OpenAICodexWebSocketTransport(
                     useCachedContext =
                         transport == Transport.AUTO ||
                             transport == Transport.WEBSOCKET_CACHED,
+                    accountId = accountId,
                     idleTimeoutMs = idleTimeoutMs,
                     connectTimeoutMs =
                         connectTimeoutMs
@@ -276,7 +278,9 @@ internal class OpenAICodexWebSocketTransport(
         val entries =
             synchronized(lock) {
                 if (sessionId != null) {
-                    listOfNotNull(sessions.remove(sessionId))
+                    val matching = sessions.filterKeys { it.sessionId == sessionId }.values.toList()
+                    sessions.keys.removeAll { it.sessionId == sessionId }
+                    matching
                 } else {
                     sessions.values.toList().also { sessions.clear() }
                 }
@@ -296,6 +300,7 @@ internal class OpenAICodexWebSocketTransport(
         headers: Map<String, String>,
         cacheSessionId: String?,
         useCachedContext: Boolean,
+        accountId: String,
         idleTimeoutMs: Long?,
         connectTimeoutMs: Long,
         onEvent: (JsonObject) -> Unit,
@@ -305,6 +310,7 @@ internal class OpenAICodexWebSocketTransport(
                 url = url,
                 headers = headers,
                 sessionId = cacheSessionId,
+                accountId = accountId,
                 connectTimeoutMs = connectTimeoutMs,
             )
         var keepConnection = true
@@ -371,6 +377,7 @@ internal class OpenAICodexWebSocketTransport(
         url: String,
         headers: Map<String, String>,
         sessionId: String?,
+        accountId: String,
         connectTimeoutMs: Long,
     ): ConnectionLease {
         if (sessionId == null) {
@@ -382,24 +389,26 @@ internal class OpenAICodexWebSocketTransport(
                         connectTimeoutMs,
                     ),
                 sessionId = null,
+                cacheKey = null,
                 entry = null,
             )
         }
+        val cacheKey = CacheKey(sessionId, accountId)
 
         val plan =
             synchronized(lock) {
-                val cached = sessions[sessionId]
+                val cached = sessions[cacheKey]
                 when {
                     cached == null -> AcquirePlan.Connect(cache = true)
                     cached.busy -> AcquirePlan.Connect(cache = false)
                     nowMillis() - cached.createdAt >= maxAgeMs -> {
-                        sessions.remove(sessionId)
+                        sessions.remove(cacheKey)
                         cached.idleJob?.cancel()
                         AcquirePlan.Connect(cache = true, stale = cached.connection)
                     }
 
                     !cached.connection.isOpen -> {
-                        sessions.remove(sessionId)
+                        sessions.remove(cacheKey)
                         cached.idleJob?.cancel()
                         AcquirePlan.Connect(cache = true, stale = cached.connection)
                     }
@@ -413,7 +422,7 @@ internal class OpenAICodexWebSocketTransport(
                 }
             }
         if (plan is AcquirePlan.Reuse) {
-            return ConnectionLease(plan.entry.connection, sessionId, plan.entry)
+            return ConnectionLease(plan.entry.connection, sessionId, cacheKey, plan.entry)
         }
         plan as AcquirePlan.Connect
         plan.stale?.close(reason = "connection_age_limit")
@@ -424,7 +433,7 @@ internal class OpenAICodexWebSocketTransport(
                 connectTimeoutMs,
             )
         if (!plan.cache) {
-            return ConnectionLease(connection, null, null)
+            return ConnectionLease(connection, null, null, null)
         }
         val entry =
             CachedConnection(
@@ -434,17 +443,17 @@ internal class OpenAICodexWebSocketTransport(
             )
         val installed =
             synchronized(lock) {
-                if (sessions[sessionId] == null) {
-                    sessions[sessionId] = entry
+                if (sessions[cacheKey] == null) {
+                    sessions[cacheKey] = entry
                     true
                 } else {
                     false
                 }
             }
         return if (installed) {
-            ConnectionLease(connection, sessionId, entry)
+            ConnectionLease(connection, sessionId, cacheKey, entry)
         } else {
-            ConnectionLease(connection, null, null)
+            ConnectionLease(connection, null, null, null)
         }
     }
 
@@ -454,15 +463,16 @@ internal class OpenAICodexWebSocketTransport(
     ) {
         val entry = lease.entry
         val sessionId = lease.sessionId
-        if (entry == null || sessionId == null) {
+        val cacheKey = lease.cacheKey
+        if (entry == null || sessionId == null || cacheKey == null) {
             lease.connection.close()
             return
         }
         var close = false
         synchronized(lock) {
-            if (!keep || !entry.connection.isOpen || sessions[sessionId] !== entry) {
-                if (sessions[sessionId] === entry) {
-                    sessions.remove(sessionId)
+            if (!keep || !entry.connection.isOpen || sessions[cacheKey] !== entry) {
+                if (sessions[cacheKey] === entry) {
+                    sessions.remove(cacheKey)
                 }
                 entry.idleJob?.cancel()
                 close = true
@@ -474,8 +484,8 @@ internal class OpenAICodexWebSocketTransport(
                         delay(idleTtlMs)
                         val expired =
                             synchronized(lock) {
-                                if (!entry.busy && sessions[sessionId] === entry) {
-                                    sessions.remove(sessionId)
+                                if (!entry.busy && sessions[cacheKey] === entry) {
+                                    sessions.remove(cacheKey)
                                     true
                                 } else {
                                     false
@@ -562,7 +572,13 @@ internal class OpenAICodexWebSocketTransport(
     private data class ConnectionLease(
         val connection: OpenAICodexWebSocketConnection,
         val sessionId: String?,
+        val cacheKey: CacheKey?,
         val entry: CachedConnection?,
+    )
+
+    private data class CacheKey(
+        val sessionId: String,
+        val accountId: String,
     )
 
     private sealed interface AcquirePlan {

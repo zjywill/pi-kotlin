@@ -59,6 +59,23 @@ class ArgsTest {
     }
 
     @Test
+    fun `parses UI modes and reports invalid values`() {
+        assertEquals(UiMode.REGULAR, parseArgs(listOf("--ui-mode", "regular")).uiMode)
+        assertEquals(UiMode.FULLSCREEN, parseArgs(listOf("--ui-mode", "fullscreen")).uiMode)
+        assertEquals(UiMode.FULLSCREEN, parseArgs(listOf("--alt")).uiMode)
+
+        val invalid = parseArgs(listOf("--ui-mode", "other"))
+        assertEquals(
+            "Invalid UI mode \"other\". Valid values: regular, fullscreen",
+            invalid.diagnostics.single().message,
+        )
+
+        val missing = parseArgs(listOf("--ui-mode", "--offline"))
+        assertEquals("--ui-mode requires regular or fullscreen", missing.diagnostics.single().message)
+        assertTrue(missing.offline)
+    }
+
+    @Test
     fun `model references preserve slash ids and parse thinking suffixes`() {
         assertEquals(
             ModelReference("openrouter", "moonshotai/kimi-k2.6", AgentThinkingLevel.HIGH),

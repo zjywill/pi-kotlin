@@ -548,6 +548,47 @@ class OpenAICodexWebSocketTest {
             agedTransport.closeSessions()
         }
 
+    @Test
+    fun `scopes cached websocket connections to the authenticated account`() =
+        runTest {
+            val first = ScriptedConnection(listOf(listOf(completed("account-a"))))
+            val second = ScriptedConnection(listOf(listOf(completed("account-b"))))
+            val connector = RecordingConnector(first, second)
+            val transport = OpenAICodexWebSocketTransport(connector, scope = backgroundScope)
+
+            transport.stream(
+                url = "ws://fixture",
+                body = requestBody("first"),
+                headers = emptyMap(),
+                transport = Transport.WEBSOCKET_CACHED,
+                cacheSessionId = "shared-session",
+                accountId = "account-a",
+                idleTimeoutMs = null,
+                connectTimeoutMs = 1_000,
+                onEvent = {},
+                fallbackToSse = { error("unexpected fallback") },
+            )
+            transport.stream(
+                url = "ws://fixture",
+                body = requestBody("second"),
+                headers = emptyMap(),
+                transport = Transport.WEBSOCKET_CACHED,
+                cacheSessionId = "shared-session",
+                accountId = "account-b",
+                idleTimeoutMs = null,
+                connectTimeoutMs = 1_000,
+                onEvent = {},
+                fallbackToSse = { error("unexpected fallback") },
+            )
+
+            assertEquals(2, connector.attempts)
+            assertFalse(first.closed)
+            assertFalse(second.closed)
+            transport.closeSessions("shared-session")
+            assertTrue(first.closed)
+            assertTrue(second.closed)
+        }
+
     private fun provider(
         model: Model,
         connector: OpenAICodexWebSocketConnector,

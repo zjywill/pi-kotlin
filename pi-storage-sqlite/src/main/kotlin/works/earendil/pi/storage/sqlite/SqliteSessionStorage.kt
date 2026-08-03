@@ -1,18 +1,24 @@
 package works.earendil.pi.storage.sqlite
 
 import java.sql.Connection
-import java.sql.ResultSet
+import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import works.earendil.pi.agent.session.BranchSummaryEntry
 import works.earendil.pi.agent.session.CompactionEntry
+import works.earendil.pi.agent.session.CustomEntry
 import works.earendil.pi.agent.session.LabelEntry
 import works.earendil.pi.agent.session.LeafEntry
 import works.earendil.pi.agent.session.MessageEntry
 import works.earendil.pi.agent.session.ModelChangeEntry
+import works.earendil.pi.agent.session.SessionBranchOrder
+import works.earendil.pi.agent.session.SessionBranchQuery
 import works.earendil.pi.agent.session.SessionEntryCursorOptions
 import works.earendil.pi.agent.session.SessionErrorCode
 import works.earendil.pi.agent.session.SessionException
+import works.earendil.pi.agent.session.SessionHead
 import works.earendil.pi.agent.session.SessionInfoEntry
 import works.earendil.pi.agent.session.SessionStats
 import works.earendil.pi.agent.session.SessionStorage
@@ -21,63 +27,157 @@ import works.earendil.pi.agent.session.ThinkingLevelChangeEntry
 import works.earendil.pi.agent.session.calculateSessionStats
 import works.earendil.pi.agent.session.entryType
 import works.earendil.pi.agent.session.leafIdAfterEntry
-import works.earendil.pi.ai.uuidv7
 
 class SqliteSessionStorage private constructor(
     private val connection: Connection,
-    private val metadata: SqliteSessionMetadata,
+    override val metadata: SqliteSessionMetadata,
     entries: List<SessionTreeEntry>,
     private var currentLeafId: String?,
-    private var activeBranchId: String?,
 ) : SessionStorage<SqliteSessionMetadata> {
-    private var byId = entries.associateByTo(linkedMapOf(), SessionTreeEntry::id)
+    private val mutexKey = metadata.path to metadata.id
+    private val operationMutex = operationMutexes.computeIfAbsent(mutexKey) { Mutex() }
+    private val byId = entries.associateByTo(linkedMapOf(), SessionTreeEntry::id)
     private var labelsById = buildLabels(entries)
 
-    override suspend fun getMetadata(): SqliteSessionMetadata = metadata
-
-    override suspend fun getLeafId(): String? = currentLeafId
-
-    override suspend fun setLeafId(leafId: String?) {
-        if (leafId != null && getEntry(leafId) == null) {
-            throw SessionException(SessionErrorCode.NOT_FOUND, "Entry $leafId not found")
-        }
-        appendEntry(
-            LeafEntry(
-                id = createEntryId(),
-                parentId = currentLeafId,
-                timestamp = works.earendil.pi.agent.session.nowTimestamp(),
-                targetId = leafId,
-            ),
-        )
-    }
-
-    override suspend fun createEntryId(): String {
-        repeat(100) {
-            val candidate = uuidv7().takeLast(8)
-            val exists =
-                connection
-                    .prepareStatement(
-                        "SELECT 1 FROM session_entries WHERE session_id = ? AND id = ? LIMIT 1",
-                    ).use { statement ->
-                        statement.setString(1, metadata.id)
-                        statement.setString(2, candidate)
-                        statement.executeQuery().use(ResultSet::next)
-                    }
-            if (!exists) {
-                return candidate
+    override suspend fun readHead(): SessionHead =
+        operationMutex.withLock {
+            if (currentLeafId != null && getEntryLocked(requireNotNull(currentLeafId)) == null) {
+                throw SessionException(
+                    SessionErrorCode.INVALID_SESSION,
+                    "Entry $currentLeafId not found",
+                )
             }
+            SessionHead(currentLeafId)
         }
-        return uuidv7()
-    }
 
     override suspend fun appendEntry(entry: SessionTreeEntry) {
-        val previousById = LinkedHashMap(byId)
-        val previousLabels = HashMap(labelsById)
-        val previousLeaf = currentLeafId
-        val previousBranch = activeBranchId
+        operationMutex.withLock {
+            appendEntryLocked(entry)
+        }
+    }
+
+    override suspend fun readEntry(id: String): SessionTreeEntry? =
+        operationMutex.withLock {
+            getEntryLocked(id)
+        }
+
+    override suspend fun getLabel(id: String): String? =
+        operationMutex.withLock {
+            labelsById[id]
+        }
+
+    override suspend fun getName(): String? =
+        operationMutex.withLock {
+            connection
+                .loadAllEntries()
+                .filterIsInstance<SessionInfoEntry>()
+                .lastOrNull()
+                ?.name
+                ?.trim()
+                ?.takeIf(String::isNotEmpty)
+        }
+
+    override suspend fun getStats(): SessionStats =
+        operationMutex.withLock {
+            calculateSessionStats(connection.loadAllEntries())
+        }
+
+    override suspend fun readPathToRootOrCompaction(leafId: String?): List<SessionTreeEntry> =
+        operationMutex.withLock {
+            if (leafId == null) {
+                emptyList()
+            } else {
+                trimPathToRootOrCompaction(loadFullPath(leafId))
+            }
+        }
+
+    override suspend fun readEntries(options: SessionEntryCursorOptions?): List<SessionTreeEntry> =
+        operationMutex.withLock {
+            val cursor = options?.afterEntrySeq ?: 0
+            val limit = options?.limit
+            val sql =
+                if (limit == null) {
+                    """
+                    SELECT id, entry_seq, parent_id, type, timestamp, payload
+                    FROM session_entries
+                    WHERE session_id = ? AND entry_seq > ?
+                    ORDER BY entry_seq
+                    """.trimIndent()
+                } else {
+                    """
+                    SELECT id, entry_seq, parent_id, type, timestamp, payload
+                    FROM session_entries
+                    WHERE session_id = ? AND entry_seq > ?
+                    ORDER BY entry_seq
+                    LIMIT ?
+                    """.trimIndent()
+                }
+            connection.prepareStatement(sql).use { statement ->
+                statement.setString(1, metadata.id)
+                statement.setInt(2, cursor)
+                if (limit != null) {
+                    statement.setInt(3, limit)
+                }
+                statement.executeQuery().use { rows ->
+                    buildList {
+                        while (rows.next()) {
+                            decodeEntry(rows.toEntryRow()).also { entry ->
+                                byId[entry.id] = entry
+                                add(entry)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+    override suspend fun findEntriesOnBranch(query: SessionBranchQuery): List<SessionTreeEntry> =
+        operationMutex.withLock {
+            val startId = query.start ?: return@withLock emptyList()
+            val path =
+                loadFullPath(startId).let { entries ->
+                    if (query.order == SessionBranchOrder.OLDEST_FIRST) {
+                        entries
+                    } else {
+                        entries.asReversed()
+                    }
+                }
+            val bounded =
+                buildList {
+                    path.forEach { entry ->
+                        add(entry)
+                        if (entry.id == query.stopAtId || entryType(entry) == query.stopAtType) {
+                            return@buildList
+                        }
+                    }
+                }
+            val filtered =
+                bounded.filter { entry ->
+                    (query.type == null || entryType(entry) == query.type) &&
+                        (
+                            query.customType == null ||
+                                (entry is CustomEntry && entry.customType == query.customType)
+                        )
+                }
+            query.limit?.let(filtered::take) ?: filtered
+        }
+
+    override suspend fun close() {
+        operationMutex.withLock {
+            connection.close()
+        }
+        operationMutexes.remove(mutexKey, operationMutex)
+    }
+
+    private fun appendEntryLocked(entry: SessionTreeEntry) {
+        val leafTargetId = (entry as? LeafEntry)?.targetId
+        if (leafTargetId != null && getEntryLocked(leafTargetId) == null) {
+            throw SessionException(SessionErrorCode.NOT_FOUND, "Entry $leafTargetId not found")
+        }
+        val nextLeafId = leafIdAfterEntry(entry)
+        val nextLabels = HashMap(labelsById).also { labels -> updateLabel(labels, entry) }
         try {
             connection.transaction {
-                val parentHadExistingChild = hasExistingChild(entry.parentId)
                 val nextSequence = nextSequence()
                 prepareStatement(
                     """
@@ -100,31 +200,23 @@ class SqliteSessionStorage private constructor(
                     statement.setString(2, metadata.id)
                     statement.executeUpdate()
                 }
-                byId[entry.id] = entry
-                currentLeafId = leafIdAfterEntry(entry)
-                updateLabel(entry)
                 prepareStatement("UPDATE sessions SET active_leaf_id = ? WHERE id = ?").use { statement ->
-                    statement.setString(1, currentLeafId)
+                    statement.setString(1, nextLeafId)
                     statement.setString(2, metadata.id)
                     statement.executeUpdate()
                 }
-                if (entry is LeafEntry) {
-                    activeBranchId = null
-                    materializeBranch(entry.targetId)
-                    appendToActiveBranch(entry.id)
-                } else {
-                    if (activeBranchId == null || parentHadExistingChild) {
-                        materializeBranch(entry.parentId)
-                    }
-                    appendToActiveBranch(entry.id)
-                }
+                appendEntryToBranchCache(
+                    sessionId = metadata.id,
+                    entryId = entry.id,
+                    entrySequence = nextSequence,
+                    parentId = entry.parentId,
+                )
                 writeMaterializedState()
             }
+            byId[entry.id] = entry
+            currentLeafId = nextLeafId
+            labelsById = nextLabels
         } catch (error: Exception) {
-            byId = previousById
-            labelsById = previousLabels
-            currentLeafId = previousLeaf
-            activeBranchId = previousBranch
             if (error is SessionException) {
                 throw error
             }
@@ -136,14 +228,111 @@ class SqliteSessionStorage private constructor(
         }
     }
 
-    override suspend fun getEntry(id: String): SessionTreeEntry? {
+    private fun getEntryLocked(id: String): SessionTreeEntry? {
         byId[id]?.let { return it }
+        return loadEntry(id)
+    }
+
+    private fun loadFullPath(leafId: String): List<SessionTreeEntry> {
+        var cached = connection.readCachedBranch(metadata.id, leafId)
+        if (cached != null) {
+            val entries = decodeRows(connection.readCachedBranchRows(metadata.id, cached))
+            if (isValidCachedPath(entries, leafId)) {
+                return entries
+            }
+        }
+        val canonical = readCanonicalPathToRoot(leafId)
+        try {
+            connection.transaction {
+                rebuildCachedBranch(metadata.id, leafId, cached?.branchId)
+            }
+        } catch (error: Exception) {
+            if (error is SessionException) {
+                throw error
+            }
+            throw SessionException(
+                SessionErrorCode.STORAGE,
+                "Failed to rebuild SQLite branch cache at entry $leafId",
+                error,
+            )
+        }
+        cached = connection.readCachedBranch(metadata.id, leafId)
+        if (cached == null) {
+            throw SessionException(
+                SessionErrorCode.INVALID_SESSION,
+                "Branch cache repair did not produce entry $leafId",
+            )
+        }
+        return canonical
+    }
+
+    private fun readCanonicalPathToRoot(leafId: String): List<SessionTreeEntry> {
+        val path = mutableListOf<SessionTreeEntry>()
+        val visited = mutableSetOf<String>()
+        var current =
+            getEntryLocked(leafId)
+                ?: throw SessionException(SessionErrorCode.NOT_FOUND, "Entry $leafId not found")
+        while (true) {
+            if (!visited.add(current.id)) {
+                throw SessionException(
+                    SessionErrorCode.INVALID_SESSION,
+                    "Cycle in parent chain at entry ${current.id}",
+                )
+            }
+            path += current
+            val parentId = current.parentId ?: break
+            current =
+                getEntryLocked(parentId)
+                    ?: throw SessionException(
+                        SessionErrorCode.INVALID_SESSION,
+                        "Entry $parentId not found",
+                    )
+        }
+        return path.asReversed()
+    }
+
+    private fun trimPathToRootOrCompaction(entries: List<SessionTreeEntry>): List<SessionTreeEntry> {
+        val path = mutableListOf<SessionTreeEntry>()
+        var stopAtEntryId: String? = null
+        for (index in entries.indices.reversed()) {
+            val entry = entries[index]
+            path += entry
+            if (stopAtEntryId != null && entry.id == stopAtEntryId) {
+                break
+            }
+            if (entry is CompactionEntry) {
+                if (entry.retainedTail != null) {
+                    break
+                }
+                stopAtEntryId = entry.firstKeptEntryId
+            }
+        }
+        return path.asReversed()
+    }
+
+    private fun isValidCachedPath(
+        entries: List<SessionTreeEntry>,
+        leafId: String,
+    ): Boolean {
+        if (entries.isEmpty() || entries.last().id != leafId || entries.first().parentId != null) {
+            return false
+        }
+        return entries
+            .zipWithNext()
+            .all { (parent, child) -> child.parentId == parent.id }
+    }
+
+    private fun decodeRows(rows: List<SessionEntryRow>): List<SessionTreeEntry> =
+        rows.map(::decodeEntry).onEach { entry -> byId[entry.id] = entry }
+
+    private fun loadEntry(id: String): SessionTreeEntry? {
         val row =
             connection
                 .prepareStatement(
                     """
                     SELECT id, entry_seq, parent_id, type, timestamp, payload
-                    FROM session_entries WHERE session_id = ? AND id = ?
+                    FROM session_entries
+                    WHERE session_id = ? AND id = ?
                     """.trimIndent(),
                 ).use { statement ->
                     statement.setString(1, metadata.id)
@@ -152,96 +341,7 @@ class SqliteSessionStorage private constructor(
                         if (rows.next()) rows.toEntryRow() else null
                     }
                 } ?: return null
-        return runCatching { decodeEntry(row) }.getOrNull()?.also { byId[it.id] = it }
-    }
-
-    override suspend fun findEntries(type: String): List<SessionTreeEntry> =
-        connection
-            .prepareStatement(
-                """
-                SELECT id, entry_seq, parent_id, type, timestamp, payload
-                FROM session_entries WHERE session_id = ? AND type = ? ORDER BY entry_seq
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setString(1, metadata.id)
-                statement.setString(2, type)
-                statement.executeQuery().use { rows ->
-                    buildList {
-                        while (rows.next()) {
-                            runCatching { decodeEntry(rows.toEntryRow()) }.getOrNull()?.let {
-                                byId[it.id] = it
-                                add(it)
-                            }
-                        }
-                    }
-                }
-            }
-
-    override suspend fun getLabel(id: String): String? = labelsById[id]
-
-    override suspend fun getSessionName(): String? =
-        getEntries()
-            .filterIsInstance<SessionInfoEntry>()
-            .lastOrNull()
-            ?.name
-            ?.trim()
-            ?.takeIf(String::isNotEmpty)
-
-    override suspend fun getSessionStats(): SessionStats = calculateSessionStats(getEntries())
-
-    override suspend fun getPathToRootOrCompaction(leafId: String?): List<SessionTreeEntry> {
-        if (leafId == null) {
-            return emptyList()
-        }
-        if (leafId == currentLeafId && activeBranchId != null) {
-            return loadMaterializedBranch(requireNotNull(activeBranchId))
-        }
-        return buildPath(leafId)
-    }
-
-    override suspend fun getEntries(options: SessionEntryCursorOptions?): List<SessionTreeEntry> {
-        val cursor = options?.afterEntrySeq
-        val limit = options?.limit
-        val sql =
-            if (limit == null) {
-                """
-                SELECT id, entry_seq, parent_id, type, timestamp, payload
-                FROM session_entries WHERE session_id = ? ORDER BY entry_seq
-                """.trimIndent()
-            } else {
-                """
-                SELECT id, entry_seq, parent_id, type, timestamp, payload
-                FROM session_entries
-                WHERE session_id = ? AND entry_seq <= COALESCE(?, entry_seq)
-                ORDER BY entry_seq DESC LIMIT ?
-                """.trimIndent()
-            }
-        val entries =
-            connection.prepareStatement(sql).use { statement ->
-                statement.setString(1, metadata.id)
-                if (limit != null) {
-                    if (cursor == null) {
-                        statement.setNull(2, java.sql.Types.INTEGER)
-                    } else {
-                        statement.setInt(2, cursor)
-                    }
-                    statement.setInt(3, limit)
-                }
-                statement.executeQuery().use { rows ->
-                    buildList {
-                        while (rows.next()) {
-                            runCatching { decodeEntry(rows.toEntryRow()) }.getOrNull()?.let(::add)
-                        }
-                    }
-                }
-            }
-        val ordered = if (limit == null) entries else entries.asReversed()
-        ordered.forEach { byId[it.id] = it }
-        return ordered
-    }
-
-    override suspend fun close() {
-        connection.close()
+        return decodeEntry(row).also { byId[it.id] = it }
     }
 
     private fun Connection.nextSequence(): Int =
@@ -258,152 +358,8 @@ class SqliteSessionStorage private constructor(
             }
         }
 
-    private fun Connection.hasExistingChild(parentId: String?): Boolean {
-        val sql =
-            if (parentId == null) {
-                "SELECT 1 FROM session_entries WHERE session_id = ? AND parent_id IS NULL LIMIT 1"
-            } else {
-                "SELECT 1 FROM session_entries WHERE session_id = ? AND parent_id = ? LIMIT 1"
-            }
-        return prepareStatement(sql).use { statement ->
-            statement.setString(1, metadata.id)
-            if (parentId != null) {
-                statement.setString(2, parentId)
-            }
-            statement.executeQuery().use(ResultSet::next)
-        }
-    }
-
-    private fun Connection.materializeBranch(leafId: String?) {
-        val branchId = uuidv7()
-        buildPath(leafId).forEach { entry ->
-            val sequence = entrySequence(entry.id)
-            prepareStatement(
-                "INSERT INTO branch_entries (session_id, branch_id, entry_id, entry_seq) VALUES (?, ?, ?, ?)",
-            ).use { statement ->
-                statement.setString(1, metadata.id)
-                statement.setString(2, branchId)
-                statement.setString(3, entry.id)
-                statement.setInt(4, sequence)
-                statement.executeUpdate()
-            }
-        }
-        activeBranchId = branchId
-    }
-
-    private fun Connection.appendToActiveBranch(entryId: String) {
-        val branchId =
-            activeBranchId
-                ?: throw SessionException(
-                    SessionErrorCode.INVALID_SESSION,
-                    "Invalid SQLite session: active branch missing for session ${metadata.id}",
-                )
-        prepareStatement(
-            "INSERT INTO branch_entries (session_id, branch_id, entry_id, entry_seq) VALUES (?, ?, ?, ?)",
-        ).use { statement ->
-            statement.setString(1, metadata.id)
-            statement.setString(2, branchId)
-            statement.setString(3, entryId)
-            statement.setInt(4, entrySequence(entryId))
-            statement.executeUpdate()
-        }
-    }
-
-    private fun Connection.entrySequence(entryId: String): Int =
-        prepareStatement(
-            "SELECT entry_seq FROM session_entries WHERE session_id = ? AND id = ?",
-        ).use { statement ->
-            statement.setString(1, metadata.id)
-            statement.setString(2, entryId)
-            statement.executeQuery().use { rows ->
-                if (!rows.next()) {
-                    throw SessionException(
-                        SessionErrorCode.INVALID_SESSION,
-                        "Invalid SQLite session: missing entry row for $entryId",
-                    )
-                }
-                rows.getInt("entry_seq")
-            }
-        }
-
-    private fun buildPath(leafId: String?): List<SessionTreeEntry> {
-        if (leafId == null) {
-            return emptyList()
-        }
-        var current =
-            byId[leafId] ?: loadEntry(leafId)
-                ?: throw SessionException(SessionErrorCode.NOT_FOUND, "Entry $leafId not found")
-        val path = mutableListOf<SessionTreeEntry>()
-        var stopAtEntryId: String? = null
-        while (true) {
-            path.add(0, current)
-            if (stopAtEntryId != null && current.id == stopAtEntryId) {
-                break
-            }
-            if (current is CompactionEntry) {
-                if (current.retainedTail != null) {
-                    break
-                }
-                stopAtEntryId = current.firstKeptEntryId
-            }
-            val parentId = current.parentId ?: break
-            current =
-                byId[parentId] ?: loadEntry(parentId)
-                    ?: throw SessionException(
-                        SessionErrorCode.INVALID_SESSION,
-                        "Entry $parentId not found",
-                    )
-        }
-        return path
-    }
-
-    private fun loadEntry(id: String): SessionTreeEntry? {
-        val row =
-            connection
-                .prepareStatement(
-                    """
-                    SELECT id, entry_seq, parent_id, type, timestamp, payload
-                    FROM session_entries WHERE session_id = ? AND id = ?
-                    """.trimIndent(),
-                ).use { statement ->
-                    statement.setString(1, metadata.id)
-                    statement.setString(2, id)
-                    statement.executeQuery().use { rows ->
-                        if (rows.next()) rows.toEntryRow() else null
-                    }
-                } ?: return null
-        return runCatching { decodeEntry(row) }.getOrNull()?.also { byId[it.id] = it }
-    }
-
-    private fun loadMaterializedBranch(branchId: String): List<SessionTreeEntry> =
-        connection
-            .prepareStatement(
-                """
-                SELECT e.id, e.entry_seq, e.parent_id, e.type, e.timestamp, e.payload
-                FROM branch_entries b
-                JOIN session_entries e
-                  ON e.session_id = b.session_id AND e.id = b.entry_id
-                WHERE b.session_id = ? AND b.branch_id = ?
-                ORDER BY b.entry_seq
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setString(1, metadata.id)
-                statement.setString(2, branchId)
-                statement.executeQuery().use { rows ->
-                    buildList {
-                        while (rows.next()) {
-                            val entry = decodeEntry(rows.toEntryRow())
-                            byId[entry.id] = entry
-                            if (entry !is LeafEntry) {
-                                add(entry)
-                            }
-                        }
-                    }
-                }
-            }
-
     private fun Connection.writeMaterializedState() {
-        val entries = loadAllEntries()
+        val entries = loadAllEntries(cache = false)
         val name =
             entries
                 .filterIsInstance<SessionInfoEntry>()
@@ -460,36 +416,33 @@ class SqliteSessionStorage private constructor(
         }
     }
 
-    private fun Connection.loadAllEntries(): List<SessionTreeEntry> =
+    private fun Connection.loadAllEntries(cache: Boolean = true): List<SessionTreeEntry> =
         prepareStatement(
             """
             SELECT id, entry_seq, parent_id, type, timestamp, payload
-            FROM session_entries WHERE session_id = ? ORDER BY entry_seq
+            FROM session_entries
+            WHERE session_id = ?
+            ORDER BY entry_seq
             """.trimIndent(),
         ).use { statement ->
             statement.setString(1, metadata.id)
             statement.executeQuery().use { rows ->
                 buildList {
                     while (rows.next()) {
-                        add(decodeEntry(rows.toEntryRow()))
+                        decodeEntry(rows.toEntryRow()).also { entry ->
+                            if (cache) {
+                                byId[entry.id] = entry
+                            }
+                            add(entry)
+                        }
                     }
                 }
             }
         }
 
-    private fun updateLabel(entry: SessionTreeEntry) {
-        if (entry !is LabelEntry) {
-            return
-        }
-        val label = entry.label?.trim()
-        if (label.isNullOrEmpty()) {
-            labelsById.remove(entry.targetId)
-        } else {
-            labelsById[entry.targetId] = label
-        }
-    }
-
     companion object {
+        private val operationMutexes = ConcurrentHashMap<Pair<java.nio.file.Path, String>, Mutex>()
+
         internal fun create(
             connection: Connection,
             metadata: SqliteSessionMetadata,
@@ -521,7 +474,7 @@ class SqliteSessionStorage private constructor(
                 statement.setString(2, summaryJson(emptyList(), null, null, null))
                 statement.executeUpdate()
             }
-            return SqliteSessionStorage(connection, metadata, emptyList(), null, null)
+            return SqliteSessionStorage(connection, metadata, emptyList(), null)
         }
 
         internal fun open(
@@ -551,53 +504,41 @@ class SqliteSessionStorage private constructor(
                 connection.prepareStatement(
                     """
                     SELECT id, entry_seq, parent_id, type, timestamp, payload
-                    FROM session_entries WHERE session_id = ? ORDER BY entry_seq
+                    FROM session_entries
+                    WHERE session_id = ?
+                    ORDER BY entry_seq
                     """.trimIndent(),
                 ).use { statement ->
                     statement.setString(1, metadata.id)
                     statement.executeQuery().use { rows ->
                         buildList {
                             while (rows.next()) {
-                                runCatching { decodeEntry(rows.toEntryRow()) }.getOrNull()?.let(::add)
+                                add(decodeEntry(rows.toEntryRow()))
                             }
                         }
                     }
                 }
-            val activeBranchId =
-                connection.prepareStatement(
-                    """
-                    SELECT branch_id FROM branch_entries
-                    WHERE session_id = ? ORDER BY entry_seq DESC, branch_id DESC LIMIT 1
-                    """.trimIndent(),
-                ).use { statement ->
-                    statement.setString(1, metadata.id)
-                    statement.executeQuery().use { rows ->
-                        if (rows.next()) rows.getString("branch_id") else null
-                    }
-                }
-            return SqliteSessionStorage(connection, metadata, entries, sessionState.second, activeBranchId)
+            return SqliteSessionStorage(connection, metadata, entries, sessionState.second)
         }
 
         private fun buildLabels(entries: List<SessionTreeEntry>): MutableMap<String, String> =
             buildMap {
-                entries.filterIsInstance<LabelEntry>().forEach { entry ->
-                    val label = entry.label?.trim()
-                    if (label.isNullOrEmpty()) {
-                        remove(entry.targetId)
-                    } else {
-                        put(entry.targetId, label)
-                    }
-                }
+                entries.forEach { entry -> updateLabel(this, entry) }
             }.toMutableMap()
+
+        private fun updateLabel(
+            labels: MutableMap<String, String>,
+            entry: SessionTreeEntry,
+        ) {
+            if (entry !is LabelEntry) {
+                return
+            }
+            val label = entry.label?.trim()
+            if (label.isNullOrEmpty()) {
+                labels.remove(entry.targetId)
+            } else {
+                labels[entry.targetId] = label
+            }
+        }
     }
 }
-
-private fun ResultSet.toEntryRow(): SessionEntryRow =
-    SessionEntryRow(
-        id = getString("id"),
-        sequence = getInt("entry_seq"),
-        parentId = getString("parent_id"),
-        type = getString("type"),
-        timestamp = getString("timestamp"),
-        payload = getString("payload"),
-    )

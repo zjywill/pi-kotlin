@@ -14,6 +14,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import software.amazon.awssdk.services.bedrockruntime.model.ValidationException
 import works.earendil.pi.ai.AssistantDone
 import works.earendil.pi.ai.AssistantMessage
 import works.earendil.pi.ai.BedrockThinkingDisplay
@@ -560,6 +561,7 @@ class BedrockProviderTest {
                     onEvent(BedrockStreamEvent.ContentStop(2))
                     onEvent(BedrockStreamEvent.MessageStop("tool_use"))
                     onEvent(BedrockStreamEvent.Metadata(10, 5, 3, 2, 20))
+                    null
                 }
             val model = bedrockModel("us.anthropic.claude-opus-4-8")
             val provider =
@@ -617,6 +619,45 @@ class BedrockProviderTest {
             assertEquals(BedrockAuthMode.BEARER, captured.get().client.authMode)
             assertEquals("yes", captured.get().headers["x-fixture"])
             assertEquals(model.id, captured.get().request.getValue("modelId").jsonPrimitive.content)
+        }
+
+    @Test
+    fun `preserves structured Bedrock failure metadata`() =
+        runTest {
+            val requestId = "11111111-2222-3333-4444-555555555555"
+            val transport =
+                BedrockRuntimeTransport { _, _ ->
+                    throw ValidationException
+                        .builder()
+                        .message("The provided model identifier is invalid.")
+                        .statusCode(400)
+                        .requestId(requestId)
+                        .build()
+                }
+            val model = bedrockModel("fixture")
+            val provider =
+                BedrockProvider(
+                    id = "amazon-bedrock",
+                    name = "Amazon Bedrock",
+                    models = listOf(model),
+                    environment = { null },
+                    transport = transport,
+                )
+
+            val result =
+                provider.stream(
+                    model,
+                    Context(messages = mutableListOf(UserMessage("hello"))),
+                    StreamOptions(apiKey = "token"),
+                ).result()
+
+            val diagnostic = result.diagnostics?.single()
+            assertEquals(StopReason.ERROR, result.stopReason)
+            assertEquals("Validation error: The provided model identifier is invalid.", result.errorMessage)
+            assertEquals("bedrock_response_failure", diagnostic?.type)
+            assertEquals("400", diagnostic?.details?.get("status")?.jsonPrimitive?.content)
+            assertEquals("ValidationException", diagnostic?.details?.get("errorCode")?.jsonPrimitive?.content)
+            assertEquals(requestId, diagnostic?.details?.get("requestId")?.jsonPrimitive?.content)
         }
 
     @Test

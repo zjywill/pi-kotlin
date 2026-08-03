@@ -263,11 +263,13 @@ class RpcRuntime(
     private var retryBaseDelayMs = 2_000L
     private var retryAttempt = 0
     private var retryDelayJob: Job? = null
+    private var toolOutputExpandedOverride: Boolean? = null
     private val compacting = AtomicBoolean(false)
     private var compactionSettings = DEFAULT_COMPACTION_SETTINGS
     private val steeringMessages = CopyOnWriteArrayList<String>()
     private val followUpMessages = CopyOnWriteArrayList<String>()
     private var promptJob: Job? = null
+    private val promptStateLock = Any()
     private val activeBashes = ConcurrentHashMap.newKeySet<RunningBash>()
     private val pendingBashMessages = mutableListOf<BashExecutionMessage>()
     private val pendingExtensionUiRequests = ConcurrentHashMap<String, (JsonObject) -> Unit>()
@@ -326,6 +328,23 @@ class RpcRuntime(
 
     internal fun extensionAutocompleteProviderCount(): Int =
         extensionHost?.registrations?.autocompleteProviderCount ?: 0
+
+    internal fun extensionMarkdownTransformerCount(): Int =
+        extensionHost?.registrations?.markdownTransformerCount ?: 0
+
+    internal fun transformMarkdown(
+        markdown: String,
+        messageType: String,
+        isStreaming: Boolean,
+        availableWidth: Int,
+    ): String =
+        extensionHost?.invokeMarkdownTransform(
+            markdown = markdown,
+            messageType = messageType,
+            isStreaming = isStreaming,
+            availableWidth = availableWidth,
+            context = extensionContextProvider(),
+        ) ?: markdown
 
     internal suspend fun invokeExtensionShortcut(id: String): Boolean {
         val host = extensionHost ?: return false
@@ -719,7 +738,7 @@ class RpcRuntime(
             }
             return successResponse(id, "prompt")
         }
-        if (agent.state.isStreaming) {
+        if (agent.state.isStreaming || promptJob?.isActive == true) {
             return when (command.string("streamingBehavior")) {
                 "steer" -> {
                     queueSteering(command)
@@ -735,29 +754,50 @@ class RpcRuntime(
             }
         }
         val prompt = userMessage(command)
-        promptJob =
-            scope.launch {
-                try {
-                    val before =
-                        emitExtensionBeforeAgentStart(
-                            host = extensionHost,
-                            prompt = contentText(prompt.content),
-                            systemPrompt = baseSystemPrompt,
-                            context = extensionContextProvider,
-                            onActions = { applyExtensionActions(it) },
-                    )
-                    agent.state.systemPrompt = before?.systemPrompt ?: baseSystemPrompt
-                    runPromptWithRetry(prompt)
-                } finally {
-                    flushPendingBashMessages()
-                    emit(buildJsonObject { put("type", "agent_settled") })
-                    promptJob = null
-                }
-            }
+        startPrompt(prompt)
         return successResponse(id, "prompt")
     }
 
-    private suspend fun runPromptWithRetry(prompt: UserMessage) {
+    private fun startPrompt(prompt: Message): Boolean =
+        synchronized(promptStateLock) {
+            if (closing.get() || promptJob?.isActive == true || agent.state.isStreaming) {
+                return@synchronized false
+            }
+            lateinit var launched: Job
+            launched =
+                scope.launch(start = CoroutineStart.LAZY) {
+                    try {
+                        val before =
+                            emitExtensionBeforeAgentStart(
+                                host = extensionHost,
+                                prompt =
+                                    when (prompt) {
+                                        is UserMessage -> contentText(prompt.content)
+                                        is CustomMessage -> contentText(prompt.content)
+                                        else -> ""
+                                    },
+                                systemPrompt = baseSystemPrompt,
+                                context = extensionContextProvider,
+                                onActions = { applyExtensionActions(it) },
+                            )
+                        agent.state.systemPrompt = before?.systemPrompt ?: baseSystemPrompt
+                        runPromptWithRetry(prompt)
+                    } finally {
+                        flushPendingBashMessages()
+                        emit(buildJsonObject { put("type", "agent_settled") })
+                        synchronized(promptStateLock) {
+                            if (promptJob === launched) {
+                                promptJob = null
+                            }
+                        }
+                    }
+                }
+            promptJob = launched
+            launched.start()
+            true
+        }
+
+    private suspend fun runPromptWithRetry(prompt: Message) {
         var messages: List<Message> = listOf(prompt)
         while (true) {
             agent.prompt(messages)
@@ -881,6 +921,26 @@ class RpcRuntime(
         followUpMessages += contentText(message.content)
         emitQueueUpdate()
         agent.followUp(message)
+    }
+
+    private fun queueExtensionMessage(
+        message: Message,
+        followUp: Boolean,
+    ) {
+        if (message is UserMessage) {
+            val text = contentText(message.content)
+            if (followUp) {
+                followUpMessages += text
+            } else {
+                steeringMessages += text
+            }
+            emitQueueUpdate()
+        }
+        if (followUp) {
+            agent.followUp(message)
+        } else {
+            agent.steer(message)
+        }
     }
 
     private fun consumeQueuedMessage(message: Message) {
@@ -1668,6 +1728,13 @@ class RpcRuntime(
                 flagValues = options.extensionFlagValues,
                 scopedModels = sessionScopedModels,
                 uiWidth = currentExtensionUiWidth(),
+                autocompleteMaxVisible =
+                    SettingsStore(
+                        cwd = sessionManager.getCwd(),
+                        agentDir = options.agentDir,
+                        projectTrusted = projectTrusted,
+                    ).mergedAutocompleteMaxVisible(),
+                toolsExpanded = currentToolOutputExpanded(),
                 themeRegistry = themeRegistry(projectTrusted),
             )
         }
@@ -1707,6 +1774,13 @@ class RpcRuntime(
                                 projectTrusted = trusted,
                             ).scopedModels,
                         uiWidth = currentExtensionUiWidth(),
+                        autocompleteMaxVisible =
+                            SettingsStore(
+                                cwd = sessionManager.getCwd(),
+                                agentDir = options.agentDir,
+                                projectTrusted = trusted,
+                            ).mergedAutocompleteMaxVisible(),
+                        toolsExpanded = currentToolOutputExpanded(),
                         themeRegistry = themeRegistry(trusted),
                     )
                 },
@@ -2077,6 +2151,14 @@ class RpcRuntime(
                     agent.state.tools = availableTools.filter { it.name in names }
                 }
 
+                "set_tools_expanded" -> {
+                    toolOutputExpandedOverride =
+                        action.data["expanded"]
+                            ?.jsonPrimitive
+                            ?.booleanOrNull
+                            ?: toolOutputExpandedOverride
+                }
+
                 "set_thinking_level" ->
                     action.data.stringValue("level")
                         ?.toCoreThinkingLevel()
@@ -2142,17 +2224,41 @@ class RpcRuntime(
                 }
 
                 "send_message" -> {
-                    val entryId = appendExtensionMessage(sessionManager, action.data["message"])
-                    entryId?.let(sessionManager::getEntry)?.let(::emitExtensionRendering)
+                    val message = extensionCustomMessage(action.data["message"])
+                    if (message != null) {
+                        val options = action.data["options"] as? JsonObject
+                        val deliverAs = options?.stringValue("deliverAs")
+                        when {
+                            deliverAs == "nextTurn" ->
+                                queueExtensionMessage(message, followUp = true)
+
+                            agent.state.isStreaming || promptJob?.isActive == true ->
+                                queueExtensionMessage(message, followUp = deliverAs == "followUp")
+
+                            options?.get("triggerTurn")?.jsonPrimitive?.booleanOrNull == true ->
+                                startPrompt(message)
+
+                            else -> {
+                                val entryId = appendExtensionMessage(sessionManager, action.data["message"])
+                                entryId?.let(sessionManager::getEntry)?.let(::emitExtensionRendering)
+                            }
+                        }
+                    }
                 }
 
                 "send_user_message" -> {
-                    if (!queueExtensionUserMessage(agent, action.data)) {
+                    val message = extensionUserMessage(action.data)
+                    val deliverAs =
+                        (action.data["options"] as? JsonObject)
+                            ?.stringValue("deliverAs")
+                    if (agent.state.isStreaming || promptJob?.isActive == true) {
+                        queueExtensionMessage(message, followUp = deliverAs == "followUp")
+                    } else if (!startPrompt(message)) {
                         emitExtensionError(
                             ExtensionDiagnostic(
                                 extensionPath = "<action>",
                                 event = "send_user_message",
-                                error = "Idle extension-triggered turns are not migrated yet",
+                                error = "Extension-triggered turn could not be started",
                             ),
                         )
                     }
@@ -2322,12 +2428,20 @@ class RpcRuntime(
             optionsProvider().let {
                 it.copy(
                     width = it.width.coerceAtLeast(1),
+                    expanded = toolOutputExpandedOverride ?: it.expanded,
                     outputPad = it.outputPad.coerceAtLeast(0),
                 )
             }
         val block = renderExtensionEntry(entry, renderOptions) ?: return
         emit(extensionRenderedBlockEvent(block))
     }
+
+    private fun currentToolOutputExpanded(): Boolean =
+        toolOutputExpandedOverride
+            ?: options.extensionRenderOptionsProvider
+                ?.invoke()
+                ?.expanded
+            ?: false
 
     private fun renderExtensionEntry(
         entry: SessionEntry,

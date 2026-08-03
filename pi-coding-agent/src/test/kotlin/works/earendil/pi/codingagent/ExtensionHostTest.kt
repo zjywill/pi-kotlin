@@ -26,6 +26,173 @@ import kotlin.test.assertTrue
 
 class ExtensionHostTest {
     @Test
+    fun `Markdown transformers chain by extension order and preserve failures`() =
+        runTest {
+            assumeTrue(nodeAvailable(), "Node.js 22+ is required for extension runtime tests")
+            val root = Files.createTempDirectory("pi-kotlin-extension-markdown")
+            val first =
+                root.resolve("first.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          pi.registerMarkdownTransformer((markdown, context) => {
+                            if (context.messageType === "assistant-thinking") throw new Error("skip");
+                            return `${'$'}{markdown}|${'$'}{context.messageType}|${'$'}{context.isStreaming}|${'$'}{context.availableWidth}`;
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val second =
+                root.resolve("second.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          pi.registerMarkdownTransformer(markdown => markdown.replace("source", "rendered"));
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val host =
+                assertNotNull(
+                    ExtensionHost.start(
+                        sources =
+                            listOf(first, second).map { path ->
+                                ExtensionSource(
+                                    path,
+                                    ResourceSourceInfo(path, "local", baseDir = root),
+                                )
+                            },
+                        agentDir = Files.createDirectories(root.resolve("agent")),
+                        cwd = root,
+                        mode = ExtensionMode.TUI,
+                        projectTrusted = true,
+                        flagValues = emptyMap(),
+                        context = extensionTestContext(root, mode = ExtensionMode.TUI),
+                    ),
+                )
+
+            host.use {
+                assertEquals(2, host.registrations.markdownTransformerCount)
+                assertTrue(host.registrations.extensions.all(ExtensionRegistration::hasMarkdownTransformer))
+                assertEquals(
+                    "rendered|assistant|true|37",
+                    host.invokeMarkdownTransform(
+                        markdown = "source",
+                        messageType = "assistant",
+                        isStreaming = true,
+                        availableWidth = 37,
+                    ),
+                )
+                assertEquals(
+                    "rendered",
+                    host.invokeMarkdownTransform(
+                        markdown = "source",
+                        messageType = "assistant-thinking",
+                        isStreaming = false,
+                        availableWidth = 29,
+                    ),
+                )
+            }
+        }
+
+    @Test
+    fun `custom editors inherit autocomplete limit and tool expansion changes are idempotent`() =
+        runTest {
+            assumeTrue(nodeAvailable(), "Node.js 22+ is required for extension runtime tests")
+            val root = Files.createTempDirectory("pi-kotlin-extension-editor-settings")
+            val extension =
+                root.resolve("settings.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        import { Editor } from "@earendil-works/pi-tui";
+
+                        export default function(pi) {
+                          pi.registerCommand("settings", {
+                            handler(_args, ctx) {
+                              ctx.ui.setToolsExpanded(false);
+                              ctx.ui.setToolsExpanded(true);
+                              ctx.ui.setToolsExpanded(true);
+                              ctx.ui.setEditorComponent((tui, theme, keybindings) => {
+                                const editor = new Editor(tui, theme, keybindings);
+                                const originalRender = editor.render.bind(editor);
+                                editor.render = width => [
+                                  `limit:${'$'}{editor.getAutocompleteMaxVisible()}`,
+                                  ...originalRender(width),
+                                ];
+                                return editor;
+                              });
+                            },
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val context =
+                extensionTestContext(root, uiWidth = 40, mode = ExtensionMode.TUI).let { base ->
+                    buildJsonObject {
+                        base.forEach { (name, value) -> put(name, value) }
+                        put("autocompleteMaxVisible", 11)
+                        put("toolsExpanded", false)
+                    }
+                }
+            val host =
+                assertNotNull(
+                    ExtensionHost.start(
+                        sources =
+                            listOf(
+                                ExtensionSource(
+                                    extension,
+                                    ResourceSourceInfo(extension, "local", baseDir = root),
+                                ),
+                            ),
+                        agentDir = Files.createDirectories(root.resolve("agent")),
+                        cwd = root,
+                        mode = ExtensionMode.TUI,
+                        projectTrusted = true,
+                        flagValues = emptyMap(),
+                        context = context,
+                    ),
+                )
+
+            host.use {
+                val invocation = host.invokeCommand("settings", "", context)
+                assertEquals(
+                    listOf(true),
+                    invocation.actions
+                        .filter { it.type == "set_tools_expanded" }
+                        .mapNotNull { action ->
+                            action.data["expanded"]
+                                ?.jsonPrimitive
+                                ?.content
+                                ?.toBooleanStrictOrNull()
+                        },
+                )
+                assertEquals(
+                    1,
+                    invocation.actions.count {
+                        it.type == "ui" &&
+                            it.data.testString("method") == "notify" &&
+                            it.data.testString("message") == "Tool output: expanded"
+                    },
+                )
+                assertEquals(
+                    "limit:11",
+                    invocation.actions
+                        .single {
+                            it.type == "ui" &&
+                                it.data.testString("method") == "setEditorComponent"
+                        }.data
+                        .testStringList("lines")
+                        .first(),
+                )
+            }
+        }
+
+    @Test
     fun `TUI component surfaces render refresh clear and dispose`() =
         runTest {
             assumeTrue(nodeAvailable(), "Node.js 22+ is required for extension runtime tests")

@@ -482,9 +482,17 @@ export class Box extends Container {
 	}
 }
 export class Markdown extends Text {
-	constructor(text, paddingX = 0, paddingY = 0, _theme, defaultTextStyle) {
-		const styled = defaultTextStyle?.color ? defaultTextStyle.color(text) : text;
-		super(styled, paddingX, paddingY, defaultTextStyle?.bgColor);
+	constructor(text, paddingX = 0, paddingY = 0, _theme, defaultTextStyle, options = {}) {
+		super(text, paddingX, paddingY, defaultTextStyle?.bgColor);
+		this.source = String(text ?? "");
+		this.defaultTextStyle = defaultTextStyle;
+		this.options = options;
+	}
+	render(width) {
+		const availableWidth = Math.max(1, width - this.paddingX * 2);
+		const transformed = this.options.transform?.(this.source, availableWidth) ?? this.source;
+		this.text = this.defaultTextStyle?.color ? this.defaultTextStyle.color(transformed) : transformed;
+		return super.render(width);
 	}
 }
 export class Spacer extends Component {
@@ -530,6 +538,7 @@ export class Editor extends Component {
 		this.onChange = undefined;
 		this.borderColor = theme.borderColor;
 		this.paddingX = 0;
+		this.autocompleteMaxVisible = 5;
 	}
 	setText(text) {
 		this.text = String(text ?? "");
@@ -545,6 +554,12 @@ export class Editor extends Component {
 	}
 	getPaddingX() {
 		return this.paddingX;
+	}
+	setAutocompleteMaxVisible(value) {
+		this.autocompleteMaxVisible = Math.max(3, Math.min(20, Math.floor(value)));
+	}
+	getAutocompleteMaxVisible() {
+		return this.autocompleteMaxVisible;
 	}
 	setAutocompleteProvider(provider) {
 		this.autocompleteProvider = provider;
@@ -715,6 +730,8 @@ const state = {
 	activeTools: [],
 	allTools: [],
 	uiWidth: 80,
+	autocompleteMaxVisible: 5,
+	toolsExpanded: false,
 	theme: undefined,
 	themes: [],
 	flags: new Map(),
@@ -1043,6 +1060,7 @@ function setHostedEditorComponent(factory) {
 	const component = factory(tui, rendererTheme, virtualKeybindings);
 	record.component = component;
 	validateUiComponent(component, record.label);
+	component.setAutocompleteMaxVisible?.(state.autocompleteMaxVisible ?? 5);
 	component.onSubmit = value => {
 		record.submitted = String(value ?? "");
 		state.editorText = record.submitted;
@@ -1321,6 +1339,8 @@ function updateState(context = {}) {
 		"activeTools",
 		"allTools",
 		"uiWidth",
+		"autocompleteMaxVisible",
+		"toolsExpanded",
 		"theme",
 		"themes",
 	]) {
@@ -1856,9 +1876,20 @@ function createUI() {
 			return { success: true };
 		},
 		getToolsExpanded() {
-			return false;
+			return state.toolsExpanded === true;
 		},
-		setToolsExpanded() {},
+		setToolsExpanded(expanded) {
+			const next = expanded === true;
+			if (next === state.toolsExpanded) return;
+			state.toolsExpanded = next;
+			action("set_tools_expanded", { expanded: next });
+			action("ui", {
+				id: randomUUID(),
+				method: "notify",
+				message: `Tool output: ${next ? "expanded" : "collapsed"}`,
+				notifyType: "info",
+			});
+		},
 		get theme() {
 			return rendererTheme;
 		},
@@ -1974,6 +2005,13 @@ function createAPI(extension) {
 			extension.messageRenderers.set(customType, { id, customType, renderer });
 			registrationChanged();
 		},
+		registerMarkdownTransformer(transformer) {
+			if (typeof transformer !== "function") {
+				throw new Error("Markdown transformer must be a function");
+			}
+			extension.markdownTransformer = transformer;
+			registrationChanged();
+		},
 		registerEntryRenderer(customType, renderer) {
 			const id = `${extension.index}:entry-renderer:${customType}`;
 			extension.entryRenderers.set(customType, { id, customType, renderer });
@@ -2058,6 +2096,7 @@ function createExtension(path, index) {
 		shortcuts: new Map(),
 		messageRenderers: new Map(),
 		entryRenderers: new Map(),
+		markdownTransformer: undefined,
 	};
 }
 
@@ -2109,6 +2148,7 @@ function registrationMetadata() {
 				id: value.id,
 				customType: value.customType,
 			})),
+			hasMarkdownTransformer: typeof extension.markdownTransformer === "function",
 		})),
 		tools: [...tools.values()].map(({ id, extension, definition }) => ({
 			id,
@@ -2127,6 +2167,9 @@ function registrationMetadata() {
 		flags: [...flags.values()].map(flag => jsonValue(flag)),
 			providers: [...providers.values()].map(providerRegistrationMetadata),
 			autocompleteProviderCount: autocompleteProviderFactories.length,
+			markdownTransformerCount: extensions.filter(
+				extension => typeof extension.markdownTransformer === "function",
+			).length,
 		};
 }
 
@@ -2943,6 +2986,30 @@ function invokeRenderer(request) {
 	return { result: { rendered: true, lines } };
 }
 
+function invokeMarkdownTransform(request) {
+	updateState(request.context);
+	const messageType =
+		request.messageType === "user" || request.messageType === "assistant-thinking"
+			? request.messageType
+			: "assistant";
+	const transformContext = {
+		messageType,
+		isStreaming: request.isStreaming === true,
+		availableWidth: Math.max(1, Number.isInteger(request.availableWidth) ? request.availableWidth : 80),
+	};
+	let markdown = String(request.markdown ?? "");
+	for (const extension of extensions) {
+		if (typeof extension.markdownTransformer !== "function") continue;
+		try {
+			const transformed = extension.markdownTransformer(markdown, transformContext);
+			if (typeof transformed === "string") markdown = transformed;
+		} catch {
+			// Preserve the current Markdown and continue with the next extension.
+		}
+	}
+	return { result: { markdown } };
+}
+
 async function handle(request) {
 	currentActions = pendingBackgroundActions.splice(0);
 	try {
@@ -2971,6 +3038,9 @@ async function handle(request) {
 				break;
 			case "invoke_renderer":
 				response = invokeRenderer(request);
+				break;
+			case "invoke_markdown_transform":
+				response = invokeMarkdownTransform(request);
 				break;
 			case "provider_stream":
 				response = await invokeProviderStream(request);

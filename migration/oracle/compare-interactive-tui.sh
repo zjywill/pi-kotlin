@@ -47,7 +47,8 @@ run_pty() {
   local runtime="$1"
   local width="$2"
   local scenario="$3"
-  local case_dir="$TMP_DIR/$runtime-$width-$scenario"
+  local ui_mode="$4"
+  local case_dir="$TMP_DIR/$runtime-$width-$scenario-$ui_mode"
   local overlay_width=$((width / 2))
   local overlay_column=$((width - overlay_width - 3))
   mkdir -p "$case_dir/agent" "$case_dir/home" "$case_dir/project"
@@ -56,6 +57,7 @@ run_pty() {
   export PTY_WIDTH="$width"
   export PTY_ROWS="$ROWS"
   export PTY_SCENARIO="$scenario"
+  export PTY_UI_MODE="$ui_mode"
   export PTY_AGENT="$case_dir/agent"
   export PTY_HOME="$case_dir/home"
   export PTY_PROJECT="$case_dir/project"
@@ -71,9 +73,9 @@ set stty_init "rows $env(PTY_ROWS) columns $env(PTY_WIDTH)"
 log_user 1
 cd $env(PTY_PROJECT)
 if {$env(PTY_RUNTIME) eq "typescript"} {
-  spawn -noecho env HOME=$env(PTY_HOME) PI_CODING_AGENT_DIR=$env(PTY_AGENT) PI_TUI_PTY_SCENARIO=$env(PTY_SCENARIO) NODE_NO_WARNINGS=1 TERM=xterm-256color $env(PTY_NODE_BIN) $env(PTY_TS_CLI) --extension $env(PTY_UI_FIXTURE) --extension $env(PTY_PROVIDER_FIXTURE) --provider rpc-fixture --model model-a --no-session --offline --approve
+  spawn -noecho env HOME=$env(PTY_HOME) PI_CODING_AGENT_DIR=$env(PTY_AGENT) PI_TUI_PTY_SCENARIO=$env(PTY_SCENARIO) NODE_NO_WARNINGS=1 TERM=xterm-256color $env(PTY_NODE_BIN) $env(PTY_TS_CLI) --ui-mode $env(PTY_UI_MODE) --extension $env(PTY_UI_FIXTURE) --extension $env(PTY_PROVIDER_FIXTURE) --provider rpc-fixture --model model-a --no-session --offline --approve
 } else {
-  spawn -noecho env HOME=$env(PTY_HOME) PI_CODING_AGENT_DIR=$env(PTY_AGENT) PI_TUI_PTY_SCENARIO=$env(PTY_SCENARIO) NODE_NO_WARNINGS=1 TERM=xterm-256color $env(PTY_KT_CLI) --extension $env(PTY_UI_FIXTURE) --extension $env(PTY_PROVIDER_FIXTURE) --provider rpc-fixture --model model-a --no-session --offline --approve
+  spawn -noecho env HOME=$env(PTY_HOME) PI_CODING_AGENT_DIR=$env(PTY_AGENT) PI_TUI_PTY_SCENARIO=$env(PTY_SCENARIO) NODE_NO_WARNINGS=1 TERM=xterm-256color $env(PTY_KT_CLI) --ui-mode $env(PTY_UI_MODE) --extension $env(PTY_UI_FIXTURE) --extension $env(PTY_PROVIDER_FIXTURE) --provider rpc-fixture --model model-a --no-session --offline --approve
 }
 
 proc wait_for {value label} {
@@ -179,8 +181,10 @@ if {$env(PTY_SCENARIO) eq "core"} {
   after 200
 } elseif {$env(PTY_SCENARIO) eq "editor"} {
   submit "/editor-on"
-  wait_for "PTY_ED_ON" "custom editor install"
-  wait_for "PTY_ED:$env(PTY_WIDTH):seed-paste" "custom editor set and paste"
+  wait_for_both \
+    "PTY_ED_ON" \
+    "PTY_ED:$env(PTY_WIDTH):seed-paste" \
+    "custom editor install and initial text"
   send -- "-typed"
   wait_for "PTY_ED:$env(PTY_WIDTH):seed-paste-typed" "custom editor input"
   send -- "|"
@@ -223,7 +227,7 @@ catch wait result
 exit [lindex $result 3]
 EOF
   then
-    printf '%s %s-column %s interactive TUI PTY failed:\n' "$runtime" "$width" "$scenario" >&2
+    printf '%s %s-column %s %s interactive TUI PTY failed:\n' "$runtime" "$width" "$scenario" "$ui_mode" >&2
     tail -120 "$case_dir/expect.log" >&2
     return 1
   fi
@@ -239,22 +243,26 @@ EOF
       "$overlay_column" >/dev/null
   fi
 
-  printf '%s %s-column %s interactive TUI PTY passed.\n' "$runtime" "$width" "$scenario"
+  printf '%s %s-column %s %s interactive TUI PTY passed.\n' "$runtime" "$width" "$scenario" "$ui_mode"
 }
 
 read -r -a widths <<<"${PI_TUI_PTY_WIDTHS:-40 80 120}"
 read -r -a runtimes <<<"${PI_TUI_PTY_RUNTIMES:-typescript kotlin}"
 read -r -a scenarios <<<"${PI_TUI_PTY_SCENARIOS:-core editor overlay}"
+read -r -a ui_modes <<<"${PI_TUI_PTY_UI_MODES:-regular fullscreen}"
 
 for width in "${widths[@]}"; do
   for runtime in "${runtimes[@]}"; do
     for scenario in "${scenarios[@]}"; do
-      run_pty "$runtime" "$width" "$scenario"
+      for ui_mode in "${ui_modes[@]}"; do
+        run_pty "$runtime" "$width" "$scenario" "$ui_mode"
+      done
     done
   done
 done
 
-printf 'Interactive TUI parity passed for widths [%s], runtimes [%s], and scenarios [%s].\n' \
+printf 'Interactive TUI parity passed for widths [%s], runtimes [%s], scenarios [%s], and UI modes [%s].\n' \
   "${widths[*]}" \
   "${runtimes[*]}" \
-  "${scenarios[*]}"
+  "${scenarios[*]}" \
+  "${ui_modes[*]}"

@@ -3,7 +3,11 @@ package works.earendil.pi.storage.sqlite
 import java.sql.Connection
 import java.time.Instant
 
-private const val INITIAL_MIGRATION = "001_initial.sql"
+private val MIGRATIONS =
+    listOf(
+        "001_initial.sql",
+        "002_branch_tips.sql",
+    )
 
 internal fun configureDatabase(connection: Connection) {
     connection.createStatement().use { statement ->
@@ -36,29 +40,31 @@ internal fun applyMigrations(connection: Connection) {
                     }
                 }
             }
-    if (INITIAL_MIGRATION in applied) {
-        return
-    }
-    val sql =
-        requireNotNull(
-            SqliteSessionRepository::class.java.getResourceAsStream(
-                "/works/earendil/pi/storage/sqlite/migrations/$INITIAL_MIGRATION",
-            ),
-        ) {
-            "Missing SQLite migration resource: $INITIAL_MIGRATION"
-        }.bufferedReader().use { it.readText() }
-    connection.transaction {
-        sql
-            .split(';')
-            .map(String::trim)
-            .filter(String::isNotEmpty)
-            .forEach { migrationStatement ->
-                createStatement().use { statement -> statement.execute(migrationStatement) }
+    MIGRATIONS.forEach { migration ->
+        if (migration in applied) {
+            return@forEach
+        }
+        val sql =
+            requireNotNull(
+                SqliteSessionRepository::class.java.getResourceAsStream(
+                    "/works/earendil/pi/storage/sqlite/migrations/$migration",
+                ),
+            ) {
+                "Missing SQLite migration resource: $migration"
+            }.bufferedReader().use { it.readText() }
+        connection.transaction {
+            sql
+                .split(';')
+                .map(String::trim)
+                .filter(String::isNotEmpty)
+                .forEach { migrationStatement ->
+                    createStatement().use { statement -> statement.execute(migrationStatement) }
+                }
+            prepareStatement("INSERT INTO migrations (id, applied_at) VALUES (?, ?)").use { statement ->
+                statement.setString(1, migration)
+                statement.setString(2, Instant.now().toString())
+                statement.executeUpdate()
             }
-        prepareStatement("INSERT INTO migrations (id, applied_at) VALUES (?, ?)").use { statement ->
-            statement.setString(1, INITIAL_MIGRATION)
-            statement.setString(2, Instant.now().toString())
-            statement.executeUpdate()
         }
     }
 }

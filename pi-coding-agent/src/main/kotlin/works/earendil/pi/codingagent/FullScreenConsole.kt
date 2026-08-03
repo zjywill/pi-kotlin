@@ -30,9 +30,12 @@ import works.earendil.pi.tui.OverlayAnchor
 import works.earendil.pi.tui.OverlayHandle
 import works.earendil.pi.tui.OverlayMargin
 import works.earendil.pi.tui.OverlayOptions
+import works.earendil.pi.tui.ScrollViewScrollbar
 import works.earendil.pi.tui.SizeValue
 import works.earendil.pi.tui.Terminal
 import works.earendil.pi.tui.Tui
+import works.earendil.pi.tui.TuiScreenMode
+import works.earendil.pi.tui.ViewportLayout
 import works.earendil.pi.tui.matchesKey
 import works.earendil.pi.tui.setKittyProtocolActive
 import works.earendil.pi.tui.truncateToWidth
@@ -42,6 +45,8 @@ internal interface FullScreenConsoleControl {
     fun setAutocompleteProvider(provider: AutocompleteProvider?)
 
     fun setTitle(title: String)
+
+    fun setScrollbarStyle(style: (String) -> String) = Unit
 
     fun setHeader(lines: List<String>?) = Unit
 
@@ -77,6 +82,10 @@ internal interface FullScreenConsoleControl {
         paste: Boolean = false,
     ) = Unit
 
+    fun setStreamingText(text: String?) = Unit
+
+    fun commitStreamingText() = Unit
+
     fun controlExtensionCustom(
         componentId: String,
         operation: String,
@@ -88,18 +97,43 @@ internal interface FullScreenConsoleControl {
 internal class FullScreenConsole(
     private val terminalAdapter: Terminal = JLineTuiTerminal(),
     private val closeTerminal: Closeable? = terminalAdapter as? Closeable,
+    uiMode: UiMode = UiMode.REGULAR,
+    fullscreenScrollbar: ScrollViewScrollbar = ScrollViewScrollbar.AUTO,
+    autocompleteMaxVisible: Int = 5,
+    private val clipboardTextReader: () -> String? = ::readClipboardText,
 ) : InteractiveConsole,
     FullScreenConsoleControl {
     private val header = MutableLinesComponent()
     private val transcript = TranscriptComponent()
     private val widgetsAbove = SurfaceCollectionComponent()
     private val prompt = PromptComponent()
-    private val tui = Tui(terminalAdapter)
+    private val document = works.earendil.pi.tui.Container()
+    private val dock = works.earendil.pi.tui.Container()
+    private val viewport =
+        ViewportLayout(
+            document = document,
+            dock = dock,
+            scrollbar = fullscreenScrollbar,
+        )
+    private val tui =
+        Tui(
+            terminal = terminalAdapter,
+            screenMode =
+                if (uiMode == UiMode.FULLSCREEN) {
+                    TuiScreenMode.ALTERNATE
+                } else {
+                    TuiScreenMode.MAIN
+                },
+        )
     private val editor =
         Editor(
             tui = tui,
             theme = EditorTheme(),
-            options = EditorOptions(paddingX = 1),
+            options =
+                EditorOptions(
+                    paddingX = 1,
+                    autocompleteMaxVisible = autocompleteMaxVisible,
+                ),
         )
     private val editorSlot = ComponentSlot(editor)
     private val widgetsBelow = SurfaceCollectionComponent()
@@ -116,13 +150,24 @@ internal class FullScreenConsole(
     private var reading = false
 
     init {
-        tui.addChild(header)
-        tui.addChild(transcript)
-        tui.addChild(widgetsAbove)
-        tui.addChild(prompt)
-        tui.addChild(editorSlot)
-        tui.addChild(widgetsBelow)
-        tui.addChild(footer)
+        if (uiMode == UiMode.FULLSCREEN) {
+            document.addChild(header)
+            document.addChild(transcript)
+            dock.addChild(widgetsAbove)
+            dock.addChild(prompt)
+            dock.addChild(editorSlot)
+            dock.addChild(widgetsBelow)
+            dock.addChild(footer)
+            tui.addChild(viewport)
+        } else {
+            tui.addChild(header)
+            tui.addChild(transcript)
+            tui.addChild(widgetsAbove)
+            tui.addChild(prompt)
+            tui.addChild(editorSlot)
+            tui.addChild(widgetsBelow)
+            tui.addChild(footer)
+        }
         tui.setFocus(editor)
         editor.onSubmit = { value ->
             if (reading) {
@@ -201,13 +246,20 @@ internal class FullScreenConsole(
                 reads.offer(ConsoleRead.End)
             }
         return try {
-            when (val value = reads.take()) {
+            val result =
+                when (val value = reads.take()) {
                 is ConsoleRead.Line -> InteractiveReadResult.Line(value.value)
 
                 is ConsoleRead.Shortcut -> InteractiveReadResult.Shortcut(value.id, value.buffer)
 
                 ConsoleRead.End -> InteractiveReadResult.Line(null)
             }
+            val line = (result as? InteractiveReadResult.Line)?.value
+            if (!secret && line != null && prompt.contains("> ")) {
+                transcript.append(OSC133_ZONE_START + prompt + line + OSC133_ZONE_END + OSC133_ZONE_FINAL)
+                transcript.newLine()
+            }
+            result
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
             InteractiveReadResult.Line(null)
@@ -231,6 +283,12 @@ internal class FullScreenConsole(
     private fun handleGlobalInput(data: String): InputListenerResult? {
         if (!reading) {
             return null
+        }
+        if (matchesKey(data, clipboardPasteKey())) {
+            runCatching(clipboardTextReader)
+                .getOrNull()
+                ?.let { text -> setEditorText(text, paste = true) }
+            return InputListenerResult(consume = true)
         }
         if (matchesKey(data, Key.ctrl("d")) && primaryEditorText().isEmpty()) {
             reads.offer(ConsoleRead.End)
@@ -276,6 +334,10 @@ internal class FullScreenConsole(
 
     override fun setTitle(title: String) {
         terminalAdapter.setTitle(title)
+    }
+
+    override fun setScrollbarStyle(style: (String) -> String) {
+        viewport.setScrollbarStyle(style)
     }
 
     override fun setHeader(lines: List<String>?) {
@@ -479,6 +541,16 @@ internal class FullScreenConsole(
         tui.requestRender()
     }
 
+    override fun setStreamingText(text: String?) {
+        transcript.setTransient(text)
+        tui.requestRender()
+    }
+
+    override fun commitStreamingText() {
+        transcript.commitTransient()
+        tui.requestRender()
+    }
+
     private fun handleExtensionInput(initialData: String): InputListenerResult? {
         var data = initialData
         val handlers = synchronized(terminalInputHandlers) { terminalInputHandlers.values.toList() }
@@ -586,6 +658,13 @@ internal class FullScreenConsole(
         }
     }
 }
+
+private fun clipboardPasteKey(): String =
+    if (System.getProperty("os.name").orEmpty().lowercase().contains("win")) {
+        "alt+v"
+    } else {
+        "ctrl+v"
+    }
 
 private sealed interface ConsoleRead {
     data class Line(
@@ -816,6 +895,7 @@ private fun overlayAnchor(value: String): OverlayAnchor =
 
 private class TranscriptComponent : Component {
     private val lines = mutableListOf("")
+    private var transient: String? = null
 
     @Synchronized
     fun append(value: String) {
@@ -832,9 +912,35 @@ private class TranscriptComponent : Component {
     }
 
     @Synchronized
+    fun setTransient(value: String?) {
+        transient = value
+    }
+
+    @Synchronized
+    fun commitTransient() {
+        val value = transient
+        transient = null
+        if (value != null) {
+            append(value)
+            newLine()
+        }
+    }
+
+    @Synchronized
     override fun render(width: Int): List<String> =
-        lines.flatMap { line ->
-            wrapTextWithAnsi(line, width.coerceAtLeast(1))
+        buildList {
+            val stable =
+                if (transient != null && lines.lastOrNull().isNullOrEmpty()) {
+                    lines.dropLast(1)
+                } else {
+                    lines
+                }
+            stable.forEach { line ->
+                addAll(wrapTextWithAnsi(line, width.coerceAtLeast(1)))
+            }
+            transient?.let { value ->
+                addAll(wrapTextWithAnsi(value, width.coerceAtLeast(1)))
+            }
         }
 }
 
@@ -997,6 +1103,9 @@ private fun isCompleteEscapeSequence(value: String): Boolean {
 
 private val KITTY_FLAGS_PATTERN = Regex("""^\u001B\[\?(\d+)u$""")
 private val DEVICE_ATTRIBUTES_PATTERN = Regex("""^\u001B\[\?[\d;]*c$""")
+private const val OSC133_ZONE_START = "\u001B]133;A\u0007"
+private const val OSC133_ZONE_END = "\u001B]133;B\u0007"
+private const val OSC133_ZONE_FINAL = "\u001B]133;C\u0007"
 private const val ESCAPE_CODE = 27
 private const val INPUT_FRAGMENT_TIMEOUT_MS = 12L
 private const val PASTE_START = "\u001B[200~"

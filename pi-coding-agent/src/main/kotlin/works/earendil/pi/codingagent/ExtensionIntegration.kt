@@ -172,6 +172,16 @@ internal fun appendExtensionMessage(
     sessionManager: SessionManager,
     value: JsonElement?,
 ): String? {
+    val message = extensionCustomMessage(value) ?: return null
+    return sessionManager.appendCustomMessageEntry(
+        customType = message.customType,
+        content = message.content,
+        display = message.display,
+        details = message.details,
+    )
+}
+
+internal fun extensionCustomMessage(value: JsonElement?): CustomMessage? {
     val message = value as? JsonObject ?: return null
     val customType = message.stringValue("customType") ?: return null
     val content =
@@ -184,13 +194,26 @@ internal fun appendExtensionMessage(
 
             else -> MessageContent.Text("")
         }
-    return sessionManager.appendCustomMessageEntry(
+    return CustomMessage(
         customType = customType,
         content = content,
         display = message["display"]?.jsonPrimitive?.booleanOrNull ?: true,
         details = message["details"],
     )
 }
+
+internal fun extensionUserMessage(action: JsonObject): UserMessage =
+    when (val content = action["content"]) {
+        is JsonPrimitive -> UserMessage(content.content)
+        is JsonArray ->
+            UserMessage(
+                content.map {
+                    protocolJson.decodeFromJsonElement(ContentBlock.serializer(), it)
+                },
+            )
+
+        else -> UserMessage("")
+    }
 
 internal fun appendAgentMessage(
     sessionManager: SessionManager,
@@ -214,18 +237,7 @@ internal fun queueExtensionUserMessage(
     if (agent?.state?.isStreaming != true) {
         return false
     }
-    val message =
-        when (val content = action["content"]) {
-            is JsonPrimitive -> UserMessage(content.content)
-            is JsonArray ->
-                UserMessage(
-                    content.map {
-                        protocolJson.decodeFromJsonElement(ContentBlock.serializer(), it)
-                    },
-                )
-
-            else -> UserMessage("")
-        }
+    val message = extensionUserMessage(action)
     when (action["options"]?.jsonObject?.stringValue("deliverAs")) {
         "followUp" -> agent.followUp(message)
         else -> agent.steer(message)

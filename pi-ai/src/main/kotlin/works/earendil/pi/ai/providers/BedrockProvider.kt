@@ -4,6 +4,7 @@ import java.net.URI
 import java.time.Duration
 import java.util.Base64
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonArray
@@ -28,6 +29,7 @@ import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
 import software.amazon.awssdk.auth.token.credentials.StaticTokenProvider
 import software.amazon.awssdk.awscore.AwsRequestOverrideConfiguration
 import software.amazon.awssdk.core.SdkBytes
+import software.amazon.awssdk.core.exception.SdkServiceException
 import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
 import software.amazon.awssdk.core.document.Document
 import software.amazon.awssdk.http.Protocol
@@ -64,6 +66,7 @@ import software.amazon.awssdk.services.bedrockruntime.model.ToolUseBlock
 import works.earendil.pi.ai.AssistantDone
 import works.earendil.pi.ai.AssistantError
 import works.earendil.pi.ai.AssistantMessage
+import works.earendil.pi.ai.AssistantMessageDiagnostic
 import works.earendil.pi.ai.AssistantMessageEventStream
 import works.earendil.pi.ai.AssistantStart
 import works.earendil.pi.ai.BashExecutionMessage
@@ -167,8 +170,12 @@ internal fun interface BedrockRuntimeTransport {
     suspend fun converseStream(
         invocation: BedrockInvocation,
         onEvent: (BedrockStreamEvent) -> Unit,
-    )
+    ): BedrockResponseMetadata?
 }
+
+internal data class BedrockResponseMetadata(
+    val requestId: String? = null,
+)
 
 internal data class BedrockInvocation(
     val client: BedrockClientConfiguration,
@@ -245,7 +252,10 @@ internal class BedrockProvider(
             transport.converseStream(invocation, state::handle)
             state.finish()
         }.onFailure { error ->
-            state.fail(formatBedrockError(error))
+            state.fail(
+                formatBedrockError(error),
+                bedrockFailureDiagnostic(error),
+            )
         }
     }
 }
@@ -326,12 +336,18 @@ internal class BedrockStreamState(
         stream.push(AssistantDone(stopReason, final))
     }
 
-    fun fail(message: String) {
+    fun fail(
+        message: String,
+        diagnostic: AssistantMessageDiagnostic? = null,
+    ) {
         stopReason = StopReason.ERROR
         stream.push(
             AssistantError(
                 StopReason.ERROR,
-                snapshot().copy(errorMessage = message),
+                snapshot().copy(
+                    errorMessage = message,
+                    diagnostics = diagnostic?.let(::listOf),
+                ),
             ),
         )
     }
@@ -1251,18 +1267,58 @@ private fun formatBedrockError(error: Throwable): String {
     return "$prefix$core$hint"
 }
 
+private fun bedrockFailureDiagnostic(error: Throwable): AssistantMessageDiagnostic? {
+    if (error is CancellationException) {
+        return null
+    }
+    val failure = error as? BedrockTransportFailure
+    val sdkError =
+        generateSequence(failure?.source ?: error) { current -> current.cause }
+            .filterIsInstance<SdkServiceException>()
+            .firstOrNull()
+    val details =
+        buildJsonObject {
+            sdkError?.statusCode()?.takeIf { it > 0 }?.let { put("status", it) }
+            sdkError
+                ?.javaClass
+                ?.simpleName
+                ?.takeIf { it.endsWith("Exception") }
+                ?.let { put("errorCode", it) }
+            (
+                normalizeBedrockDiagnosticValue(sdkError?.requestId())
+                    ?: normalizeBedrockDiagnosticValue(failure?.responseRequestId)
+            )?.let { put("requestId", it) }
+        }
+    if (details.isEmpty()) {
+        return null
+    }
+    return AssistantMessageDiagnostic(
+        type = "bedrock_response_failure",
+        timestamp = System.currentTimeMillis(),
+        details = details,
+    )
+}
+
+private fun normalizeBedrockDiagnosticValue(value: String?): String? =
+    value
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() && it.length <= MAX_BEDROCK_DIAGNOSTIC_VALUE_CHARS }
+
 private class AwsBedrockRuntimeTransport : BedrockRuntimeTransport {
     override suspend fun converseStream(
         invocation: BedrockInvocation,
         onEvent: (BedrockStreamEvent) -> Unit,
-    ) {
+    ): BedrockResponseMetadata? {
         val client = buildClient(invocation)
         val failure = AtomicReference<Throwable>()
+        val responseRequestId = AtomicReference<String>()
         try {
             val handler =
                 ConverseStreamResponseHandler
                     .builder()
-                    .onResponse { }
+                    .onResponse { response ->
+                        responseRequestId.set(response.responseMetadata()?.requestId())
+                    }
                     .onError(failure::set)
                     .subscriber(
                         ConverseStreamResponseHandler.Visitor
@@ -1309,8 +1365,13 @@ private class AwsBedrockRuntimeTransport : BedrockRuntimeTransport {
                                 )
                             }.build(),
                     ).build()
-            client.converseStream(toSdkRequest(invocation), handler).await()
-            failure.get()?.let { throw it }
+            try {
+                client.converseStream(toSdkRequest(invocation), handler).await()
+                failure.get()?.let { throw it }
+            } catch (error: Throwable) {
+                throw BedrockTransportFailure(error, responseRequestId.get())
+            }
+            return BedrockResponseMetadata(responseRequestId.get())
         } finally {
             client.close()
         }
@@ -1532,8 +1593,13 @@ private class AwsBedrockRuntimeTransport : BedrockRuntimeTransport {
                         .name(raw.getValue("tool").jsonObject.string("name"))
                         .build(),
                 )
-        }
+    }
 }
+
+private class BedrockTransportFailure(
+    val source: Throwable,
+    val responseRequestId: String?,
+) : RuntimeException(source.message, source)
 
 private fun JsonElement.toDocument(): Document =
     when (this) {
@@ -1744,6 +1810,7 @@ private const val BEDROCK_CONTEXT_SAFETY_TOKENS = 4_096
 private const val MIN_BEDROCK_OUTPUT_TOKENS = 1_024
 private const val BEDROCK_CHARS_PER_TOKEN = 4.0
 private const val ESTIMATED_BEDROCK_IMAGE_CHARS = 4_800
+private const val MAX_BEDROCK_DIAGNOSTIC_VALUE_CHARS = 200
 private val BEDROCK_ERROR_PREFIXES =
     mapOf(
         "InternalServerException" to "Internal server error: ",

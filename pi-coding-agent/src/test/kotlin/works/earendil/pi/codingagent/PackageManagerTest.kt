@@ -687,6 +687,42 @@ class PackageManagerTest {
         assertEquals("No matching package found for example. Did you mean npm:example?", error.message)
     }
 
+    @Test
+    fun `malformed package manifest fields do not hide valid resources`() {
+        val root = Files.createTempDirectory("pi-kotlin-package-manifest-validation")
+        val cwd = Files.createDirectories(root.resolve("project"))
+        val agentDir = Files.createDirectories(root.resolve("agent"))
+        val packageRoot = Files.createDirectories(root.resolve("package"))
+        val skill = Files.createDirectories(packageRoot.resolve("skills").resolve("bad")).resolve("SKILL.md")
+        val prompt = Files.createDirectories(packageRoot.resolve("prompts")).resolve("valid.md")
+        Files.writeString(skill, "---\nname: bad\ndescription: bad\n---\n")
+        Files.writeString(prompt, "Valid prompt")
+        Files.writeString(
+            packageRoot.resolve("package.json"),
+            """
+            {
+              "pi": {
+                "skills": "./skills",
+                "prompts": ["./prompts"]
+              }
+            }
+            """.trimIndent(),
+        )
+        val settings = SettingsStore(cwd, agentDir, projectTrusted = true)
+        settings.setPackages(SettingsScope.USER, listOf(PackageSourceConfig(packageRoot.toString())))
+
+        val resources =
+            PackageManager(
+                cwd = cwd,
+                agentDir = agentDir,
+                settings = settings,
+                projectTrusted = true,
+            ).resolve()
+
+        assertFalse(resources.skills.any { it.path == skill })
+        assertTrue(resources.prompts.any { it.path == prompt })
+    }
+
     private fun createResourcePackage(
         root: Path,
         prefix: String,

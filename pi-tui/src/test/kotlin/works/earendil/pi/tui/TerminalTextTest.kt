@@ -24,6 +24,35 @@ class TerminalTextTest {
     }
 
     @Test
+    fun `counts Indic and Myanmar terminal spacing inside grapheme clusters`() {
+        assertEquals(2, visibleWidth("र्क"))
+        assertEquals(5, visibleWidth("नेटवर्क"))
+        assertEquals(2, visibleWidth("র্ক"))
+        assertEquals(2, visibleWidth("ર્ક"))
+        assertEquals(2, visibleWidth("ର୍କ"))
+        assertEquals(2, visibleWidth("ర్క"))
+        assertEquals(2, visibleWidth("ര്‍ക"))
+        assertEquals(2, visibleWidth("ကာ"))
+        assertEquals(2, visibleWidth("ကေ"))
+        assertEquals(2, visibleWidth("က်"))
+        assertEquals(2, visibleWidth("ကျ"))
+        assertEquals(2, visibleWidth("ကြ"))
+        assertEquals(1, visibleWidth("ကို"))
+        assertEquals(1, visibleWidth("က္"))
+    }
+
+    @Test
+    fun `keeps ordinary combining marks zero width`() {
+        assertEquals(1, visibleWidth("e\u0301"))
+        assertEquals(1, visibleWidth("שָׁ"))
+        assertEquals(1, visibleWidth("بّ"))
+        assertEquals(1, visibleWidth("རྐ"))
+        assertEquals(1, visibleWidth("ᜠ᜴"))
+        assertEquals(2, visibleWidth("が"))
+        assertEquals(2, visibleWidth("か\u3099"))
+    }
+
+    @Test
     fun `normalizes only visible tabs and Thai Lao AM vowels`() {
         val control = "\u001B]8;;https://example.test/a\tb\u0007"
         assertEquals("${control}label   text", normalizeTerminalOutput("${control}label\ttext"))

@@ -1,5 +1,6 @@
 package works.earendil.pi.storage.sqlite
 
+import java.sql.ResultSet
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -27,6 +28,16 @@ internal data class SessionEntryRow(
     val timestamp: String,
     val payload: String,
 )
+
+internal fun ResultSet.toEntryRow(): SessionEntryRow =
+    SessionEntryRow(
+        id = getString("id"),
+        sequence = getInt("entry_seq"),
+        parentId = getString("parent_id"),
+        type = getString("type"),
+        timestamp = getString("timestamp"),
+        payload = getString("payload"),
+    )
 
 internal fun encodeEntryPayload(entry: SessionTreeEntry): String {
     val encoded = sqliteJson.encodeToJsonElement(SessionTreeEntry.serializer(), entry).jsonObject.toMutableMap()

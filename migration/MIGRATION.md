@@ -5,7 +5,8 @@
 - Repository: `/Users/junyizhang/Git/pi`
 - Commit: `9b3a2059171bcc74ad9d2cadeea6d186776cf2db`
 - Source date: July 22, 2026
-- Packages: `ai`, `agent`, `tui`, `storage/sqlite-node`, `coding-agent`, `server`
+- Packages: `ai`, `agent`, `tui`, `storage/sqlite-node`, `coding-agent`,
+  `protocol`, `client`, `server`
 - Source size at baseline: 1,082 files and about 255,245 lines across TypeScript,
   JavaScript, JSON, and Markdown
 

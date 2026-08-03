@@ -5,7 +5,7 @@ import works.earendil.pi.ai.Usage
 import works.earendil.pi.ai.uuidv7
 
 class InMemorySessionStorage<M : SessionMetadata>(
-    private val metadata: M,
+    override val metadata: M,
     entries: List<SessionTreeEntry> = emptyList(),
 ) : SessionStorage<M> {
     private val entries = entries.toMutableList()
@@ -23,54 +23,28 @@ class InMemorySessionStorage<M : SessionMetadata>(
         }
     }
 
-    override suspend fun getMetadata(): M = metadata
-
-    override suspend fun getLeafId(): String? {
+    override suspend fun readHead(): SessionHead {
         if (leafId != null && !byId.containsKey(leafId)) {
             throw SessionException(SessionErrorCode.INVALID_SESSION, "Entry $leafId not found")
         }
-        return leafId
-    }
-
-    override suspend fun setLeafId(leafId: String?) {
-        if (leafId != null && !byId.containsKey(leafId)) {
-            throw SessionException(SessionErrorCode.NOT_FOUND, "Entry $leafId not found")
-        }
-        appendEntry(
-            LeafEntry(
-                id = createEntryId(),
-                parentId = this.leafId,
-                timestamp = nowTimestamp(),
-                targetId = leafId,
-            ),
-        )
-    }
-
-    override suspend fun createEntryId(): String {
-        repeat(100) {
-            val candidate = uuidv7().takeLast(8)
-            if (!byId.containsKey(candidate)) {
-                return candidate
-            }
-        }
-        return uuidv7()
+        return SessionHead(leafId)
     }
 
     override suspend fun appendEntry(entry: SessionTreeEntry) {
+        if (byId.containsKey(entry.id)) {
+            throw SessionException(SessionErrorCode.INVALID_ENTRY, "Entry ${entry.id} already exists")
+        }
         entries += entry
         byId[entry.id] = entry
         updateLabel(entry)
         leafId = leafIdAfterEntry(entry)
     }
 
-    override suspend fun getEntry(id: String): SessionTreeEntry? = byId[id]
-
-    override suspend fun findEntries(type: String): List<SessionTreeEntry> =
-        entries.filter { entryType(it) == type }
+    override suspend fun readEntry(id: String): SessionTreeEntry? = byId[id]
 
     override suspend fun getLabel(id: String): String? = labelsById[id]
 
-    override suspend fun getSessionName(): String? =
+    override suspend fun getName(): String? =
         entries
             .filterIsInstance<SessionInfoEntry>()
             .lastOrNull()
@@ -78,9 +52,9 @@ class InMemorySessionStorage<M : SessionMetadata>(
             ?.trim()
             ?.takeIf(String::isNotEmpty)
 
-    override suspend fun getSessionStats(): SessionStats = calculateSessionStats(entries)
+    override suspend fun getStats(): SessionStats = calculateSessionStats(entries)
 
-    override suspend fun getPathToRootOrCompaction(leafId: String?): List<SessionTreeEntry> {
+    override suspend fun readPathToRootOrCompaction(leafId: String?): List<SessionTreeEntry> {
         if (leafId == null) {
             return emptyList()
         }
@@ -106,14 +80,18 @@ class InMemorySessionStorage<M : SessionMetadata>(
         return path
     }
 
-    override suspend fun getEntries(options: SessionEntryCursorOptions?): List<SessionTreeEntry> {
-        if (options?.limit == null) {
-            return entries.toList()
-        }
-        val endExclusive = options.afterEntrySeq?.coerceIn(0, entries.size) ?: entries.size
-        val start = (endExclusive - options.limit).coerceAtLeast(0)
+    override suspend fun readEntries(options: SessionEntryCursorOptions?): List<SessionTreeEntry> {
+        val start = options?.afterEntrySeq?.coerceIn(0, entries.size) ?: 0
+        val endExclusive =
+            options
+                ?.limit
+                ?.let { limit -> (start + limit.coerceAtLeast(0)).coerceAtMost(entries.size) }
+                ?: entries.size
         return entries.subList(start, endExclusive).toList()
     }
+
+    override suspend fun findEntriesOnBranch(query: SessionBranchQuery): List<SessionTreeEntry> =
+        findEntriesOnCanonicalBranch(byId, query)
 
     private fun updateLabel(entry: SessionTreeEntry) {
         if (entry !is LabelEntry) {
@@ -128,40 +106,106 @@ class InMemorySessionStorage<M : SessionMetadata>(
     }
 }
 
+fun findEntriesOnCanonicalBranch(
+    entriesById: Map<String, SessionTreeEntry>,
+    query: SessionBranchQuery,
+): List<SessionTreeEntry> {
+    val startId = query.start ?: return emptyList()
+    val pathFromStart = mutableListOf<SessionTreeEntry>()
+    val visited = mutableSetOf<String>()
+    var current =
+        entriesById[startId]
+            ?: throw SessionException(SessionErrorCode.NOT_FOUND, "Entry $startId not found")
+    while (true) {
+        if (!visited.add(current.id)) {
+            throw SessionException(
+                SessionErrorCode.INVALID_SESSION,
+                "Session branch contains a cycle at ${current.id}",
+            )
+        }
+        pathFromStart += current
+        if (
+            query.order == SessionBranchOrder.NEWEST_FIRST &&
+            (current.id == query.stopAtId || entryType(current) == query.stopAtType)
+        ) {
+            break
+        }
+        val parentId = current.parentId ?: break
+        current =
+            entriesById[parentId]
+                ?: throw SessionException(
+                    SessionErrorCode.INVALID_SESSION,
+                    "Entry $parentId not found",
+                )
+    }
+    val traversal =
+        if (query.order == SessionBranchOrder.OLDEST_FIRST) {
+            pathFromStart.asReversed()
+        } else {
+            pathFromStart
+        }
+    val stopIndex =
+        if (query.order == SessionBranchOrder.OLDEST_FIRST) {
+            traversal.indexOfFirst { entry ->
+                entry.id == query.stopAtId || entryType(entry) == query.stopAtType
+            }
+        } else {
+            -1
+        }
+    val bounded = if (stopIndex < 0) traversal else traversal.take(stopIndex + 1)
+    val filtered =
+        bounded.filter { entry ->
+            (query.type == null || entryType(entry) == query.type) &&
+                (
+                    query.customType == null ||
+                        (entry is CustomEntry && entry.customType == query.customType)
+                )
+        }
+    return query.limit?.let(filtered::take) ?: filtered
+}
+
 class InMemorySessionRepository : SessionRepository<SessionMetadata, InMemoryCreateOptions, Unit> {
-    private val sessions = linkedMapOf<String, Session<SessionMetadata>>()
+    private val sessions = linkedMapOf<String, InMemorySessionStorage<SessionMetadata>>()
 
     override suspend fun create(options: InMemoryCreateOptions): Session<SessionMetadata> {
         val metadata = SessionMetadata(options.id ?: uuidv7(), nowTimestamp())
-        val session = Session(InMemorySessionStorage(metadata))
-        sessions[metadata.id] = session
-        return session
+        val storage = InMemorySessionStorage(metadata)
+        sessions[metadata.id] = storage
+        return createSession(storage)
     }
 
     override suspend fun open(metadata: SessionMetadata): Session<SessionMetadata> =
         sessions[metadata.id]
+            ?.let { createSession(it) }
             ?: throw SessionException(SessionErrorCode.NOT_FOUND, "Session not found: ${metadata.id}")
 
     override suspend fun list(options: Unit?): List<SessionMetadata> =
-        buildList {
-            sessions.values.forEach { session -> add(session.getMetadata()) }
-        }
+        sessions.values.map(InMemorySessionStorage<SessionMetadata>::metadata)
 
     override suspend fun delete(metadata: SessionMetadata) {
         sessions.remove(metadata.id)
     }
 
-    suspend fun fork(
-        sourceMetadata: SessionMetadata,
-        options: SessionForkOptions = SessionForkOptions(),
+    override suspend fun fork(
+        source: SessionMetadata,
+        createOptions: InMemoryCreateOptions,
+        forkOptions: SessionForkOptions,
     ): Session<SessionMetadata> {
-        val source = open(sourceMetadata)
-        val forkedEntries = getEntriesToFork(source.getStorage(), options)
-        val metadata = SessionMetadata(options.id ?: uuidv7(), nowTimestamp())
-        val session = Session(InMemorySessionStorage(metadata, forkedEntries))
-        sessions[metadata.id] = session
-        return session
+        val sourceStorage =
+            sessions[source.id]
+                ?: throw SessionException(SessionErrorCode.NOT_FOUND, "Session not found: ${source.id}")
+        val forkedEntries = getEntriesToFork(sourceStorage, forkOptions)
+        val metadata = SessionMetadata(createOptions.id ?: forkOptions.id ?: uuidv7(), nowTimestamp())
+        val storage = InMemorySessionStorage(metadata, forkedEntries)
+        sessions[metadata.id] = storage
+        return createSession(storage)
     }
+
+    suspend fun fork(
+        source: SessionMetadata,
+        options: SessionForkOptions = SessionForkOptions(),
+    ): Session<SessionMetadata> =
+        fork(source, InMemoryCreateOptions(options.id), options)
 }
 
 data class InMemoryCreateOptions(
@@ -172,9 +216,9 @@ suspend fun getEntriesToFork(
     storage: SessionStorage<*>,
     options: SessionForkOptions,
 ): List<SessionTreeEntry> {
-    val entryId = options.entryId ?: return storage.getEntries()
+    val entryId = options.entryId ?: return storage.readEntries()
     val target =
-        storage.getEntry(entryId)
+        storage.readEntry(entryId)
             ?: throw SessionException(SessionErrorCode.INVALID_FORK_TARGET, "Entry $entryId not found")
     val effectiveLeafId =
         when (options.position) {
@@ -189,8 +233,39 @@ suspend fun getEntriesToFork(
                 target.parentId
             }
         }
-    return storage.getPathToRootOrCompaction(effectiveLeafId)
+    return storage.readPathToRootOrCompaction(effectiveLeafId)
 }
+
+fun <M : SessionMetadata, C, L> createScanningSessionSearch(
+    repository: SessionRepository<M, C, L>,
+    cwd: (M) -> String? = { null },
+): SessionSearch<M> =
+    SessionSearch { options ->
+        val query = options.text.trim().lowercase()
+        if (query.isEmpty()) {
+            return@SessionSearch emptyList()
+        }
+        buildList {
+            repository.list().forEach { metadata ->
+                if (options.cwd != null && cwd(metadata) != options.cwd) {
+                    return@forEach
+                }
+                repository.open(metadata).getEntries().forEach { entry ->
+                    val snippet = entry.toString()
+                    if (query in snippet.lowercase()) {
+                        add(
+                            SessionSearchHit(
+                                metadata = metadata,
+                                entryId = entry.id,
+                                timestamp = entry.timestamp,
+                                snippet = snippet,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
 
 fun calculateSessionStats(entries: List<SessionTreeEntry>): SessionStats {
     var messageCount = 0

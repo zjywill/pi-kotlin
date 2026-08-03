@@ -159,6 +159,7 @@ class OpenAICodexProvider private constructor(
                                     ),
                                 transport = options.transport,
                                 cacheSessionId = cacheSessionId,
+                                accountId = accountId,
                                 idleTimeoutMs = options.timeoutMs,
                                 connectTimeoutMs = options.websocketConnectTimeoutMs,
                                 onEvent = onEvent,

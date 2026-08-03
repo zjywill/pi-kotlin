@@ -91,6 +91,7 @@ class OpenAIChatProvider(
         var stopReason = StopReason.PENDING
         var rawStopReason: String? = null
         var stopError: String? = null
+        var hasFinishReason = false
         var textIndex: Int? = null
         var thinkingIndex: Int? = null
         val tools = linkedMapOf<Int, StreamingTool>()
@@ -236,6 +237,7 @@ class OpenAIChatProvider(
                 }
             }
             choice.string("finish_reason")?.let { reason ->
+                hasFinishReason = true
                 rawStopReason = reason
                 val mapped = mapOpenAIChatStopReason(reason)
                 stopReason = mapped.first
@@ -270,6 +272,9 @@ class OpenAIChatProvider(
                 )
             blocks[tool.contentIndex] = call
             stream.push(ToolCallEnd(tool.contentIndex, call, snapshot()))
+        }
+        if (!hasFinishReason && !compat.supportsFinishReason) {
+            stopReason = if (blocks.any { it is ToolCall }) StopReason.TOOL_USE else StopReason.STOP
         }
         val final = snapshot()
         if (stopReason == StopReason.PENDING) {
@@ -453,6 +458,7 @@ private data class OpenAIChatCompat(
     val supportsStore: Boolean,
     val supportsDeveloperRole: Boolean,
     val supportsUsageInStreaming: Boolean,
+    val supportsFinishReason: Boolean,
     val maxTokensField: String,
     val supportsStrictMode: Boolean,
     val supportsOpenAIGrammarTools: Boolean,
@@ -510,6 +516,7 @@ private fun openAIChatCompat(model: Model): OpenAIChatCompat {
                 (isOpenRouter && (model.id.startsWith("anthropic/") || model.id.startsWith("openai/"))) ||
                     (!isNonStandard && !isOpenRouter),
             supportsUsageInStreaming = true,
+            supportsFinishReason = true,
             maxTokensField = if (useMaxTokens) "max_tokens" else "max_completion_tokens",
             supportsStrictMode = !isMoonshot && !isTogether && !isCloudflareGateway && !isNvidia,
             supportsOpenAIGrammarTools = false,
@@ -539,6 +546,8 @@ private fun openAIChatCompat(model: Model): OpenAIChatCompat {
         supportsDeveloperRole = raw.boolean("supportsDeveloperRole") ?: detected.supportsDeveloperRole,
         supportsUsageInStreaming =
             raw.boolean("supportsUsageInStreaming") ?: detected.supportsUsageInStreaming,
+        supportsFinishReason =
+            raw.boolean("supportsFinishReason") ?: detected.supportsFinishReason,
         maxTokensField = raw.string("maxTokensField") ?: detected.maxTokensField,
         supportsStrictMode = raw.boolean("supportsStrictMode") ?: detected.supportsStrictMode,
         supportsOpenAIGrammarTools =

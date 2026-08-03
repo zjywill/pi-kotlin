@@ -123,6 +123,7 @@ internal data class ExtensionRegistration(
     val shortcuts: List<ExtensionShortcutRegistration>,
     val messageRenderers: List<ExtensionRendererRegistration>,
     val entryRenderers: List<ExtensionRendererRegistration>,
+    val hasMarkdownTransformer: Boolean = false,
 )
 
 internal data class ExtensionRegistrations(
@@ -133,6 +134,7 @@ internal data class ExtensionRegistrations(
     val flags: List<ExtensionFlagRegistration> = emptyList(),
     val providers: List<JsonObject> = emptyList(),
     val autocompleteProviderCount: Int = 0,
+    val markdownTransformerCount: Int = 0,
 )
 
 internal data class ExtensionInvocation(
@@ -537,6 +539,27 @@ internal class ExtensionHost private constructor(
                 put("context", context)
             },
         )
+
+    fun invokeMarkdownTransform(
+        markdown: String,
+        messageType: String,
+        isStreaming: Boolean,
+        availableWidth: Int,
+        context: JsonObject = JsonObject(emptyMap()),
+    ): String {
+        val invocation =
+            invoke(
+                buildJsonObject {
+                    put("type", "invoke_markdown_transform")
+                    put("markdown", markdown)
+                    put("messageType", messageType)
+                    put("isStreaming", isStreaming)
+                    put("availableWidth", availableWidth.coerceAtLeast(1))
+                    put("context", context)
+                },
+            )
+        return (invocation.result as? JsonObject)?.string("markdown") ?: markdown
+    }
 
     fun refreshRegistrations(): ExtensionRegistrations {
         val response =
@@ -1195,6 +1218,11 @@ internal class ExtensionHost private constructor(
                                 },
                         messageRenderers = parseRendererRegistrations(item, "messageRenderers", path),
                         entryRenderers = parseRendererRegistrations(item, "entryRenderers", path),
+                        hasMarkdownTransformer =
+                            item["hasMarkdownTransformer"]
+                                ?.jsonPrimitive
+                                ?.booleanOrNull
+                                ?: false,
                     )
                 }
         val tools =
@@ -1264,6 +1292,12 @@ internal class ExtensionHost private constructor(
             providers = value["providers"]?.jsonArray.orEmpty().map(JsonElement::jsonObject),
             autocompleteProviderCount =
                 value["autocompleteProviderCount"]
+                    ?.jsonPrimitive
+                    ?.contentOrNull
+                    ?.toIntOrNull()
+                    ?: 0,
+            markdownTransformerCount =
+                value["markdownTransformerCount"]
                     ?.jsonPrimitive
                     ?.contentOrNull
                     ?.toIntOrNull()
@@ -1556,6 +1590,8 @@ internal fun extensionContextJson(
     flagValues: Map<String, Any>,
     scopedModels: List<ScopedModel> = emptyList(),
     uiWidth: Int? = null,
+    autocompleteMaxVisible: Int = 5,
+    toolsExpanded: Boolean = false,
     themeRegistry: ThemeRegistry? = null,
 ): JsonObject =
     buildJsonObject {
@@ -1597,6 +1633,8 @@ internal fun extensionContextJson(
         put("hasPendingMessages", hasPendingMessages)
         put("flags", extensionFlagValuesJson(flagValues))
         uiWidth?.takeIf { it > 0 }?.let { put("uiWidth", it) }
+        put("autocompleteMaxVisible", autocompleteMaxVisible.coerceIn(3, 20))
+        put("toolsExpanded", toolsExpanded)
         themeRegistry?.extensionJson()?.forEach { (name, value) -> put(name, value) }
     }
 

@@ -9,6 +9,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import works.earendil.pi.ai.AssistantDone
+import works.earendil.pi.ai.AssistantMessage
 import works.earendil.pi.ai.Context
 import works.earendil.pi.ai.GrammarConstrainedSamplingConfig
 import works.earendil.pi.ai.GrammarVariants
@@ -17,12 +18,14 @@ import works.earendil.pi.ai.ModelInput
 import works.earendil.pi.ai.StopReason
 import works.earendil.pi.ai.StreamOptions
 import works.earendil.pi.ai.TextContent
+import works.earendil.pi.ai.ThinkingContent
 import works.earendil.pi.ai.ToolCall
 import works.earendil.pi.ai.ToolCallDelta
 import works.earendil.pi.ai.ToolDefinition
 import works.earendil.pi.ai.UserMessage
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class ProviderFixtureTest {
@@ -139,6 +142,54 @@ class ProviderFixtureTest {
         }
 
     @Test
+    fun `openai chat provider infers terminal reason when compatibility disables finish reasons`() =
+        runTest {
+            val fixture =
+                fixtureServer(
+                    """
+                    data: {"choices":[{"delta":{"content":"complete"}}]}
+
+                    data: [DONE]
+
+                    """.trimIndent(),
+                )
+            try {
+                val model =
+                    model(
+                        id = "fixture",
+                        api = "openai-completions",
+                        provider = "fixture",
+                        baseUrl = fixture.baseUrl,
+                    ).copy(
+                        compat =
+                            buildJsonObject {
+                                put("supportsFinishReason", false)
+                            },
+                    )
+                val provider =
+                    OpenAIChatProvider(
+                        "fixture",
+                        "Fixture",
+                        fixture.baseUrl,
+                        listOf(model),
+                        listOf("UNUSED"),
+                    )
+
+                val result =
+                    provider.stream(
+                        model,
+                        Context(messages = mutableListOf(UserMessage("hi"))),
+                        StreamOptions(apiKey = "test"),
+                    ).result()
+
+                assertEquals(StopReason.STOP, result.stopReason)
+                assertEquals("complete", result.content.filterIsInstance<TextContent>().single().text)
+            } finally {
+                fixture.close()
+            }
+        }
+
+    @Test
     fun `openai chat provider ignores empty custom payloads on function tool calls`() =
         runTest {
             val fixture =
@@ -205,7 +256,7 @@ class ProviderFixtureTest {
                     data: {"type":"message_start","message":{"id":"msg-1","usage":{"input_tokens":7,"output_tokens":0}}}
 
                     event: content_block_start
-                    data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+                    data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"initial "}}
 
                     event: content_block_delta
                     data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}
@@ -214,13 +265,28 @@ class ProviderFixtureTest {
                     data: {"type":"content_block_stop","index":0}
 
                     event: content_block_start
-                    data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tool-1","name":"echo","input":{}}}
+                    data: {"type":"content_block_start","index":1,"content_block":{"type":"thinking","thinking":"think ","signature":"sig-"}}
 
                     event: content_block_delta
-                    data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"value\":\"ok\"}"}}
+                    data: {"type":"content_block_delta","index":1,"delta":{"type":"thinking_delta","thinking":"more"}}
+
+                    event: content_block_delta
+                    data: {"type":"content_block_delta","index":1,"delta":{"type":"signature_delta","signature":"tail"}}
+
+                    event: content_block_delta
+                    data: {"type":"content_block_delta","index":1,"delta":{"type":"thinking_delta","thinking":""}}
 
                     event: content_block_stop
                     data: {"type":"content_block_stop","index":1}
+
+                    event: content_block_start
+                    data: {"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"tool-1","name":"echo","input":{}}}
+
+                    event: content_block_delta
+                    data: {"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"value\":\"ok\"}"}}
+
+                    event: content_block_stop
+                    data: {"type":"content_block_stop","index":2}
 
                     event: message_delta
                     data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":5}}
@@ -254,11 +320,13 @@ class ProviderFixtureTest {
                     ).result()
 
                 assertEquals(StopReason.TOOL_USE, result.stopReason)
-                assertEquals("hello", (result.content[0] as TextContent).text)
-                assertEquals("echo", (result.content[1] as ToolCall).name)
+                assertEquals("initial hello", (result.content[0] as TextContent).text)
+                assertEquals("think more", (result.content[1] as ThinkingContent).thinking)
+                assertEquals("sig-tail", (result.content[1] as ThinkingContent).thinkingSignature)
+                assertEquals("echo", (result.content[2] as ToolCall).name)
                 assertEquals(
                     "ok",
-                    ((result.content[1] as ToolCall).arguments["value"] as kotlinx.serialization.json.JsonPrimitive)
+                    ((result.content[2] as ToolCall).arguments["value"] as kotlinx.serialization.json.JsonPrimitive)
                         .content,
                 )
                 assertEquals("msg-1", result.responseId)
@@ -468,6 +536,66 @@ class ProviderFixtureTest {
                 fixture.close()
             }
         }
+
+    @Test
+    fun `google history keeps signed empty blocks only for the same model`() {
+        val signature = "AAAAAAAAAAAAAAAAAAAAAA=="
+        val model =
+            model(
+                id = "fixture",
+                api = "google-generative-ai",
+                provider = "fixture",
+                baseUrl = "https://example.test",
+            )
+        val sameModel =
+            buildGoogleRequestBody(
+                model,
+                Context(
+                    messages =
+                        mutableListOf(
+                            AssistantMessage(
+                                content =
+                                    listOf(
+                                        ThinkingContent("", signature),
+                                        TextContent("", signature),
+                                        ThinkingContent(""),
+                                        TextContent(" "),
+                                    ),
+                                api = model.api,
+                                provider = model.provider,
+                                model = model.id,
+                                stopReason = StopReason.TOOL_USE,
+                            ),
+                        ),
+                ),
+                StreamOptions(),
+            ).toString()
+        val otherModel =
+            buildGoogleRequestBody(
+                model,
+                Context(
+                    messages =
+                        mutableListOf(
+                            AssistantMessage(
+                                content =
+                                    listOf(
+                                        ThinkingContent("", signature),
+                                        TextContent("", signature),
+                                    ),
+                                api = model.api,
+                                provider = model.provider,
+                                model = "other",
+                                stopReason = StopReason.TOOL_USE,
+                            ),
+                        ),
+                ),
+                StreamOptions(),
+            ).toString()
+
+        assertEquals(2, Regex(Regex.escape(signature)).findAll(sameModel).count())
+        assertFalse(otherModel.contains(signature))
+        assertFalse(otherModel.contains("\"role\":\"model\""))
+    }
 
     private fun fixtureServer(response: String): FixtureServer {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)

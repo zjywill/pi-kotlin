@@ -63,6 +63,7 @@ data class Args(
     var listModels: String? = null,
     var listModelsRequested: Boolean = false,
     var offline: Boolean = false,
+    var uiMode: UiMode? = null,
     var verbose: Boolean = false,
     var projectTrustOverride: Boolean? = null,
     val messages: MutableList<String> = mutableListOf(),
@@ -163,6 +164,34 @@ fun parseArgs(arguments: List<String>): Args {
                 }
             }
 
+            argument == "--ui-mode" -> {
+                val value = arguments.getOrNull(index + 1)
+                val mode =
+                    when (value) {
+                        UiMode.REGULAR.wireValue -> UiMode.REGULAR
+                        UiMode.FULLSCREEN.wireValue -> UiMode.FULLSCREEN
+                        else -> null
+                    }
+                if (mode != null) {
+                    result.uiMode = mode
+                    index++
+                } else if (value == null || value.startsWith("-")) {
+                    result.diagnostics +=
+                        Diagnostic(
+                            Diagnostic.Type.ERROR,
+                            "--ui-mode requires regular or fullscreen",
+                        )
+                } else {
+                    index++
+                    result.diagnostics +=
+                        Diagnostic(
+                            Diagnostic.Type.ERROR,
+                            "Invalid UI mode \"$value\". Valid values: regular, fullscreen",
+                        )
+                }
+            }
+
+            argument == "--alt" -> result.uiMode = UiMode.FULLSCREEN
             argument == "--verbose" -> result.verbose = true
             argument == "--approve" || argument == "-a" -> result.projectTrustOverride = true
             argument == "--no-approve" || argument == "-na" -> result.projectTrustOverride = false

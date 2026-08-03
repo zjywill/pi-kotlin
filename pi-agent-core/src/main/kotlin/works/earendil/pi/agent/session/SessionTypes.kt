@@ -175,37 +175,60 @@ open class SessionMetadata(
 )
 
 data class SessionEntryCursorOptions(
+    /** Number of entries already consumed; reading starts at this zero-based sequence. */
     val afterEntrySeq: Int? = null,
     val limit: Int? = null,
 )
 
+enum class SessionBranchOrder {
+    NEWEST_FIRST,
+    OLDEST_FIRST,
+}
+
+data class SessionBranchQuery(
+    val start: String? = null,
+    val startFromActiveLeaf: Boolean = true,
+    val stopAtType: String? = null,
+    val stopAtId: String? = null,
+    val type: String? = null,
+    val customType: String? = null,
+    val order: SessionBranchOrder = SessionBranchOrder.NEWEST_FIRST,
+    val limit: Int? = null,
+) {
+    init {
+        require(limit == null || limit > 0) {
+            "Session branch query limit must be a positive integer"
+        }
+    }
+}
+
 interface SessionStorage<M : SessionMetadata> {
-    suspend fun getMetadata(): M
+    val metadata: M
 
-    suspend fun getLeafId(): String?
-
-    suspend fun setLeafId(leafId: String?)
-
-    suspend fun createEntryId(): String
+    suspend fun readHead(): SessionHead
 
     suspend fun appendEntry(entry: SessionTreeEntry)
 
-    suspend fun getEntry(id: String): SessionTreeEntry?
-
-    suspend fun findEntries(type: String): List<SessionTreeEntry>
+    suspend fun readEntry(id: String): SessionTreeEntry?
 
     suspend fun getLabel(id: String): String?
 
-    suspend fun getSessionName(): String?
+    suspend fun getName(): String?
 
-    suspend fun getSessionStats(): SessionStats
+    suspend fun getStats(): SessionStats
 
-    suspend fun getPathToRootOrCompaction(leafId: String?): List<SessionTreeEntry>
+    suspend fun readPathToRootOrCompaction(leafId: String?): List<SessionTreeEntry>
 
-    suspend fun getEntries(options: SessionEntryCursorOptions? = null): List<SessionTreeEntry>
+    suspend fun readEntries(options: SessionEntryCursorOptions? = null): List<SessionTreeEntry>
+
+    suspend fun findEntriesOnBranch(query: SessionBranchQuery): List<SessionTreeEntry>
 
     suspend fun close() = Unit
 }
+
+data class SessionHead(
+    val leafId: String?,
+)
 
 data class SessionForkOptions(
     val entryId: String? = null,
@@ -218,6 +241,19 @@ data class SessionForkOptions(
     }
 }
 
+data class SessionSearchOptions(
+    val text: String,
+    val cwd: String? = null,
+)
+
+data class SessionSearchHit<M : SessionMetadata>(
+    val metadata: M,
+    val entryId: String,
+    val timestamp: String,
+    val snippet: String? = null,
+    val score: Double? = null,
+)
+
 interface SessionRepository<M : SessionMetadata, C, L> {
     suspend fun create(options: C): Session<M>
 
@@ -226,6 +262,16 @@ interface SessionRepository<M : SessionMetadata, C, L> {
     suspend fun list(options: L? = null): List<M>
 
     suspend fun delete(metadata: M)
+
+    suspend fun fork(
+        source: M,
+        createOptions: C,
+        forkOptions: SessionForkOptions = SessionForkOptions(),
+    ): Session<M>
+}
+
+fun interface SessionSearch<M : SessionMetadata> {
+    suspend fun search(options: SessionSearchOptions): List<SessionSearchHit<M>>
 }
 
 fun nowTimestamp(): String = Instant.now().toString()

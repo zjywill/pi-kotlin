@@ -128,6 +128,7 @@ private suspend fun captureBedrockEvents(): BedrockStreamCapture {
             onEvent(BedrockStreamEvent.ContentStop(2))
             onEvent(BedrockStreamEvent.MessageStop("tool_use"))
             onEvent(BedrockStreamEvent.Metadata(10, 5, 3, 2, 20))
+            null
         }
     val model =
         fixtureModel(

@@ -1,6 +1,8 @@
 package works.earendil.pi.agent.session
 
 import java.time.Instant
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonElement
 import works.earendil.pi.ai.AssistantMessage
 import works.earendil.pi.ai.BranchSummaryMessage
@@ -9,6 +11,7 @@ import works.earendil.pi.ai.CustomMessage
 import works.earendil.pi.ai.Message
 import works.earendil.pi.ai.MessageContent
 import works.earendil.pi.ai.Usage
+import works.earendil.pi.ai.uuidv7
 
 typealias ContextEntryTransform = (List<SessionTreeEntry>) -> List<SessionTreeEntry>
 typealias CustomEntryProjector = (CustomEntry, Int, List<SessionTreeEntry>) -> List<Message>
@@ -120,21 +123,38 @@ fun buildSessionContext(
 
 class Session<M : SessionMetadata>(
     private val storage: SessionStorage<M>,
+    initialLeafId: String?,
     private val contextBuildOptions: SessionContextBuildOptions = SessionContextBuildOptions(),
 ) {
-    suspend fun getMetadata(): M = storage.getMetadata()
+    private val appendMutex = Mutex()
+    private val metadata = storage.metadata
+    private var leafId = initialLeafId
+
+    suspend fun getMetadata(): M = metadata
 
     fun getStorage(): SessionStorage<M> = storage
 
-    suspend fun getLeafId(): String? = storage.getLeafId()
+    suspend fun getLeafId(): String? = leafId
 
-    suspend fun getEntry(id: String): SessionTreeEntry? = storage.getEntry(id)
+    suspend fun getEntry(id: String): SessionTreeEntry? = storage.readEntry(id)
 
     suspend fun getEntries(options: SessionEntryCursorOptions? = null): List<SessionTreeEntry> =
-        storage.getEntries(options)
+        storage.readEntries(options)
 
     suspend fun getBranch(fromId: String? = null): List<SessionTreeEntry> =
-        storage.getPathToRootOrCompaction(fromId ?: storage.getLeafId())
+        storage.readPathToRootOrCompaction(fromId ?: leafId)
+
+    suspend fun findEntriesOnBranch(query: SessionBranchQuery = SessionBranchQuery()): List<SessionTreeEntry> =
+        storage.findEntriesOnBranch(
+            if (query.startFromActiveLeaf) {
+                query.copy(start = leafId, startFromActiveLeaf = false)
+            } else {
+                query
+            },
+        )
+
+    suspend fun findEntryOnBranch(query: SessionBranchQuery = SessionBranchQuery()): SessionTreeEntry? =
+        findEntriesOnBranch(query.copy(limit = 1)).firstOrNull()
 
     suspend fun buildContext(options: SessionContextBuildOptions = SessionContextBuildOptions()): SessionContext =
         buildSessionContext(
@@ -147,9 +167,9 @@ class Session<M : SessionMetadata>(
 
     suspend fun getLabel(id: String): String? = storage.getLabel(id)
 
-    suspend fun getSessionStats(): SessionStats = storage.getSessionStats()
+    suspend fun getSessionStats(): SessionStats = storage.getStats()
 
-    suspend fun getSessionName(): String? = storage.getSessionName()
+    suspend fun getSessionName(): String? = storage.getName()
 
     suspend fun appendMessage(message: Message): String =
         append { id, parentId, timestamp -> MessageEntry(id, parentId, timestamp, message) }
@@ -218,7 +238,7 @@ class Session<M : SessionMetadata>(
         targetId: String,
         label: String?,
     ): String {
-        if (storage.getEntry(targetId) == null) {
+        if (storage.readEntry(targetId) == null) {
             throw SessionException(SessionErrorCode.NOT_FOUND, "Entry $targetId not found")
         }
         return append { id, parentId, timestamp ->
@@ -236,42 +256,69 @@ class Session<M : SessionMetadata>(
     suspend fun moveTo(
         entryId: String?,
         summary: BranchMoveSummary? = null,
-    ): String? {
-        if (entryId != null && storage.getEntry(entryId) == null) {
-            throw SessionException(SessionErrorCode.NOT_FOUND, "Entry $entryId not found")
-        }
-        storage.setLeafId(entryId)
-        return summary?.let {
-            appendWithParent(entryId) { id, parentId, timestamp ->
-                BranchSummaryEntry(
-                    id,
-                    parentId,
-                    timestamp,
-                    entryId ?: "root",
-                    it.summary,
-                    it.details,
-                    it.usage,
-                    it.fromHook,
-                )
+    ): String? =
+        appendMutex.withLock {
+            if (entryId != null && storage.readEntry(entryId) == null) {
+                throw SessionException(SessionErrorCode.NOT_FOUND, "Entry $entryId not found")
+            }
+            appendWithParentLocked(leafId) { id, parentId, timestamp ->
+                LeafEntry(id, parentId, timestamp, entryId)
+            }
+            summary?.let {
+                appendWithParentLocked(entryId) { id, parentId, timestamp ->
+                    BranchSummaryEntry(
+                        id,
+                        parentId,
+                        timestamp,
+                        entryId ?: "root",
+                        it.summary,
+                        it.details,
+                        it.usage,
+                        it.fromHook,
+                    )
+                }
             }
         }
-    }
 
     suspend fun close() = storage.close()
 
     private suspend fun append(
         create: (String, String?, String) -> SessionTreeEntry,
-    ): String = appendWithParent(storage.getLeafId(), create)
+    ): String =
+        appendMutex.withLock {
+            appendWithParentLocked(leafId, create)
+        }
 
-    private suspend fun appendWithParent(
+    private suspend fun appendWithParentLocked(
         parentId: String?,
         create: (String, String?, String) -> SessionTreeEntry,
     ): String {
-        val entry = create(storage.createEntryId(), parentId, nowTimestamp())
+        val entry = create(createEntryId(), parentId, nowTimestamp())
         storage.appendEntry(entry)
+        leafId = leafIdAfterEntry(entry)
         return entry.id
     }
+
+    private suspend fun createEntryId(): String {
+        repeat(100) {
+            val candidate = uuidv7().takeLast(8)
+            if (storage.readEntry(candidate) == null) {
+                return candidate
+            }
+        }
+        return uuidv7()
+    }
 }
+
+suspend fun <M : SessionMetadata> createSession(
+    storage: SessionStorage<M>,
+    contextBuildOptions: SessionContextBuildOptions = SessionContextBuildOptions(),
+): Session<M> =
+    Session(
+        storage = storage,
+        initialLeafId = storage.readHead().leafId,
+        contextBuildOptions = contextBuildOptions,
+    )
 
 data class BranchMoveSummary(
     val summary: String,

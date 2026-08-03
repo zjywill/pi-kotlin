@@ -1658,6 +1658,76 @@ class RpcRuntimeTest {
         }
 
     @Test
+    fun `idle extension user messages start an agent turn`() =
+        runTest {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                nodeAvailable(),
+                "Node.js 22+ is required for extension runtime tests",
+            )
+            val root = Files.createTempDirectory("pi-kotlin-rpc-idle-extension-turn")
+            val extension =
+                root.resolve("idle-turn.ts").also { path ->
+                    Files.writeString(
+                        path,
+                        """
+                        export default function(pi) {
+                          pi.registerCommand("idle-turn", {
+                            handler() {
+                              pi.sendUserMessage("from idle extension");
+                            },
+                          });
+                        }
+                        """.trimIndent(),
+                    )
+                }
+            val provider = FauxProvider()
+            provider.setResponses(
+                listOf(
+                    FauxResponseStep.Factory { context, _, _, _ ->
+                        assertTrue(
+                            context.messages
+                                .filterIsInstance<UserMessage>()
+                                .any { works.earendil.pi.ai.contentText(it.content) == "from idle extension" },
+                        )
+                        fauxAssistantMessage("extension turn complete")
+                    },
+                ),
+            )
+            val runtime =
+                RpcRuntime(
+                    Models(listOf(provider)),
+                    RpcRuntimeOptions(
+                        cwd = root,
+                        agentDir = Files.createDirectories(root.resolve("agent")),
+                        noSession = true,
+                        provider = "faux",
+                        model = "faux-1",
+                        extensionPaths = listOf(extension.toString()),
+                        extensionMode = ExtensionMode.TUI,
+                    ),
+                )
+
+            assertSuccess(
+                runtime.handle(
+                    buildJsonObject {
+                        put("type", "prompt")
+                        put("message", "/idle-turn")
+                    },
+                ),
+            )
+            runtime.waitForIdle()
+
+            assertEquals(1, provider.state.callCount)
+            assertEquals(
+                "extension turn complete",
+                requireNotNull(
+                    runtime.handle(buildJsonObject { put("type", "get_last_assistant_text") }),
+                ).data()["text"]?.jsonPrimitive?.content,
+            )
+            runtime.close()
+        }
+
+    @Test
     fun `prompt emits lifecycle events and updates rpc state`() =
         runTest {
             val provider =

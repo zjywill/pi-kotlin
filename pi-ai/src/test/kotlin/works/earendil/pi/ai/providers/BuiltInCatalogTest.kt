@@ -22,6 +22,11 @@ class BuiltInCatalogTest {
         val catalog = builtInCatalog()
         val openAI = catalog.modelsByProvider.getValue("openai")
         val sol = openAI.single { it.id == "gpt-5.6-sol" }
+        val luna = openAI.single { it.id == "gpt-5.6-luna" }
+        val terra = openAI.single { it.id == "gpt-5.6-terra" }
+        val fireworks = catalog.modelsByProvider.getValue("fireworks")
+        val fireworksKimi = fireworks.single { it.id == "accounts/fireworks/models/kimi-k3" }
+        val fireworksKimiFast = fireworks.single { it.id == "accounts/fireworks/routers/kimi-k3-fast" }
         val copilotOpus5 =
             catalog.modelsByProvider
                 .getValue("github-copilot")
@@ -34,16 +39,33 @@ class BuiltInCatalogTest {
         assertEquals(3, catalog.schemaVersion)
         Instant.parse(assertNotNull(catalog.generatedAt))
         assertEquals(
-            "cac44ff4772a2e26b4f4e4bd0ce9cb76de07754662a70f5cfea2dd5b3eb56406",
+            "9e11c7367557f9ff620f471db7ab93db5cfdf90e7c1e0584e1b3712f77740c20",
             catalog.structureHash,
         )
         assertEquals(37, catalog.modelsByProvider.size)
-        assertEquals(1_110, catalog.modelsByProvider.values.sumOf(List<works.earendil.pi.ai.Model>::size))
+        assertEquals(1_122, catalog.modelsByProvider.values.sumOf(List<works.earendil.pi.ai.Model>::size))
         assertEquals("openai-responses", sol.api)
         assertEquals(272_000, sol.contextWindow)
         assertEquals(128_000, sol.maxTokens)
         assertEquals(5.0, sol.cost.input)
         assertEquals("max", sol.thinkingLevelMap[works.earendil.pi.ai.ModelThinkingLevel.MAX])
+        assertEquals(0.2, luna.cost.input)
+        assertEquals(1.2, luna.cost.output)
+        assertEquals(2.0, terra.cost.input)
+        assertEquals(12.0, terra.cost.output)
+        listOf(fireworksKimi, fireworksKimiFast).forEach { model ->
+            assertEquals("openai-completions", model.api)
+            assertEquals("https://api.fireworks.ai/inference/v1", model.baseUrl)
+            assertEquals(
+                "openai",
+                model.compat?.get("thinkingFormat")?.toString()?.trim('"'),
+            )
+            assertEquals(
+                "kimi",
+                model.compat?.get("deferredToolsMode")?.toString()?.trim('"'),
+            )
+            assertEquals("max", model.thinkingLevelMap[works.earendil.pi.ai.ModelThinkingLevel.MAX])
+        }
         assertEquals("anthropic-messages", copilotOpus5.api)
         assertEquals(1_000_000, copilotOpus5.contextWindow)
         assertEquals(
@@ -99,7 +121,7 @@ class BuiltInCatalogTest {
         val ids = providers.map { it.id }.toSet()
 
         assertEquals(38, providers.size)
-        assertEquals(1_110, providers.sumOf { it.getModels().size })
+        assertEquals(1_122, providers.sumOf { it.getModels().size })
         assertTrue(
             ids.containsAll(
                 setOf(

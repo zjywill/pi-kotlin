@@ -2,19 +2,19 @@ commit	disposition	evidence
 da8dd87260513101add46a802c3ace94a71e2d70	already-covered	Exact model lookup precedes fuzzy lookup; ArgsTest covers bracketed IDs with thinking suffixes
 7af8533c6f22ab922fff29f252d2d3657b821d99	ported	SseHttp retry policy honors retry headers, delay limits, and coroutine cancellation
 fc85bdd88be93b1e9a6b6bcfa41c684282ec79cc	ported	RpcRuntime emits bash_execution_update events with command IDs
-bc3d36474256b271f277d8ffe9ae870fa96fb896	covered-by-known-gap	Schema-v3 generatedAt is preserved; remote model-catalog refresh is not migrated
+bc3d36474256b271f277d8ffe9ae870fa96fb896	ported	Schema-v3 generatedAt and remote model-catalog refresh, persistence, and revalidation are migrated
 ab55c15fbdbca4ce2d5628f1613a3bd30d847868	not-applicable	Merge commit for the preceding source change
 65ff8e7f6db447dcddb1a9c8fd05f081c5cda76a	not-applicable	TypeScript lint-only change
-37bedb7f0b189f2ed0aed4f715c490c791baa01f	covered-by-known-gap	Full-screen editor component is not migrated
+37bedb7f0b189f2ed0aed4f715c490c791baa01f	ported	The full-screen editor component and installed PTY behavior are migrated
 241431c69baf667e09a0eadf8ffc34ee2f643ef0	ported	Summary requests use cacheRetention NONE and unique session IDs; Responses explicit cache mode is supported
-6abb4b06409912ac4f0c58fde0f37fd5f1d4c76a	covered-by-known-gap	The partial extension host does not yet support llama.cpp native dependencies and custom provider streaming
+6abb4b06409912ac4f0c58fde0f37fd5f1d4c76a	not-applicable	The bundled Node llama.cpp native addon has no JVM distribution equivalent; generic custom-provider streaming is migrated
 ec1a87e856502f29a55a5762d129bb845f094bd7	not-applicable	protobufjs package override has no JVM equivalent
 24bace27cf308c89707cf8005b4795d873e23f17	ported	Constrained sampling types, strict tools, grammar payloads, and custom-tool streams are implemented
-2d3f555429935ffccdf23d9adae09ef7e0b85ca7	covered-by-known-gap	The upstream clipboard command and its wl-copy/xclip fallback chain are part of the incomplete interactive terminal slice
+2d3f555429935ffccdf23d9adae09ef7e0b85ca7	ported	Interactive clipboard text uses Wayland, X11, macOS, and Windows fallback commands
 ee0dca45b4542c38df5547d3fe113e31a869101a	not-applicable	Changelog-only audit
 fc8048d2370ab4252966aa3bf220373d1358dce2	not-applicable	Node/Bun source-archive packaging has no JVM distribution equivalent; Gradle resources already bundle verified model data
 8472c486f424d716e4d0a9f71c0cbe9590bfc1dd	not-applicable	Changelog-only clipboard entry
-f87468131fac4c4e53cf2f9c1ad4a253acbe4e75	covered-by-known-gap	models.json picker hot reload belongs to the incomplete full-screen model-selection workflow
+f87468131fac4c4e53cf2f9c1ad4a253acbe4e75	not-applicable	Kotlin model discovery is provider-backed and has no cached models.json picker registry to reload
 e16172069ff3e1bf3c335157001c6ca0d61c4248	not-applicable	Changelog-only model reload entry
 e8d97fee1a9cc583c60c77d52ecca0e755b274ec	ported	OpenRouter image catalog now exposes 40 models including microsoft/mai-image-2.5-pro with checksum parity
 083e61621276bff9f6faefab87ce07fcd98734e2	not-applicable	Package release/version metadata only
@@ -24,11 +24,11 @@ a9f5b1c123a4f13457e88522a3be89aeb4823d66	ported	Radius browser discovery is auth
 7304d8f8af892893868b66254d34ffb9382fdec1	not-applicable	Upstream test fixture model substitutions only
 921c3543522ee7f4f7be2032ef28a8f64f2289fb	ported	Hydrated catalog metadata gives Claude Opus 5 adaptive thinking, xhigh, and temperature compatibility
 8eef62ed3ea62d646a7fad92fa583fc8d71fec17	not-applicable	Upstream test-only correction
-a3ee1d286e95b501b3d9d7bb26367a0edea46166	covered-by-known-gap	Unavailable scoped-model editing depends on the unported full-screen scoped-model selector
+a3ee1d286e95b501b3d9d7bb26367a0edea46166	not-applicable	Kotlin preserves unmatched enabledModels patterns in settings and does not expose the TypeScript scoped-model picker
 eafe11fb94fe7fcb89487da621a578278a6a67f1	not-applicable	Vitest eval harness is upstream test tooling; Kotlin uses Gradle tests and independent behavior oracles
 af3b934fa6ba3b6a273dcb1540a3fc391b686410	ported	Claude Opus 5 is inference-profile-only on Bedrock and supports adaptive thinking, xhigh, prompt caching, and preserved validation messages
-2a2b0a39f08923b3563a4f53d4b1cedf130d1391	covered-by-known-gap	The partial extension host does not yet support llama.cpp native dependencies, model cache, or custom provider streaming
-518855dd502220d0c6480fb8863e2e7f8799893f	covered-by-known-gap	Custom message renderers and outputPad remain outside the partial extension/full-screen rendering surface
+2a2b0a39f08923b3563a4f53d4b1cedf130d1391	not-applicable	The bundled Node llama.cpp native addon and its cache have no JVM distribution equivalent; provider callbacks are migrated
+518855dd502220d0c6480fb8863e2e7f8799893f	ported	Custom message and entry renderers preserve expanded, outputPad, width, fallback, and replay behavior
 b1c444d956b70e5c437d3d2782b01d157fa05ba3	ported	ModelsStore persists ETags; remote catalogs revalidate with If-None-Match and preserve cached overlays on 304/transient errors
 4cf0a729c4eeef6628b2687cd8238cc6874c9a73	ported	ModelsAuthException appends the underlying cause so OAuth refresh and credential failures retain provider details
 58c0bc2fba29baf5e3bb6268baac00a49d8df1cf	ported	Prompt context discovery skips directory candidates without warnings and falls through to the next supported filename
@@ -51,17 +51,17 @@ b63403a50f57fa0e3098684e927a63279598ec89	ported	Configured Bedrock profiles take
 b6fb91e5b3a35a4361ae7d697d66eb7ed4dd9850	ported	TUI extension contexts carry the same resolved scopedModels list and pinned thinking levels
 66eead65249b0623e2c77f8f40447b2af094ec8b	already-covered	ResolvedPackageResources retains package and extension source metadata across reload merges; regression covers skills prompts and themes
 5d548ae969454d23ef8fec627c5be896be888d47	ported	RPC bash emits user_bash and accepts direct replacement results plus function-valued BashOperations through the bidirectional extension host
-f1ea6c0d05a5707a483268dbd42f8c60f38377ed	covered-by-known-gap	Model-selector filtering belongs to the unported full-screen selector and overlay workflow
+f1ea6c0d05a5707a483268dbd42f8c60f38377ed	not-applicable	Kotlin model completion filtering is stateless and has no retained selector row to reset
 0563a7c0174d873b6368cf67349f7fc1be950292	ported	New git checkouts are removed after clone checkout or dependency failures and empty managed parents are pruned
 2fe21b407fcbf7625036afd46e39900ff8c081d1	ported	Z.AI provider requests include max_tokens from model metadata with the upstream fallback
-cefa40ed8f8dbcd6ffd67b5e7a0eaa75a5050d1a	covered-by-known-gap	RPC session mutation already rejects active responses; interactive tree navigation and settle-before-replacement remain in the full TUI and RPC gaps
+cefa40ed8f8dbcd6ffd67b5e7a0eaa75a5050d1a	ported	RPC and interactive session replacement wait for settled state and reject active-response mutations
 f14519551682cd0fddac2e4b4e8b1f333667e94c	not-applicable	Upstream test-only duplicate scopedModels fixture edit with no runtime behavior
-0d008b746892ad33d3fe15c0c4bc86a14369e0e8	covered-by-known-gap	Tool expansion status belongs to the unported full-screen transcript and status UI
+0d008b746892ad33d3fe15c0c4bc86a14369e0e8	ported	Tool expansion status is preserved through extension contexts and renderer options
 47ca25fcd8535b80710fad5be758f1f2cf81443c	not-applicable	Revert of the preceding test-only duplicate fixture edit
 fdbedcad8aeb7c1e2ebd3b85f16e60e5fab0b2c3	not-applicable	AgentHarness design-document reference update only
 027a5847901b5dde30270abaa1041046cd2b4b55	ported	Supported providers accept per-request HTTP transport injection while Google and Vertex reject unsupported custom transports explicitly
-0c32e83a352a4284133b2544f730a23814948ac3	covered-by-known-gap	llama.cpp streaming usage metadata belongs to the unported native llama extension and function-based custom provider surface
-fb4ecd633e10680063e6cd38c607361e03c19181	covered-by-known-gap	Image fallback shortening hyperlinks and render-width clamping belong to the unported full-screen image rendering surface
+0c32e83a352a4284133b2544f730a23814948ac3	not-applicable	The bundled Node llama.cpp provider has no JVM equivalent; function-valued custom provider streams preserve usage metadata
+fb4ecd633e10680063e6cd38c607361e03c19181	ported	Terminal image fallback shortens home paths and clamps output to the available width
 f9476a61e557bfdce2fbf3ffeaad0988fe47c184	ported	Kotlin tool validation and the virtual TypeBox compile/value modules accept nullable array schemas with items
 cced6a21da273b26ee4a23a803680614bbe8dd1e	ported	Context discovery detects nested linked worktrees and skips the shadowed main-worktree context file
 23cb385b672b4d7d552fe080fd327c5cb77e9e33	ported	Google Generative AI and Vertex terminal messages preserve raw provider finish reasons and use generic provider-stop errors
@@ -81,3 +81,145 @@ f0499a63ff5563ff041c689f680ecbf01436a5e2	not-applicable	Changelog audit only; no
 845d6ff1f6643aba440341cce877ce1c43ebbc39	not-applicable	Release metadata, package versions, and lockfile refresh only
 71efc6f0c1909874ec8c944637a9ae7fc0e2d508	not-applicable	Post-release Unreleased changelog scaffolding only
 05558a79280a2f1356bd390a573aeb28726d26b5	ported	OpenCode Go provider display name matches the upstream provider registry
+0f5a6e422baa5eaade271f9ba92ceb7692144a0d	ported	SQLite session search uses an independent FTS-backed SessionSearch implementation
+b92e5e8614d90d5c2aa403dbca5c232fbf6e91e2	ported	Session search construction is separated from repository and storage factories
+bd8dc676bf6628d6aa78fae481105d2c0652125a	ported	Merge commit for the session search and repository changes migrated in this range
+0ee1ec00303da6e4ed64da9caea955340138c5d0	ported	SessionSearch naming and ownership match the query service rather than an index implementation
+3c2b71b5700fce63e996e852f9317e0031ba4b08	ported	Search is independently swappable from session storage and repositories
+5d6237ab343c296be8910884315075b1cf2c9fc0	ported	Repository helpers own session construction from stored heads
+499dd8c5449ab334ddd3d61f3147c9eff8763b9f	ported	Session search cleanup is reflected by the independent Kotlin interfaces
+c2bd0eda7fd36719a21f659485fdb0fafd32dd69	ported	SQLite repositories default to the FTS-backed search implementation
+c63bf0ee4b3258fc768b33e70ed2156a602a8455	ported	Obsolete session search adapter state is absent from the Kotlin implementation
+d5c37c65bfd0cb10d227ee7a1b16ec8aae34165c	ported	SessionStorage and SessionSearch are composed as independent services
+3627c01179d58f353830b6d28e039a12cc88eeb8	ported	Session repositories operate without requiring a search service
+6a9591ae78faa1dab24ab7d626444ba40c89a567	ported	Repositories separately expose owned session and storage construction
+32f3a972827a659559146888ced7934efc92e47d	not-applicable	Comparative eval artifact and reporter plumbing is TypeScript test tooling; Kotlin uses Gradle tests and independent oracles
+7659e1c98df9338229a9b0cc7b7e75922f95163f	not-applicable	Merge commit for the comparative TypeScript eval tooling
+bb226f9c1f38d3c029156a690e97bbfc602336b9	ported	Extension renderer expanded state is preserved until setToolsExpanded explicitly overrides it
+96eda8b47f01dd795ee5b8633c253db1e903ba0c	not-applicable	AgentHarness v2 building-block documentation only
+c13ffe1877c3a47ce9f2fc98d9880447d64a0e87	ported	Alternate-screen rendering, selection, screen lifecycle, and installed UI mode are migrated
+5e48d41ecd8c750c954e6c4152fd343f7705e182	ported	Session repository facade behavior is represented by Kotlin repository and storage interfaces
+83a7f755cc14a8f36ff822c24f5017494fed554e	ported	Session repository cleanup and composition are reflected in the Kotlin APIs
+82c485983967a69d45fe957cf942cb0999723362	already-covered	Agent and runtime close, cancellation, and waitForIdle lifecycle cover harness shutdown behavior on the JVM path
+56eb685b69bb1a6c158c9eb8ead147e1d31e9d3f	ported	The pi-protocol module implements CBOR framing, strict schemas, and the remote session wire protocol
+b889a0ce3dc08e20078b822c5380f71c4fdec6cf	ported	The hydrated model catalog includes the updated GPT-5.6 pricing
+bc031ae4571081d2edae18787dd45486d0a17ce1	already-covered	Runtime shutdown waits for active prompt, mutation, provider, extension, and storage work
+bd2cfabc5f886447eb7ae9193cc9f87e85a52390	ported	The protocol encoder rejects cyclic values and the Kotlin package has organized CBOR, framing, and schema sources
+871a99047944f060b85a30c7d5b6add89685c9a8	already-covered	Kotlin runtime jobs use unified coroutine ownership for operations and mutations
+9cde1725d7ca51d0fe06e03f89a87000a18abf36	ported	Agent and RPC waitForIdle semantics include extension-triggered turns
+b2a1a065500ff2566bc434f49e3c8493d69de04f	not-applicable	Protocol changelog documentation only
+c066d01a40c8063df48afebcedb1117ea00f6d8e	ported	Merge commit for the remote protocol package migrated into pi-protocol
+393c34422981cc910acc78f96dd546d90f3096de	not-applicable	TypeScript SDK example update only
+2c3041242040179b63841922ac58188f8499d2cd	ported	Provider streams without explicit finish reasons preserve successful terminal behavior
+dfe47d3fbd8bf27841becaf8ec042dc0e73804a6	ported	Terminal text width uses grapheme clusters and terminal-cell width rules
+70bbe47a9d28303c87f77ddf46aef70ed8c2c910	ported	Bedrock errors preserve structured SDK metadata and provider details
+714978bf51225520a9b1e153115f0c5ff057be9e	ported	Markdown transformation, extension registration, streaming, and message rendering APIs are migrated
+74caa2649f10ed71b4378ce69f5d9fbfd2466ca5	ported	Package manifests are parsed and validated before package resources load
+fb0f0f7cd5fd18afb98abef133174d59c27ac4e5	ported	Session repository naming cleanup is reflected by the Kotlin API
+c984b7c9e2b93ce9c8cf1d3b635229757cf51536	ported	Session search cleanup is reflected by the Kotlin implementation
+aa784e5eedfadb64b67cd58d7878db5132a1dd6d	ported	SQLite FTS availability and conditional search composition are migrated
+9b50b046d328d589a81400d2e184175d0bf19734	ported	Merge commit for the complete SQLite search slice
+2700511e4594b1066f316f50fc0005df73a093f4	ported	Session repository APIs expose storage and query behavior through explicit contracts
+ea1e77e2db5cd07bf83365490bd3f52c881efa77	ported	Alternate-screen viewport layouts keep transcript and dock ownership separate
+a1bb7e44831a8114d0bbb4e76a5ccc83e8ea0e2a	ported	Session factories expose their backing storage
+8eda7d502075850dea8d02eb6bf27922444995f4	ported	Composed session storage and search types remain explicit
+4523528b21c66084fdece7ed3ffa10888bc5ac60	ported	Provider error bodies accept only structured JSON objects
+97cfd708d47f4ca8c7fdd93493f14d7d39def989	ported	Merge commit for the refined session repository factory API
+3c5a1b2393e910aa521d312320b1459240e2e656	ported	Alternate-screen mouse wheel scrolling uses one-row increments
+32761383d2487cadab26c3466a720525c0509e23	not-applicable	Doom example asset download URL only
+57cde86906679fd0581b277a179ab46fa2a09ab6	already-covered	Credential reads reload persisted state and avoid retaining stale in-memory values
+17090d4b9964957c7e7473506f93225c42d9e6fd	ported	Alternate-screen flashes support stacked timed notifications
+6138f5a079b4e81ba1b30d998020df187512a0e8	ported	Google history preserves signed empty text and thinking blocks
+9786716d4de2a0a23c53b011f5bbc1f4084f700f	not-applicable	Node dependency-only brace-expansion update
+59ad3dead30322217f6f027a3b67931074c0e163	ported	Anthropic streams preserve initial content on text and thinking blocks
+ab366ebe94cacd419d986be454f12b1b9913aaca	ported	Custom compaction uses the active model runtime and extension provider callbacks
+8ee22078242ef82d378b3a41b9adc5eb9c6837a0	not-applicable	TypeScript auth-lock test isolation only
+33bc0a7b83cde2a3cd2b568ed3107d9bdf7a768a	ported	The pi-client module provides runtime-neutral remote session state and request coordination
+7e121c67cff54c44f963787a103179b3c7baadae	ported	Client lifecycle states and disposal behavior are explicit
+ee3156715d3c7def800c6aaaa2bd664a2f315d38	ported	Client connection and session-handle lifecycle architecture is migrated
+6e16f771610359b959501acd4c42ab73a1c914e8	not-applicable	ES2022 JavaScript compatibility target has no JVM equivalent
+f9b06345348f13799cdc5c0c8acec74e13e01276	not-applicable	Client promise-helper documentation only
+cfe6b6a058d352c954918f61b414bad4b36e1e5e	ported	OpenAI Codex WebSockets are scoped by account and session identity
+ea781d68f296bea36db3a540d2c53746f1a90bdd	ported	Custom editors receive the configured autocompleteMaxVisible value
+1c418f624578f26834a1b977e276c99d93889bf1	ported	The client supports framed Unix-domain-socket transport
+e44c1297492041aa2bc31c069556005b54a27500	not-applicable	Bun Unix transport documentation only
+a688e257c5faab8872c0a972f079c43154a770d1	ported	Fireworks Kimi K3 models route through OpenAI-compatible request handling
+7d5fc9499bf2385c1168f7d0a487742d87e76629	ported	Merge commit for the Unix client transport
+d2be68dbebaca6361ce83dd7b27a8e45c8cea97d	already-covered	Auth reads use bounded file locks without holding them across provider work
+784653468c42387f607d41ed5ca533100e7eb2fe	ported	Merge commit for account-scoped Codex WebSockets
+8ac92f831c67c3642fa321a182a6c91044adec9c	ported	Fullscreen scrollbars support transient visibility and pointer dragging
+696a828a4d4473ba06bb1353d5976c53f78bb43a	ported	Unmatched alternate-screen mouse releases do not create phantom selections
+2132f8f75f0d19bdd26444d58ee7e75bc6a1a9ae	ported	Session leaf, append, repository, and persistence ownership are explicit
+11679808c7580b6638a0b7b1951cb075b0162233	ported	Merge commit for the session persistence ownership refactor
+f90b8595db49a542d4ce37ed21484b8bccd062d5	not-applicable	TypeScript harness lifecycle test maintenance only
+d937ee15d6d1f2395b8f8474c340c480e9af2024	not-applicable	Session API migration documentation removal only
+f074efd921848bf5d858154e852d47ea82c60bf2	ported	The CLI and settings support regular and fullscreen UI modes
+0b229f1046cee084271682b3e50bb532d9c3467e	not-applicable	Session persistence migration documentation only
+f4a96c62b324546986db06197e4b9c2993b72f60	not-applicable	Session store guidance documentation only
+4e81b796153ca5c304ba867269088049831ed987	ported	Session construction is restricted to repositories and storage-backed factories
+2b765ef529ae79d5bfa6990668f74cf717277f4a	ported	Session storage supports forward cursor reads
+3c717842e87f9d6b60587665fb52817f83c87a98	ported	Fullscreen transcript navigation supports page, prompt, top, and bottom movement
+2e60d3cbdff5f3ca682e1abc1188160edd88a978	ported	The server composes protocol sessions, listeners, snapshots, and Unix transports
+bf4a90d81985bd45052eeeae59d84fe13e0bd2c8	not-applicable	Kotlin has no retained searchable settings selector value to mutate when spaces are entered
+cb86f0844747f80df1e4dd9fd6aa35d7de9a565b	ported	Protocol server adapters enforce request, event, and lifecycle invariants
+e36b150f71c736a4b13dae401035c292badf276f	not-applicable	TypeScript Unix socket inode test correction only
+15f719489b439a81d3736cb34619250b66ad8363	ported	Session entry IDs are generated by the owning session and remain path-scoped
+546e002353980e1789106cc3b2f3a843f9d74b31	not-applicable	TypeScript server test infrastructure refactor only
+73b24639fd9794d462b40a3bfa0cbb5e456dc2e8	ported	Merge commit for the composable protocol server
+bfc679d5e4e0a41fc1953456be0e1b223461189b	ported	Clipboard text falls back from wl-paste to X11 clipboard commands on Wayland
+12a4b242927acd647bfe462a194c1def38029439	ported	Merge commit for session persistence ownership
+6129a353b18310eb06085e2f17f58cf501f725f3	ported	Fullscreen scrollbar visibility is configurable as auto, always, or hidden
+7724472eab2da7dcd1be0bc025e0e66a80404486	ported	Merge commit for Wayland clipboard fallback
+9c3b271be00fd6035c4a5464f77d34c5b54942d0	ported	SessionSearch is query-only and independent from storage mutation
+b3ed27b3fe33ad006df66709ccf7f2edb33871eb	ported	Themes expose and apply the scrollbarThumb color
+af187eee4b718dbcf01e60e164f5919ae03bacfc	ported	Kitty images are cropped at viewport layout boundaries
+977ec833bbb86e245057e9162dbc1443c7b6e707	ported	Merge commit for query-only session search
+0c611753d9933fc26b92279155b8a1eac3594a6e	not-applicable	Upstream Z.AI test model substitutions only
+91957b3a01fed3619bf7cf41f326aade9518bbcf	ported	Server connection and listener adapters enforce protocol lifecycle invariants
+9f4dfdddbffe171ac3143c57c32708cc1cd4e1ce	ported	Obsolete SQLite session internals are absent from the Kotlin storage layer
+62f3c61b68e9ece242eb4de79861542651dc5401	ported	Session writes are serialized per session rather than globally
+b777865828728767c1e161f3fd51bc0414d70f09	ported	Merge commit for per-session storage queues
+a0bb4a489b188beac7c06034141db86ffb357730	ported	Merge commit for SQLite session connection cleanup
+53422a241a9018c99081226a502e5fbabb8b5fed	ported	Session storage owns bounded readers and branch queries
+2cc51b9d7611f9330ea3d7c39796ec6aceabfb7d	ported	Session fork behavior is repository-owned independently of source module naming
+2366649ba4966d9b7c057b0a19ec54c135fa9f3b	ported	Opening a session reads its head without counting every entry
+a3ec51d2a18c69bd1c74a0a70075497794f47257	ported	Remote session coordination, transcript projection, and ownership are migrated
+e07511645924249aa157b54dc73f73b235192d78	not-applicable	Contributor changelog removal only
+57583617eff0df1b26f022e208de74bf8aa769a6	ported	SQLite session operations execute linearly on their owning connection
+c2adb4d1da5f2e521154d7b56bafdb3171c0a32c	not-applicable	SQLite rollback test implementation detail only
+5cd0f98e93b299a0d3c297cc6f63d48e221ea898	not-applicable	Staged branch documentation clarification only
+4488ad55c18f07ae89a489096c90de8667b3adfb	ported	Merge commit for linear SQLite session operations
+e92bf60a5804e1640b9ea7390a03c4063adc880f	ported	SQLite branch tips use a scalable materialized cache
+a1403af8ec8552ba35bff82aaaba2dd27426d2f8	not-applicable	TypeScript timeout-output test determinism only
+583f153d502aa8e958eefdb9af0fbd3344e68f95	ported	Terminal and Markdown source filenames are normalized before display
+8f9e7697428477e8b206d1902060875689d5010f	not-applicable	Kotlin model availability reads have no retained refresh promise that can stall
+9b75872017b7aac00e12542992fdd28afbeaae60	ported	Session storage exposes bounded branch queries
+081d7fbfca102aec2ee9f052c7804637cebebc4c	ported	Bounded branch queries validate cursors and limits at the storage boundary
+8750a38c4c6e9e96eb868c3a24dbf041f1ecf8c3	not-applicable	TypeScript child-output test determinism only
+4ecd1bbe6719786f0d30c3e0f65f3857fbbba246	not-applicable	TypeScript timeout fixture sizing only
+eb2683fc59957abc93db8c06f657aa953fbba044	already-covered	Kotlin compaction discovery uses typed session entries rather than repeated untyped scans
+6e48c10f5b1f5cfc90d6cb21abf26a3e1e8a6bd7	ported	Merge commit for bounded branch query behavior
+6374a95fb247dd898086ed28bbfe307e444a1d8d	not-applicable	TypeScript model reload test determinism only
+960d271cb823711444f69358257d2fe6cd167b05	not-applicable	TypeScript model reload test synchronization only
+f9a5c75f208cd3a825631294852e7452f580dfe4	ported	Experimental CLI transport options have an independent parser and validation
+1ea4ccad0472817fd117ecf03bd8e84ba72bfd5d	ported	Experimental endpoints are modeled independently of command implementations
+0ac010b746cebcc0b54e3a38c1c920349b1b1a65	ported	Experimental transport endpoints use the address contract
+c95e877e2d0f08148536711ac913191acca8e1a7	ported	Thinking-level validation remains in the regular argument parser
+15fb81a6f3a60a808bf8187428d82136b1ba79d3	ported	The experimental parser accepts only transport-specific options
+68ad320af13d699279b690d3e3f6eb23a85b9c2b	ported	Experimental server, client, and Pi commands are explicit command models
+c2923b641c73aef4d5d484b9544922d05028b962	ported	Experimental command names and dispatch match upstream
+b0944d75cfe2d797c41ed532fa1dade05167cda4	ported	Unix transport URLs are parsed and validated
+15b6617fac803d062195b90bff0d3013020ffbbf	ported	Experimental parsing preserves option values already parsed by the regular CLI
+1fdf21621d1f536a5991fccb0fd65b87ae27cf87	not-applicable	The switchable-renderer feature was reverted by the next upstream commit
+b70c0f5b4e8d661bbf771ff384e093a45d28a87a	not-applicable	Revert restores the renderer behavior already represented by Kotlin uiMode
+14551e769493f1c6ceac55954332ab14747ee05c	ported	Remote session connection attempts use the longer upstream-compatible timeout
+1ee411a282132b0a3519664e14dcf457f43259ed	ported	Experimental commands compose shared Pi options and reject unsupported legacy arguments
+cbc893b0d41301b70c914216cb0c262eafe84b6c	ported	Session storage foundation separates storage, search, repositories, readers, and sessions
+a4c7cb025d3a784d1fba18d4c8f4846d56bd2336	ported	Repositories reject unsupported session search explicitly
+f07af611d360a7cf53b00fbe4d980d1741e1a669	ported	Session storage and search are composed through repositories
+e05cc6e12cd5d4fb919785c3da5b2d40961e386a	not-applicable	Contributor changelog removal only
+73414d08b94d7db46d3fa66582c8fe3b02dabf72	ported	Alternate-screen redraws reuse Kitty uploads and avoid retransmitting fixed layout content
+4c01c709380621c5ff2719162cd7a7973dcb2799	ported	Viewport rendering slices visible rows directly and avoids scanning clipped transcript rows
+35fe55573cc1f49377ca2c63b369a559e4c699ce	ported	Merge commit for experimental CLI composition
+88ed89dbab71bf2a5158102d9ac01a18f6df5f71	not-applicable	AgentHarness v2 effects and generator design documents only
+01eeafd14a81dadf9ff8e5e1675a0b27351eae12	not-applicable	AgentHarness v2 durable queue-cancellation design documentation only
