@@ -213,12 +213,16 @@ export default function extensionRuntimeFixture(pi: ExtensionAPI) {
 			return nativeModels;
 		},
 		async refreshModels(context) {
-			const stored = await context.store.read();
-			nativeModels = [{
+			const refreshed = [{
 				...nativeModel,
-				id: `native-${stored?.models?.[0]?.id ?? "empty"}`,
+				id: `native-${context.stored?.models?.[0]?.id ?? "empty"}`,
 			}];
-			await context.store.write({ models: nativeModels, checkedAt: 321 });
+			await context.publish({
+				persist: { models: refreshed, checkedAt: 321 },
+				update: () => {
+					nativeModels = refreshed;
+				},
+			});
 		},
 		filterModels(models) {
 			return models;
@@ -237,9 +241,8 @@ export default function extensionRuntimeFixture(pi: ExtensionAPI) {
 		apiKey: "dynamic-key",
 		api: "openai-completions",
 		async refreshModels(context) {
-			const stored = await context.store.read();
 			return [{
-				id: `dynamic-${stored?.models?.[0]?.id ?? "empty"}`,
+				id: `dynamic-${context.stored?.models?.[0]?.id ?? "empty"}`,
 				name: "Dynamic model",
 				reasoning: false,
 				input: ["text"],

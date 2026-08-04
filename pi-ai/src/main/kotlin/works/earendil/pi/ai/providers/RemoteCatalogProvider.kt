@@ -9,16 +9,15 @@ import java.nio.charset.StandardCharsets
 import java.time.Duration
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.future.await
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import works.earendil.pi.ai.Model
+import works.earendil.pi.ai.ModelsPersistence
+import works.earendil.pi.ai.ModelsPublication
 import works.earendil.pi.ai.ModelsStoreEntry
 import works.earendil.pi.ai.Provider
 import works.earendil.pi.ai.RefreshModelsContext
@@ -52,48 +51,24 @@ private class RemoteCatalogProvider(
     @Volatile
     private var dynamicModels: List<Model> = emptyList()
 
-    private val refreshMutex = Mutex()
-    private var inflightRefresh: CompletableDeferred<Unit>? = null
-
     override val supportsModelRefresh: Boolean = true
 
     override fun getModels(): List<Model> = mergeModels(provider.getModels(), dynamicModels)
 
-    override suspend fun refreshModels(context: RefreshModelsContext) {
-        var ownsRefresh = false
-        val refresh =
-            refreshMutex.withLock {
-                inflightRefresh
-                    ?: CompletableDeferred<Unit>().also {
-                        inflightRefresh = it
-                        ownsRefresh = true
-                    }
-            }
-        if (!ownsRefresh) {
-            refresh.await()
-            return
-        }
-
-        try {
-            refreshCatalog(context)
-            refresh.complete(Unit)
-        } catch (error: Throwable) {
-            refresh.completeExceptionally(error)
-            throw error
-        } finally {
-            refreshMutex.withLock {
-                if (inflightRefresh === refresh) {
-                    inflightRefresh = null
-                }
-            }
-        }
-    }
+    override suspend fun refreshModels(context: RefreshModelsContext) = refreshCatalog(context)
 
     private suspend fun refreshCatalog(context: RefreshModelsContext) {
-        val stored = context.store.read()
-        dynamicModels =
-            remoteModels(stored)
-                .filter { it.provider == provider.id }
+        val stored = context.stored ?: context.store.read()
+        val restored = remoteModels(stored).filter { it.provider == provider.id }
+        if (
+            !context.publish(
+                ModelsPublication(
+                    update = { dynamicModels = restored },
+                ),
+            )
+        ) {
+            return
+        }
         currentCoroutineContext().ensureActive()
         if (!context.allowNetwork) {
             return
@@ -123,24 +98,36 @@ private class RemoteCatalogProvider(
         currentCoroutineContext().ensureActive()
         val checkedAt = currentTimeMillis()
         if (response.statusCode() == 304 && stored != null) {
-            context.store.write(stored.copy(checkedAt = checkedAt))
+            context.publish(
+                ModelsPublication(
+                    ModelsPersistence.Write(stored.copy(checkedAt = checkedAt)),
+                ),
+            )
             return
         }
         when (response.statusCode()) {
             404, 501 -> {
-                context.store.write(
-                    (stored ?: ModelsStoreEntry(models = emptyList())).copy(
-                        checkedAt = checkedAt,
-                        lastModified = 0,
-                        etag = null,
+                context.publish(
+                    ModelsPublication(
+                        ModelsPersistence.Write(
+                            (stored ?: ModelsStoreEntry(models = emptyList())).copy(
+                                checkedAt = checkedAt,
+                                lastModified = 0,
+                                etag = null,
+                            ),
+                        ),
                     ),
                 )
                 return
             }
         }
         if (response.statusCode() !in 200..299) {
-            context.store.write(
-                (stored ?: ModelsStoreEntry(models = emptyList())).copy(checkedAt = checkedAt),
+            context.publish(
+                ModelsPublication(
+                    ModelsPersistence.Write(
+                        (stored ?: ModelsStoreEntry(models = emptyList())).copy(checkedAt = checkedAt),
+                    ),
+                ),
             )
             error("Model catalog request failed for ${provider.id}: ${response.statusCode()}")
         }
@@ -152,10 +139,15 @@ private class RemoteCatalogProvider(
                 checkedAt = checkedAt,
                 lastModified = parseLastModified(response.headers().firstValue("last-modified").orElse(null)),
                 etag = response.headers().firstValue("etag").orElse(null),
-            )
+        )
         currentCoroutineContext().ensureActive()
-        dynamicModels = remoteModels(entry)
-        context.store.write(entry)
+        val refreshedModels = remoteModels(entry)
+        context.publish(
+            ModelsPublication(
+                persistence = ModelsPersistence.Write(entry),
+                update = { dynamicModels = refreshedModels },
+            ),
+        )
     }
 
     private fun remoteModels(entry: ModelsStoreEntry?): List<Model> {

@@ -43,6 +43,8 @@ import works.earendil.pi.ai.AuthOption
 import works.earendil.pi.ai.AuthPrompt
 import works.earendil.pi.ai.ContentBlock
 import works.earendil.pi.ai.Model
+import works.earendil.pi.ai.ModelsPersistence
+import works.earendil.pi.ai.ModelsPublication
 import works.earendil.pi.ai.ModelsStoreEntry
 import works.earendil.pi.ai.ProviderModelsStore
 import works.earendil.pi.ai.Usage
@@ -300,6 +302,7 @@ internal class ExtensionHost private constructor(
         interaction: AuthInteraction? = null,
         authContext: AuthContext? = null,
         store: ProviderModelsStore? = null,
+        publish: (suspend (ModelsPublication) -> Boolean)? = null,
         onOperationStart: (String) -> Unit = {},
     ): JsonElement? {
         var operationId: String? = null
@@ -319,6 +322,7 @@ internal class ExtensionHost private constructor(
                                 interaction = interaction,
                                 authContext = authContext,
                                 store = store,
+                                publish = publish,
                             )
                         ) {
                             error("Unexpected extension provider callback message: $message")
@@ -879,6 +883,7 @@ internal class ExtensionHost private constructor(
         interaction: AuthInteraction?,
         authContext: AuthContext?,
         store: ProviderModelsStore?,
+        publish: (suspend (ModelsPublication) -> Boolean)?,
     ): Boolean =
         when (message.string("type")) {
             "provider_auth_event" -> {
@@ -1064,6 +1069,42 @@ internal class ExtensionHost private constructor(
                     }
                 writeProviderBridgeResponse(
                     type = "provider_store_response",
+                    requestId = requestId,
+                    result = result,
+                )
+                true
+            }
+
+            "provider_publish_request" -> {
+                val requestId = message.string("requestId")
+                    ?: error("Extension provider publish request is missing requestId")
+                val publisher =
+                    requireNotNull(publish) {
+                        "Extension provider requested model publication outside refreshModels"
+                    }
+                val result =
+                    runCatching {
+                        runBlocking {
+                            val persistence =
+                                if (message["hasPersist"]?.jsonPrimitive?.booleanOrNull != true) {
+                                    ModelsPersistence.None
+                                } else {
+                                    when (val value = message["persist"]) {
+                                        null, JsonNull -> ModelsPersistence.Delete
+                                        else ->
+                                            ModelsPersistence.Write(
+                                                protocolJson.decodeFromJsonElement(
+                                                    ModelsStoreEntry.serializer(),
+                                                    value,
+                                                ),
+                                            )
+                                    }
+                                }
+                            publisher(ModelsPublication(persistence))
+                        }
+                    }
+                writeProviderBridgeResponse(
+                    type = "provider_publish_response",
                     requestId = requestId,
                     result = result,
                 )
@@ -1368,6 +1409,7 @@ internal class ExtensionHost private constructor(
                     ProcessBuilder(node, "--no-warnings", script.toString())
                         .directory(cwd.toFile())
                         .apply { environment().putAll(environment) }
+                        .withPiAgentEnvironment()
                         .start()
                 } catch (error: Exception) {
                     onDiagnostic(

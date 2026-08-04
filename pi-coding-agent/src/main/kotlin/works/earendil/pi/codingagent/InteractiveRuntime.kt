@@ -15,6 +15,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -104,6 +105,7 @@ class InteractiveRuntime(
     private val agentDir: Path = defaultAgentDirectory(),
     private val consoleFactory: (() -> InteractiveConsole)? = null,
     private val packageUpdateChecker: (Path, Path, Boolean) -> List<String> = ::checkPackageUpdates,
+    private val modelRefreshTimeoutMs: Long = MODEL_REFRESH_TIMEOUT_MS,
 ) {
     private val extensionSurfaceLock = Any()
     private val extensionWidgetsAbove = linkedMapOf<String, List<String>>()
@@ -416,8 +418,20 @@ class InteractiveRuntime(
                             console.readLineWithShortcuts(
                                 prompt = themeForeground(runtime, console, "accent", "> "),
                                 shortcuts =
-                                    shortcutResolution.shortcuts.values.map { shortcut ->
-                                        InteractiveShortcutBinding(shortcut.id, shortcut.shortcut)
+                                    buildList {
+                                        loadExtensionShortcutKeybindings(agentDir)
+                                            .getValue("app.message.copy")
+                                            .forEach { shortcut ->
+                                                add(
+                                                    InteractiveShortcutBinding(
+                                                        COPY_LAST_MESSAGE_SHORTCUT_ID,
+                                                        shortcut,
+                                                    ),
+                                                )
+                                            }
+                                        shortcutResolution.shortcuts.values.forEach { shortcut ->
+                                            add(InteractiveShortcutBinding(shortcut.id, shortcut.shortcut))
+                                        }
                                     },
                                 initialBuffer = editorBuffer,
                             )
@@ -427,6 +441,10 @@ class InteractiveRuntime(
                         }
                     if (read is InteractiveReadResult.Shortcut) {
                         editorBuffer = read.buffer
+                        if (read.id == COPY_LAST_MESSAGE_SHORTCUT_ID) {
+                            copyLastAssistantMessage(runtime, console)
+                            continue
+                        }
                         runtime.invokeExtensionShortcut(read.id)
                         continue
                     }
@@ -474,11 +492,25 @@ class InteractiveRuntime(
 
                         input == "/model" -> console.println(currentModel(runtime))
                         input.startsWith("/model ") -> setModel(runtime, input.removePrefix("/model ").trim(), console)
+                        input == "/ui-mode" ->
+                            console.println(
+                                "UI mode: " +
+                                    ((console as? FullScreenConsoleControl)?.currentUiMode()?.wireValue ?: "regular"),
+                            )
+
+                        input.startsWith("/ui-mode ") ->
+                            switchUiMode(
+                                value = input.removePrefix("/ui-mode ").trim(),
+                                console = console,
+                                runtime = runtime,
+                            )
+
                         input == "/login" || input.startsWith("/login ") ->
                             login(
                                 input.removePrefix("/login").trim().takeIf(String::isNotEmpty),
                                 console,
                                 allowNetwork = !offline,
+                                backgroundScope = packageUpdateScope,
                             )
 
                         input == "/logout" || input.startsWith("/logout ") ->
@@ -1072,10 +1104,68 @@ class InteractiveRuntime(
         )
     }
 
+    private fun switchUiMode(
+        value: String,
+        console: InteractiveConsole,
+        runtime: RpcRuntime,
+    ) {
+        val mode =
+            when (value) {
+                UiMode.REGULAR.wireValue -> UiMode.REGULAR
+                UiMode.FULLSCREEN.wireValue -> UiMode.FULLSCREEN
+                else -> {
+                    console.error("Usage: /ui-mode <regular|fullscreen>")
+                    return
+                }
+            }
+        val fullScreen = console as? FullScreenConsoleControl
+        if (fullScreen == null) {
+            console.error("UI mode switching is unavailable for this console.")
+            return
+        }
+        if (!fullScreen.switchUiMode(mode)) {
+            console.error("Close active overlays before changing UI mode.")
+            return
+        }
+        SettingsStore(
+            cwd = runtime.currentCwd(),
+            agentDir = agentDir,
+            projectTrusted = runtime.currentProjectTrusted(),
+        ).setUiMode(mode)
+        console.println("UI mode: ${mode.wireValue}")
+    }
+
+    private suspend fun copyLastAssistantMessage(
+        runtime: RpcRuntime,
+        console: InteractiveConsole,
+    ) {
+        val text =
+            runtime.handle(buildJsonObject { put("type", "get_last_assistant_text") })
+                ?.get("data")
+                ?.jsonObject
+                ?.string("text")
+        if (text.isNullOrEmpty()) {
+            console.error("No agent messages to copy yet.")
+            return
+        }
+        val fullScreen = console as? FullScreenConsoleControl
+        val copied = fullScreen?.copyTextToClipboard(text) ?: writeClipboardText(text)
+        if (!copied) {
+            console.error("Failed to copy to clipboard.")
+            return
+        }
+        if (fullScreen?.currentUiMode() == UiMode.FULLSCREEN) {
+            fullScreen.flash("Copied!")
+        } else {
+            console.println("Copied last agent message to clipboard.")
+        }
+    }
+
     private suspend fun login(
         providerId: String?,
         console: InteractiveConsole,
         allowNetwork: Boolean,
+        backgroundScope: CoroutineScope,
     ) {
         val options =
             models
@@ -1119,8 +1209,40 @@ class InteractiveRuntime(
                 option.authType,
                 ConsoleAuthInteraction(console),
             )
-            models.refresh(ModelsRefreshOptions(allowNetwork = allowNetwork))
+            val localRefresh =
+                models.refresh(
+                    ModelsRefreshOptions(
+                        allowNetwork = false,
+                        providers = setOf(option.provider.id),
+                    ),
+                )
+            localRefresh.errors[option.provider.id]?.let { throw it }
             console.println("Logged in to ${option.provider.name}.")
+            if (allowNetwork) {
+                backgroundScope.launch {
+                    val refresh =
+                        withTimeoutOrNull(modelRefreshTimeoutMs) {
+                            models.refresh(
+                                ModelsRefreshOptions(
+                                    allowNetwork = true,
+                                    providers = setOf(option.provider.id),
+                                ),
+                            )
+                        }
+                    when {
+                        refresh == null ->
+                            console.println(
+                                "Warning: Model catalog refresh timed out for ${option.provider.id}; " +
+                                    "showing cached models.",
+                            )
+
+                        refresh.errors.isNotEmpty() ->
+                            console.println(
+                                "Warning: Could not refresh ${option.provider.id}; showing cached models.",
+                            )
+                    }
+                }
+            }
         } catch (error: Exception) {
             console.error(error.message ?: "Login failed")
         }
@@ -1186,6 +1308,14 @@ class InteractiveRuntime(
             }
         try {
             models.logout(selectedId)
+            val localRefresh =
+                models.refresh(
+                    ModelsRefreshOptions(
+                        allowNetwork = false,
+                        providers = setOf(selectedId),
+                    ),
+                )
+            localRefresh.errors[selectedId]?.let { throw it }
             val name = models.getProvider(selectedId)?.name ?: selectedId
             console.println("Logged out of $name.")
         } catch (error: Exception) {
@@ -1517,6 +1647,9 @@ private data class LoginOption(
     val authType: AuthType,
 )
 
+private const val MODEL_REFRESH_TIMEOUT_MS = 15_000L
+private const val COPY_LAST_MESSAGE_SHORTCUT_ID = "app.message.copy"
+
 private fun interactiveSlashCommands(
     modelCompletions: (String) -> List<AutocompleteItem>,
     loginCompletions: (String) -> List<AutocompleteItem>,
@@ -1532,6 +1665,17 @@ private fun interactiveSlashCommands(
         SlashCommand("reload", "Reload skills, prompt templates, extensions, themes, and context files"),
         SlashCommand("name", "Set the session name", "<name>"),
         SlashCommand("model", "Show or change the model", "<provider/model>", modelCompletions),
+        SlashCommand(
+            "ui-mode",
+            "Show or change the UI mode",
+            "<regular|fullscreen>",
+        ) { prefix ->
+            fuzzyFilter(
+                listOf(UiMode.REGULAR.wireValue, UiMode.FULLSCREEN.wireValue),
+                prefix,
+                String::toString,
+            ).map(::AutocompleteItem)
+        },
         SlashCommand("login", "Sign in to a provider", "<provider>", loginCompletions),
         SlashCommand("logout", "Remove stored provider credentials", "<provider>", logoutCompletions),
         SlashCommand(
@@ -1927,6 +2071,7 @@ private fun printInteractiveHelp(console: InteractiveConsole) {
         /reload                       Reload skills, prompt templates, and context files
         /name <name>                  Set the session name
         /model [provider/model]       Show or change the model
+        /ui-mode [mode]               Show or change regular|fullscreen mode
         /login [provider]             Sign in to a provider
         /logout [provider]            Remove stored provider credentials
         /thinking <level>             Set off|minimal|low|medium|high|xhigh|max
@@ -1943,6 +2088,7 @@ private fun printInteractiveHotkeys(
     console.println("Keyboard Shortcuts")
     console.println("Ctrl-D                         Exit when the editor is empty")
     console.println("Ctrl-C                         Clear or interrupt input")
+    console.println("Ctrl-X                         Copy the last agent message")
     if (resolution.shortcuts.isNotEmpty()) {
         console.println()
         console.println("Extensions")

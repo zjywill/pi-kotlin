@@ -1,11 +1,11 @@
 # Migration TODO
 
-Last reviewed: July 30, 2026
+Last reviewed: August 3, 2026
 
 ## Completion gate
 
 - Source repository: `/Users/junyizhang/Git/pi`
-- Reviewed source commit: `05558a79280a2f1356bd390a573aeb28726d26b5`
+- Reviewed source commit: `a96fb984d8c8b065fc5d193309fc812a882adee0`
 - Target repository: `/Users/junyizhang/Git/pi-kotlin`
 - The migration is complete only when:
 
@@ -78,8 +78,8 @@ Last reviewed: July 30, 2026
         `stream`, and `streamSimple`
   - [x] Native provider API-key `login`, `check`, and `resolve` callbacks with
         request-scoped `ctx.env()` and `ctx.fileExists()`
-  - [x] Function-valued `refreshModels(context.store)` with provider-scoped
-        `read`, `write`, and `delete`
+  - [x] Function-valued `refreshModels` with immutable `context.stored`,
+        generation-checked `context.publish()`, and legacy provider-store access
   - [x] Official jiti 2.7 TypeScript transpilation and module loading
   - [x] Blocking TUI dialog interruption on timeout and `AbortSignal`
   - [x] Extension shortcut registration, conflict resolution, TUI dispatch,
@@ -120,6 +120,27 @@ Last reviewed: July 30, 2026
   - [x] Preserve OpenAI Chat function arguments beside empty `custom` payloads
   - [x] Classify changelog, formatting-only TUI, release, and post-release commits
   - [x] Match the upstream `OpenCode Go` provider display name
+- [x] Upstream synchronization through `a0014c1a`
+  - [x] Reject prompts during compaction and resume once after recoverable
+        context-overflow or length stops
+  - [x] Preserve nullable unions, Gemini 3 tool IDs, and `shouldStopAfterTurn`
+  - [x] Bound post-login refreshes and resolve duplicate exact model IDs by
+        configured provider authentication
+  - [x] Add Baseten request/catalog support and normalize tool-result images
+  - [x] Emit linear JSON/RPC message updates and protocol-v1 transport auth
+  - [x] Mark every child process with `PI_CODING_AGENT` and `AI_AGENT`
+  - [x] Switch regular/fullscreen UI modes at runtime with persisted settings
+  - [x] Cache bounded offscreen Kitty images and detect Windows truecolor
+  - [x] Cover symlink session discovery and remove the obsolete `--alt`
+- [x] Upstream synchronization through `a96fb984`
+  - [x] Repair incomplete git-package dependencies after failed cleanup
+  - [x] Make provider refresh caller-owned, provider-scoped, cache-first, and
+        generation-safe
+  - [x] Synchronize provider-local cache state after interactive login/logout
+  - [x] Merge generic sampling parameters last into OpenAI request bodies
+  - [x] Preserve root `find` result normalization with regression coverage
+  - [x] Classify contributor-approval metadata outside migrated package paths
+  - [x] Serialize editor state across input, autocomplete, and masked rendering
 
 The July 30 synchronization passes advance the completed migration through
 `05558a79`. They port the OpenAI Chat malformed-delta fix and the `OpenCode Go`
@@ -129,6 +150,26 @@ still match across every rulebook judge. The full
 `./gradlew clean test installDist --max-workers=1` gate passes with 438 tests,
 all 30 deterministic migration oracles pass, and the full migration audit is
 complete.
+
+The August 3 synchronization pass advances the reviewed source through
+`a0014c1a`. It ports compaction recovery, linear streaming events,
+authenticated model disambiguation, Baseten, tool-result image normalization,
+process agent markers, protocol-v1 transport-owned authentication, runtime UI
+mode switching, bounded Kitty image caching, Windows truecolor detection, and
+copy confirmation. Documentation, test-only, and Bun-specific packaging
+commits are classified separately from JVM runtime behavior. The final
+`./gradlew clean test installDist --max-workers=1 --no-daemon` gate passes 521
+tests, all 32 deterministic migration oracles pass against the same source
+commit, and both migration audits are complete.
+
+The latest August 3 synchronization pass advances the reviewed source through
+`a96fb984`. It ports failed-clean dependency repair, caller-owned
+generation-safe model refresh, generic sampling parameters, and provider-local
+credential synchronization; Kotlin's existing root-path normalization is
+retained with a regression test. The final serialized gate passes 529 tests and
+all 32 migration oracles. The pinned TypeScript login dialog currently renders
+generic `secret` prompts in clear text, while Kotlin preserves masked input and
+serializes editor state across concurrent rendering.
 
 ## Completion checklist
 
@@ -140,6 +181,10 @@ complete.
       `d7b02636a0c7e8e615d0cff70679d18d2ff59573..71efc6f0c1909874ec8c944637a9ae7fc0e2d508`
 - [x] Review and classify every migration-package commit in
       `71efc6f0c1909874ec8c944637a9ae7fc0e2d508..05558a79280a2f1356bd390a573aeb28726d26b5`
+- [x] Review and classify every migration-package commit in
+      `01eeafd14a81dadf9ff8e5e1675a0b27351eae12..a0014c1a83ea0b6fd98762a9bdaa90f517a73cbf`
+- [x] Review and classify every migration-package commit in
+      `a0014c1a83ea0b6fd98762a9bdaa90f517a73cbf..a96fb984d8c8b065fc5d193309fc812a882adee0`
 - [x] OAuth five-minute refresh window and credential print commands
 - [x] OpenRouter manual redirect URL fallback
 - [x] Pending stop reason while streaming
@@ -255,9 +300,33 @@ complete.
 
 ## Follow-up
 
-No migration gaps remain against source commit `05558a79`. Future work starts
+No migration gaps remain against source commit `a96fb984`. Future work starts
 only when the TypeScript source advances and a new synchronization range is
 recorded.
+
+Evidence for the latest August 3 upstream synchronization:
+
+- [x] Source fast-forwarded from `01eeafd1` through `a96fb984`; model-data
+      hydration and `npm run build:offline` passed with a clean tracked
+      TypeScript worktree
+- [x] Every commit in the synchronization range is classified in
+      `migration/upstream-sync.tsv`
+- [x] Hydrated schema-v3 catalog contains 38 provider files and 1,151 model
+      records with manifest structure hash
+      `8f42becde9d67b0f50730e36639d319dd0da3f4c26c0ca8d2c6e8c93a5a566a0`
+- [x] `./gradlew clean test installDist --max-workers=1 --no-daemon` with 529
+      tests and no failures, errors, or skips
+- [x] All 32 deterministic migration oracles against `a96fb984`
+- [x] Installed TypeScript/Kotlin TUI matrix at 40, 80, and 120 columns in
+      regular and fullscreen modes
+- [x] Installed `pi` version/help and `pi-server` spawn, status, direct
+      `get_state`, streamed `get_state`, stop, and empty-list smoke
+- [x] `./migration/audit-migration.sh sync` and
+      `./migration/audit-migration.sh full` through `a96fb984`
+- [x] Kotlin API-key input remains masked and stable during concurrent renders;
+      the pinned TypeScript clear-text secret-prompt regression is documented
+- [x] Zero unchecked migration TODOs, incomplete inventory rows, port markers,
+      or whitespace errors
 
 Evidence for the latest July 30 upstream synchronization:
 

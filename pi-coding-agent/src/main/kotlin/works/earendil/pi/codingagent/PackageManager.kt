@@ -9,6 +9,7 @@ import java.nio.file.attribute.PosixFilePermission
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -516,8 +517,9 @@ internal class PackageManager(
                     val path = gitInstallPath(parsed, scope)
                     if (Files.exists(path)) {
                         path.toFile().deleteRecursively()
-                        pruneEmptyGitParents(path, gitInstallRoot(scope))
                     }
+                    Files.deleteIfExists(gitUpdateMarkerPath(path))
+                    pruneEmptyGitParents(path, gitInstallRoot(scope))
                 }
 
                 is ParsedPackageSource.Local -> Unit
@@ -599,6 +601,7 @@ internal class PackageManager(
     ) {
         val target = gitInstallPath(source, scope)
         Files.createDirectories(target.parent)
+        Files.deleteIfExists(gitUpdateMarkerPath(target))
         val checkoutExisted = Files.exists(target.resolve(".git"))
         if (!checkoutExisted) {
             if (Files.exists(target)) {
@@ -729,22 +732,80 @@ internal class PackageManager(
                     timeoutSeconds = NETWORK_COMMAND_TIMEOUT_SECONDS,
                 ).trim()
         if (localHead == targetHead) {
+            val marker = gitUpdateMarkerPath(target)
+            if (Files.exists(marker)) {
+                cleanAndInstallGitDependencies(target, marker)
+            } else {
+                repairMissingGitDependencies(target)
+            }
             return
         }
+        val marker = gitUpdateMarkerPath(target)
+        Files.writeString(
+            marker,
+            "",
+            StandardOpenOption.CREATE,
+            StandardOpenOption.TRUNCATE_EXISTING,
+        )
         commandRunner.run(
             listOf("git", "reset", "--hard", commitRef),
             cwd = target,
             environment = environment,
             timeoutSeconds = PACKAGE_COMMAND_TIMEOUT_SECONDS,
         )
-        commandRunner.run(
-            listOf("git", "clean", "-fdx"),
-            cwd = target,
-            environment = environment,
-            timeoutSeconds = PACKAGE_COMMAND_TIMEOUT_SECONDS,
-        )
-        installGitDependencies(target)
+        cleanAndInstallGitDependencies(target, marker)
     }
+
+    private fun cleanAndInstallGitDependencies(
+        target: Path,
+        marker: Path,
+    ) {
+        try {
+            commandRunner.run(
+                listOf("git", "clean", "-fdx"),
+                cwd = target,
+                environment = environment,
+                timeoutSeconds = PACKAGE_COMMAND_TIMEOUT_SECONDS,
+            )
+        } catch (error: Exception) {
+            runCatching { repairMissingGitDependencies(target) }
+            throw error
+        }
+        installGitDependencies(target)
+        Files.deleteIfExists(marker)
+    }
+
+    private fun repairMissingGitDependencies(target: Path) {
+        if (hasMissingGitDependencies(target)) {
+            installGitDependencies(target)
+        }
+    }
+
+    private fun hasMissingGitDependencies(target: Path): Boolean {
+        val manifest = target.resolve("package.json")
+        if (!Files.exists(manifest)) {
+            return false
+        }
+        val dependencies =
+            runCatching {
+                packageJson
+                    .parseToJsonElement(Files.readString(manifest))
+                    .jsonObject["dependencies"] as? JsonObject
+            }.getOrNull() ?: return false
+        val nodeModules = target.resolve("node_modules").normalize()
+        return dependencies.keys.any { name ->
+            val dependency =
+                name
+                    .split('/')
+                    .filter(String::isNotEmpty)
+                    .fold(nodeModules, Path::resolve)
+                    .normalize()
+            dependency.startsWith(nodeModules) && !Files.exists(dependency)
+        }
+    }
+
+    private fun gitUpdateMarkerPath(target: Path): Path =
+        target.parent.resolve(".${target.fileName}.pi-update-incomplete")
 
     private fun installGitDependencies(target: Path) {
         if (!Files.exists(target.resolve("package.json"))) {
@@ -1546,7 +1607,8 @@ internal fun runPackageProcess(
                 }
                 environment().putAll(environment)
                 redirectErrorStream(true)
-            }.start()
+            }.withPiAgentEnvironment()
+            .start()
     val outputBytes = ByteArrayOutputStream()
     val outputThread =
         Thread {

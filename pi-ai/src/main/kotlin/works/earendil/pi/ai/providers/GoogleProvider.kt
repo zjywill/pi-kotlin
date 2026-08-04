@@ -282,7 +282,9 @@ class GoogleProvider(
                                                 put(
                                                     "functionResponse",
                                                     buildJsonObject {
-                                                        put("id", message.toolCallId)
+                                                        if (requiresGoogleToolCallId(model.id)) {
+                                                            put("id", normalizeGoogleToolCallId(message.toolCallId))
+                                                        }
                                                         put("name", message.toolName)
                                                         put(
                                                             "response",
@@ -383,7 +385,9 @@ class GoogleProvider(
                                     put(
                                         "functionCall",
                                         buildJsonObject {
-                                            put("id", block.id)
+                                            if (requiresGoogleToolCallId(model.id)) {
+                                                put("id", normalizeGoogleToolCallId(block.id))
+                                            }
                                             put("name", block.name)
                                             put("args", block.arguments)
                                         },
@@ -474,6 +478,21 @@ private fun sanitizeGoogleSurrogates(value: String): String {
     }
     return output.toString()
 }
+
+internal fun requiresGoogleToolCallId(modelId: String): Boolean {
+    val geminiMajorVersion =
+        Regex("^gemini(?:-live)?-(\\d+)")
+            .find(modelId.lowercase())
+            ?.groupValues
+            ?.get(1)
+            ?.toIntOrNull()
+    return modelId.startsWith("claude-") ||
+        modelId.startsWith("gpt-oss-") ||
+        geminiMajorVersion?.let { it >= 3 } == true
+}
+
+internal fun normalizeGoogleToolCallId(id: String): String =
+    id.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(64)
 
 internal fun buildGoogleRequestBody(
     model: Model,

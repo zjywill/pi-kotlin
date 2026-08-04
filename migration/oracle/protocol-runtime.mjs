@@ -15,7 +15,6 @@ const rejects = (operation) => {
 const clientHello = {
 	type: "hello",
 	version: protocol.PROTOCOL_VERSION,
-	token: "secret",
 };
 const request = {
 	type: "request",
@@ -80,7 +79,7 @@ console.log(
 		rejections: {
 			cycle: rejects(() => protocol.encodeCbor(cyclic)),
 			trailingCbor: rejects(() => protocol.decodeCbor(Uint8Array.of(0xf6, 0xf6))),
-			emptyToken: rejects(() => protocol.parseClientMessage({ ...clientHello, token: "" })),
+			credentialField: rejects(() => protocol.parseClientMessage({ ...clientHello, token: "secret" })),
 			extraHelloField: rejects(() => protocol.parseClientMessage({ ...clientHello, extra: true })),
 			shortFrameLimit: rejects(() => protocol.encodeClientMessage(clientHello, { maxFrameLength: 8 })),
 		},

@@ -12,6 +12,7 @@ const { createModels } = await import(pathToFileURL(`${tsRoot}/packages/ai/src/m
 const { anthropicProvider } = await import(
 	pathToFileURL(`${tsRoot}/packages/ai/src/providers/anthropic.ts`).href
 );
+const oauthSignal = new AbortController().signal;
 
 type OAuthRequest = {
 	url: string;
@@ -46,6 +47,7 @@ let authorizationUrl = "";
 const loginEvents: unknown[] = [];
 const loginStart = Date.now();
 const loginCredential = await anthropicOAuth.login({
+	signal: oauthSignal,
 	notify: (event) => {
 		if (event.type === "auth_url") authorizationUrl = event.url;
 		if (event.type === "progress") loginEvents.push({ type: event.type, message: event.message });
@@ -57,7 +59,7 @@ const loginCredential = await anthropicOAuth.login({
 	},
 });
 const refreshStart = Date.now();
-const refreshCredential = await anthropicOAuth.refresh(loginCredential);
+const refreshCredential = await anthropicOAuth.refresh(loginCredential, oauthSignal);
 globalThis.fetch = originalFetch;
 
 type CapturedProviderRequest = {

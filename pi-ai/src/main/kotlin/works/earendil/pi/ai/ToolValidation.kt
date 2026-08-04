@@ -59,6 +59,20 @@ private fun coerceValue(
     value: JsonElement,
     schema: JsonObject,
 ): JsonElement {
+    val unionSchemas = unionSchemas(schema)
+    if (unionSchemas.isNotEmpty()) {
+        if (unionSchemas.any { valueMatchesSchema(value, it) }) {
+            return value
+        }
+        unionSchemas.forEach { branch ->
+            val candidate = coerceValue(value, branch)
+            if (valueMatchesSchema(candidate, branch)) {
+                return candidate
+            }
+        }
+        return value
+    }
+
     val schemaTypes = schemaTypes(schema)
     if (schemaTypes.any { matchesType(value, it) }) {
         return coerceNested(value, schema, schemaTypes)
@@ -138,6 +152,14 @@ private fun validateValue(
     path: String,
     errors: MutableList<String>,
 ) {
+    val unionSchemas = unionSchemas(schema)
+    if (unionSchemas.isNotEmpty()) {
+        if (unionSchemas.none { valueMatchesSchema(value, it) }) {
+            errors += "${path.ifEmpty { "root" }}: expected a value matching one union branch"
+        }
+        return
+    }
+
     val types = schemaTypes(schema)
     if (types.isNotEmpty() && types.none { matchesType(value, it) }) {
         errors += "${path.ifEmpty { "root" }}: expected ${types.joinToString(" or ")}"
@@ -183,6 +205,21 @@ private fun schemaTypes(schema: JsonObject): List<String> =
         is JsonArray -> type.map { it.jsonPrimitive.content }
         else -> emptyList()
     }
+
+private fun unionSchemas(schema: JsonObject): List<JsonObject> =
+    listOf("anyOf", "oneOf")
+        .firstNotNullOfOrNull { keyword ->
+            (schema[keyword] as? JsonArray)?.mapNotNull { it as? JsonObject }
+        }.orEmpty()
+
+private fun valueMatchesSchema(
+    value: JsonElement,
+    schema: JsonObject,
+): Boolean {
+    val errors = mutableListOf<String>()
+    validateValue(value, schema, "", errors)
+    return errors.isEmpty()
+}
 
 private fun matchesType(
     value: JsonElement,

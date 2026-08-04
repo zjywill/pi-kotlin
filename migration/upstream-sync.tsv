@@ -223,3 +223,37 @@ e05cc6e12cd5d4fb919785c3da5b2d40961e386a	not-applicable	Contributor changelog re
 35fe55573cc1f49377ca2c63b369a559e4c699ce	ported	Merge commit for experimental CLI composition
 88ed89dbab71bf2a5158102d9ac01a18f6df5f71	not-applicable	AgentHarness v2 effects and generator design documents only
 01eeafd14a81dadf9ff8e5e1675a0b27351eae12	not-applicable	AgentHarness v2 durable queue-cancellation design documentation only
+8eda4f5b256009b8e752651683701b041e1632d3	ported	RPC rejects prompts while manual compaction is active and preserves the upstream retry guidance
+f0deb8dd8e9611e89b5bc4145ca92c03ae6ed4ee	not-applicable	Documentation revert only; no runtime contract change
+a077fff0b248878229784ff608256aa6d0922026	already-covered	Model catalog failures already retain provider IDs in update errors, and post-login warnings now name every failed catalog
+c6eb6281a806a9c5d7ec41d2850692f7f7ebcb59	ported	Post-login model catalog refresh is bounded to 15 seconds and falls back to cached models
+ebf33c0c2282fb8c027174d3d2b53519d8f564e3	ported	Ctrl-X copies the last assistant message and fullscreen mode flashes Copied confirmation
+b9d360a2c753e058a90dc0a252950631501c10d0	already-covered	Google and Vertex use the shared retrying SSE transport with maxRetries and maxRetryDelayMs
+786c76cb76bea452fa7287cc1014c4a3d3cad2b1	not-applicable	Branch-summary documentation diagram only
+cbaca60389f5d7097a43c95f56a19d344ecf2195	ported	Google and Vertex preserve tool call IDs for Claude, GPT-OSS, and Gemini major version 3 or newer
+4f4762f06de104d7f108bb6cfa387259dc825c84	ported	Every coding-agent child process receives PI_CODING_AGENT=true and AI_AGENT=pi
+d93e7e88fae51e698efd2921ccb38aa26f592470	ported	Merge commit for prompt rejection during active compaction
+816237c101645954d2a0ecf4bb9360a9cc71ddf1	not-applicable	Bun native binary CPU baseline flags have no JVM distribution equivalent
+2e95584dab802ae2f7c8d1a4994d6e0e9f67ec09	ported	Tool argument coercion preserves valid nullable union branches before coercing alternatives
+b04faa2dae8d06b31208ace84ca4d8911c2d3c27	ported	Ambiguous exact model IDs prefer the sole authenticated provider and otherwise require explicit qualification
+0f5286d8ab86942d12c85a9df2893c98c1157405	ported	AgentOptions exposes shouldStopAfterTurn and forwards it into the loop configuration
+b0e05b442305067b0021238a6e2f217c1bf65416	ported	Tool-result images are normalized after extension hooks with resize, PNG conversion, and images.autoResize control
+a8ee03b8156c2232d67ad2cdb79683b4a5c8fdbe	ported	Alternate-screen Kitty rendering retains bounded recently offscreen uploads and evicts them by LRU resource limits
+a24fb9e96a3fbc7be2a87e81aa1aa5c0ddf95d35	already-covered	Nullable auth headers retain deletion markers until final request header merging
+c1019d9202b648143d123b7e6fb76543a6b82de6	ported	Baseten is a built-in provider with BASETEN_API_KEY, GLM-5.2 and Kimi-K2.6 metadata, and chat_template_args reasoning controls
+0e633790c5a007f6d4bf35ba67ced457287c25ac	ported	Terminal color parsing accepts batched CSI 997 reports
+305c014dcccfe97ebd3f4057ac16c436f1e2c71e	ported	Protocol v1 removes framed hello tokens so authentication remains transport-specific
+e563301dd332677561d5bf9e85ade509d860b5fd	not-applicable	Upstream overflow test fixture model substitution only
+b103937d3c003a48d32de9763856f2dae55ab605	ported	The interactive console switches regular and fullscreen modes at runtime without rebuilding session state and persists the choice
+e56893f4cd6545ab1498b72ae4e1e2241a0926f4	already-covered	Kotlin keeps its Agent event subscription attached throughout manual and automatic compaction
+32850ef7c5edff7a6eee0214516fbb7382bf292d	ported	Context overflow and recoverable length stops compact once, rebuild retryable context, and resume the prompt
+a4475344fb765850ec5321efe3c67e6f364ead5c	ported	CLI JSON and RPC streams omit cumulative message and partial snapshots from message_update events
+da66636cc4e607bf7f05d9cb64bf6963b10a007d	already-covered	Java directory and regular-file checks follow valid symlinks; regression coverage preserves alias paths and ignores broken links
+c72728bc1a5ba08abc7e3c8d791d44995306f4e4	ported	The obsolete hidden --alt argument and parser coverage are removed
+3d264e85b4f870a93c5b763b95dd988a4f225da4	already-covered	The in-place Kotlin renderer exits alternate screen without starting a replacement terminal or issuing startup queries
+fa07e7bd92c90a0210a269354733c274e9fc11e6	ported	Windows consoles default to truecolor even when WT_SESSION is absent
+a0014c1a83ea0b6fd98762a9bdaa90f517a73cbf	not-applicable	AgentHarness v2 effects documentation finalization only
+b06dc76fd7b17d890403386cc5147ae5ea9f68ac	ported	Git package updates recover dependencies after failed cleanup and repair already-current incomplete installs
+fed6009cc9ccfb15088bc55244120918b5fe23f2	ported	Model refreshes are caller-owned, provider-scoped, generation-safe, cache-first, and synchronized after interactive credential changes
+25a2c8dcfec4e017720c163a6166200a9bef98ae	ported	Generic sampling parameters flow through model configuration and merge last into OpenAI Chat and Responses request bodies
+523b5a4917ea46c20fb7b24a41311b158b7eeb05	already-covered	Kotlin Path.relativize already normalizes find results from a root search; regression coverage preserves the contract

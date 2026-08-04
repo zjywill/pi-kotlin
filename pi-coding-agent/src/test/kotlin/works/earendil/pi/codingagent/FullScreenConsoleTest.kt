@@ -44,6 +44,24 @@ class FullScreenConsoleTest {
     }
 
     @Test
+    fun `UI mode switches at runtime without replacing the console`() {
+        val terminal = ConsoleTerminal(columns = 30, rows = 8)
+        val console = FullScreenConsole(terminal, closeTerminal = null)
+
+        assertEquals(UiMode.REGULAR, console.currentUiMode())
+        assertTrue(console.switchUiMode(UiMode.FULLSCREEN))
+        assertEquals(UiMode.FULLSCREEN, console.currentUiMode())
+        assertTrue(terminal.output().contains("\u001B[?1049h"))
+
+        console.println("switched")
+        assertTrue(console.switchUiMode(UiMode.REGULAR))
+        assertEquals(UiMode.REGULAR, console.currentUiMode())
+        assertTrue(terminal.output().contains("\u001B[?1049l"))
+        assertTrue(terminal.output().contains("switched"))
+        console.close()
+    }
+
+    @Test
     fun `full screen console reads raw editor input and renders transcript`() {
         val terminal = ConsoleTerminal(columns = 40, rows = 12)
         val console = FullScreenConsole(terminal, closeTerminal = null)
@@ -80,6 +98,25 @@ class FullScreenConsoleTest {
     }
 
     @Test
+    fun `copy falls back to OSC 52 and flashes in fullscreen mode`() {
+        val terminal = ConsoleTerminal(columns = 30, rows = 8)
+        val console =
+            FullScreenConsole(
+                terminalAdapter = terminal,
+                closeTerminal = null,
+                uiMode = UiMode.FULLSCREEN,
+                clipboardTextWriter = { false },
+            )
+
+        assertTrue(console.copyTextToClipboard("copied"))
+        console.flash("Copied!")
+
+        assertTrue(terminal.output().contains("\u001B]52;c;Y29waWVk\u0007"))
+        assertTrue(terminal.output().contains("Copied!"))
+        console.close()
+    }
+
+    @Test
     fun `secret input is masked and ctrl d returns eof only when empty`() {
         val terminal = ConsoleTerminal()
         val console = FullScreenConsole(terminal, closeTerminal = null)
@@ -98,6 +135,29 @@ class FullScreenConsoleTest {
         terminal.awaitOutput("> ")
         terminal.sendInput("\u0004")
         assertNull(eof.get(2, TimeUnit.SECONDS))
+        console.close()
+    }
+
+    @Test
+    fun `secret input remains stable during concurrent renders`() {
+        val terminal = ConsoleTerminal(columns = 80, rows = 24)
+        val console = FullScreenConsole(terminal, closeTerminal = null)
+        val secret = "rpc-secret-".repeat(12)
+        val result = CompletableFuture.supplyAsync { console.readSecret("Key: ") }
+        terminal.awaitOutput("Key: ")
+
+        val renders =
+            CompletableFuture.runAsync {
+                repeat(200) { index ->
+                    console.setHeader(listOf("header-$index"))
+                }
+            }
+        terminal.sendText(secret)
+        terminal.sendInput("\r")
+
+        assertEquals(secret, result.get(2, TimeUnit.SECONDS))
+        renders.get(2, TimeUnit.SECONDS)
+        assertFalse(terminal.output().contains(secret))
         console.close()
     }
 

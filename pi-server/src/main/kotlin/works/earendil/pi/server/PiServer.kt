@@ -1,6 +1,5 @@
 package works.earendil.pi.server
 
-import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -65,7 +64,6 @@ class PiServer(
     )
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val expectedTokenDigest = tokenDigest(options.token)
     private val connections = ConcurrentHashMap.newKeySet<ProtocolConnectionState>()
     private val liveSessions = ConcurrentHashMap<String, LiveSession>()
     private val openingSessions = ConcurrentHashMap<String, CompletableDeferred<LiveSession>>()
@@ -234,10 +232,6 @@ class PiServer(
         state: ProtocolConnectionState,
         hello: JsonObject,
     ) {
-        if (!MessageDigest.isEqual(tokenDigest(hello.protocolString("token")), expectedTokenDigest)) {
-            failProtocol(state, protocolError("auth", "Authentication failed"))
-            return
-        }
         val version = hello.protocolLong("version")
         if (!isSupportedProtocolVersion(version)) {
             failProtocol(
@@ -809,9 +803,6 @@ class PiServer(
         }
     }
 }
-
-private fun tokenDigest(token: String): ByteArray =
-    MessageDigest.getInstance("SHA-256").digest(token.toByteArray(Charsets.UTF_8))
 
 private fun protocolError(
     code: String,

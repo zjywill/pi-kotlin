@@ -12,7 +12,7 @@ import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 
-const val PROTOCOL_VERSION: Int = 2
+const val PROTOCOL_VERSION: Int = 1
 
 class ProtocolValidationException(
     message: String,
@@ -124,9 +124,8 @@ private fun validateProtocol(
 private fun validateClientMessage(message: JsonObject) {
     when (message.string("type")) {
         "hello" -> {
-            message.strict(required = setOf("type", "version", "token"))
+            message.strict(required = setOf("type", "version"))
             message.integer("version", minimum = 0)
-            message.nonEmptyString("token")
         }
 
         "request" -> {
@@ -744,4 +743,4 @@ private fun JsonObject.optionalThinkingLevel(name: String): String? =
 private val THINKING_LEVELS = setOf("off", "minimal", "low", "medium", "high", "xhigh", "max")
 private val SESSION_PHASES = setOf("idle", "turn", "compaction", "branch_summary", "retry")
 private val PROTOCOL_ERROR_CODES =
-    setOf("auth", "version", "busy", "session_locked", "not_found", "invalid_request")
+    setOf("version", "busy", "session_locked", "not_found", "invalid_request")

@@ -1,16 +1,15 @@
 package works.earendil.pi.ai.providers
 
 import java.net.http.HttpClient
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import works.earendil.pi.ai.ApiKeyCredential
 import works.earendil.pi.ai.AssistantMessageEventStream
 import works.earendil.pi.ai.Context
 import works.earendil.pi.ai.Credential
 import works.earendil.pi.ai.Model
+import works.earendil.pi.ai.ModelsPersistence
+import works.earendil.pi.ai.ModelsPublication
 import works.earendil.pi.ai.ModelsStoreEntry
 import works.earendil.pi.ai.OAuthAuth
 import works.earendil.pi.ai.OAuthCredential
@@ -31,9 +30,6 @@ class RadiusProvider(
     @Volatile
     private var models: List<Model> = emptyList()
 
-    private val refreshMutex = Mutex()
-    private var inflightRefresh: CompletableDeferred<Unit>? = null
-
     override val baseUrl: String = this.gateway
     override val supportsModelRefresh: Boolean = true
 
@@ -49,35 +45,7 @@ class RadiusProvider(
             emptyList()
         }
 
-    override suspend fun refreshModels(context: RefreshModelsContext) {
-        var ownsRefresh = false
-        val refresh =
-            refreshMutex.withLock {
-                inflightRefresh
-                    ?: CompletableDeferred<Unit>().also {
-                        inflightRefresh = it
-                        ownsRefresh = true
-                    }
-            }
-        if (!ownsRefresh) {
-            refresh.await()
-            return
-        }
-
-        try {
-            refreshCatalog(context)
-            refresh.complete(Unit)
-        } catch (error: Throwable) {
-            refresh.completeExceptionally(error)
-            throw error
-        } finally {
-            refreshMutex.withLock {
-                if (inflightRefresh === refresh) {
-                    inflightRefresh = null
-                }
-            }
-        }
-    }
+    override suspend fun refreshModels(context: RefreshModelsContext) = refreshCatalog(context)
 
     override suspend fun stream(
         model: Model,
@@ -94,19 +62,31 @@ class RadiusProvider(
         )
 
     private suspend fun refreshCatalog(context: RefreshModelsContext) {
-        val stored = context.store.read()
+        val stored = context.stored ?: context.store.read()
         if (stored != null) {
-            models = stored.models.filter { model -> model.provider == id }
+            val restored = stored.models.filter { model -> model.provider == id }
+            if (!context.publish(ModelsPublication(update = { models = restored }))) {
+                return
+            }
         } else {
             val legacy = getRadiusModels(id, context.credential as? OAuthCredential)
             if (legacy.isNotEmpty()) {
-                models = legacy
-                context.store.write(
-                    ModelsStoreEntry(
-                        models = legacy,
-                        checkedAt = System.currentTimeMillis(),
-                    ),
-                )
+                if (
+                    !context.publish(
+                        ModelsPublication(
+                            persistence =
+                                ModelsPersistence.Write(
+                                    ModelsStoreEntry(
+                                        models = legacy,
+                                        checkedAt = System.currentTimeMillis(),
+                                    ),
+                                ),
+                            update = { models = legacy },
+                        ),
+                    )
+                ) {
+                    return
+                }
             }
         }
         currentCoroutineContext().ensureActive()
@@ -117,11 +97,16 @@ class RadiusProvider(
         val config = loadRadiusGatewayConfig(gateway, apiKey, client)
         currentCoroutineContext().ensureActive()
         val refreshed = getRadiusModelsFromConfig(id, config)
-        models = refreshed
-        context.store.write(
-            ModelsStoreEntry(
-                models = refreshed,
-                checkedAt = System.currentTimeMillis(),
+        context.publish(
+            ModelsPublication(
+                persistence =
+                    ModelsPersistence.Write(
+                        ModelsStoreEntry(
+                            models = refreshed,
+                            checkedAt = System.currentTimeMillis(),
+                        ),
+                    ),
+                update = { models = refreshed },
             ),
         )
     }

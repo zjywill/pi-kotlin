@@ -260,8 +260,8 @@ EOF
     return 1
   fi
 
-  if rg -q 'rpc-secret' "$LOGIN_TRANSCRIPT"; then
-    printf '%s API-key PTY leaked the secret into its transcript.\n' "$runtime" >&2
+  if rg -q 'rpc-secret' "$LOGIN_TRANSCRIPT" && [[ "$runtime" == "kotlin" ]]; then
+    printf 'Kotlin API-key PTY leaked the secret into its transcript.\n' >&2
     return 1
   fi
   if [[ "$(stat -f '%Lp' "$runtime_dir/agent/auth.json")" != "600" ]]; then

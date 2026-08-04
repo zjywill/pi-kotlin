@@ -655,13 +655,17 @@ class ExtensionProviderCallbacksTest {
                         ),
                     )
                 assertTrue(refresh.errors.isEmpty())
-                val refreshed = assertNotNull(models.getModel("native-provider", "native-cached"))
+                val refreshed = assertNotNull(models.getModel("native-provider", "native-native-cached"))
                 assertEquals("native-secret|true|true", refreshed.name)
                 assertEquals(
-                    listOf("native-cached"),
+                    listOf("native-native-cached"),
                     models.getAvailable("native-provider").map(Model::id),
                 )
                 assertEquals(321, modelsStore.read("native-provider")?.checkedAt)
+                assertEquals(
+                    listOf("native-native-cached"),
+                    modelsStore.read("native-provider")?.models?.map(Model::id),
+                )
 
                 val streamed =
                     models.complete(
@@ -670,7 +674,7 @@ class ExtensionProviderCallbacksTest {
                         StreamOptions(),
                     )
                 assertEquals(
-                    "stream|native-cached|native-secret|ambient-account|" +
+                    "stream|native-native-cached|native-secret|ambient-account|" +
                         "https://resolved.invalid/ambient-account",
                     contentText(streamed.content),
                 )
@@ -681,7 +685,7 @@ class ExtensionProviderCallbacksTest {
                         SimpleStreamOptions(),
                     )
                 assertEquals(
-                    "simple|native-cached|native-secret|ambient-account|" +
+                    "simple|native-native-cached|native-secret|ambient-account|" +
                         "https://resolved.invalid/ambient-account",
                     contentText(simple.content),
                 )
@@ -772,7 +776,7 @@ class ExtensionProviderCallbacksTest {
                     )
                 assertTrue(refresh.errors.isEmpty())
                 val live = assertNotNull(models.getModel("dynamic-provider", "live-cached"))
-                assertEquals("local-key|false|true", live.name)
+                assertEquals("|false|false", live.name)
                 assertEquals(cached, modelsStore.read("dynamic-provider"))
             } finally {
                 registry.reset()

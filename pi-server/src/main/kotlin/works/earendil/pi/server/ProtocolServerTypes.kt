@@ -86,14 +86,12 @@ interface PiSessionBackend {
 
 data class PiServerOptions(
     val listeners: List<PiServerListener>,
-    val token: String,
     val serverId: String = java.util.UUID.randomUUID().toString(),
     val maxFrameLength: Int = works.earendil.pi.protocol.DEFAULT_MAX_FRAME_LENGTH,
     val handshakeTimeoutMs: Long = 5_000,
     val onError: ((Throwable) -> Unit)? = null,
 ) {
     init {
-        require(token.isNotEmpty()) { "PiServer token must not be empty" }
         require(maxFrameLength > 0) { "PiServer maxFrameLength must be positive" }
         require(handshakeTimeoutMs in 1..2_147_483_647L) {
             "PiServer handshakeTimeoutMs must be between 1 and 2147483647"

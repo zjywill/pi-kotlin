@@ -56,6 +56,7 @@ class Editor(
     var onChange: ((String) -> Unit)? = null
     var disableSubmit: Boolean = false
     var borderColor: (String) -> String = theme.borderColor
+    @Volatile
     var maskCharacter: String? = null
 
     private var state = EditorState(mutableListOf(""), 0, 0)
@@ -77,20 +78,26 @@ class Editor(
     private var lastRenderWidth = 80
     private var scrollOffset = 0
 
+    @Synchronized
     fun getText(): String = state.lines.joinToString("\n")
 
+    @Synchronized
     fun getExpandedText(): String = getText()
 
+    @Synchronized
     fun getLines(): List<String> = state.lines.toList()
 
+    @Synchronized
     fun getCursor(): EditorCursor = EditorCursor(state.cursorLine, state.cursorColumn)
 
+    @Synchronized
     fun setText(text: String) {
         exitHistory()
         pushUndo()
         setTextInternal(text, atStart = false)
     }
 
+    @Synchronized
     fun insertTextAtCursor(text: String) {
         if (text.isEmpty()) {
             return
@@ -100,6 +107,7 @@ class Editor(
         changed(triggerAutocomplete = true)
     }
 
+    @Synchronized
     fun addToHistory(text: String) {
         val value = text.trim()
         if (value.isEmpty() || history.firstOrNull() == value) {
@@ -125,6 +133,7 @@ class Editor(
 
     fun getAutocompleteMaxVisible(): Int = autocompleteMaxVisible
 
+    @Synchronized
     fun setAutocompleteProvider(provider: AutocompleteProvider?) {
         autocompleteProvider = provider
         cancelAutocomplete()
@@ -132,6 +141,7 @@ class Editor(
 
     fun isShowingAutocomplete(): Boolean = autocompleteSuggestions != null
 
+    @Synchronized
     override fun render(width: Int): List<String> {
         val safePadding = paddingX.coerceAtMost(max(0, floor((width - 1) / 2.0).toInt()))
         val contentWidth = max(1, width - safePadding * 2)
@@ -201,6 +211,7 @@ class Editor(
         return result
     }
 
+    @Synchronized
     override fun handleInput(data: String) {
         if (handlePasteInput(data)) {
             return
@@ -345,15 +356,21 @@ class Editor(
                 state.cursorLine,
                 state.cursorColumn,
                 AutocompleteRequest(force),
-            ).whenComplete { suggestions, _ ->
-                if (autocompleteRequest.get() != id) {
-                    return@whenComplete
-                }
-                autocompleteSuggestions =
-                    suggestions?.takeIf { result -> result.items.isNotEmpty() }
-                autocompleteSelected = 0
-                tui.requestRender()
-            }
+            ).whenComplete { suggestions, _ -> publishAutocomplete(id, suggestions) }
+    }
+
+    @Synchronized
+    private fun publishAutocomplete(
+        id: Long,
+        suggestions: AutocompleteSuggestions?,
+    ) {
+        if (autocompleteRequest.get() != id) {
+            return
+        }
+        autocompleteSuggestions =
+            suggestions?.takeIf { result -> result.items.isNotEmpty() }
+        autocompleteSelected = 0
+        tui.requestRender()
     }
 
     private fun cancelAutocomplete() {

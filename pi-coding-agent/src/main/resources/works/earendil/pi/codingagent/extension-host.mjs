@@ -2582,6 +2582,24 @@ function extensionProviderStore(parentId, signal) {
 	};
 }
 
+function extensionProviderPublish(parentId, signal) {
+	return async (publication = {}) => {
+		const hasPersist = Object.prototype.hasOwnProperty.call(publication, "persist");
+		const accepted = await requestProviderBridge(
+			parentId,
+			"provider_publish_request",
+			"publish",
+			{
+				hasPersist,
+				persist: hasPersist ? publication.persist : undefined,
+			},
+			signal,
+		);
+		if (accepted) publication.update?.();
+		return accepted;
+	};
+}
+
 async function invokeProviderCallback(request) {
 	const registration = providerRegistration(request.callbackToken);
 	const config = registration.config;
@@ -2618,6 +2636,7 @@ async function invokeProviderCallback(request) {
 					config.refreshModels({
 						...context,
 						store: extensionProviderStore(request.id, controller.signal),
+						publish: extensionProviderPublish(request.id, controller.signal),
 						signal: controller.signal,
 					}),
 					controller.signal,
@@ -2728,7 +2747,7 @@ async function invokeProviderCallback(request) {
 				return {
 					result: jsonValue(
 						await awaitProviderOperation(
-							config.oauth.refreshToken(request.arguments?.credential),
+							config.oauth.refreshToken(request.arguments?.credential, controller.signal),
 							controller.signal,
 						),
 					),
@@ -3194,7 +3213,11 @@ input.on("line", line => {
 		pendingProviderAuthRequests.get(request.requestId)?.resolve(request);
 		return;
 	}
-	if (request.type === "provider_context_response" || request.type === "provider_store_response") {
+	if (
+		request.type === "provider_context_response" ||
+		request.type === "provider_store_response" ||
+		request.type === "provider_publish_response"
+	) {
 		pendingProviderBridgeRequests.get(request.requestId)?.resolve(request);
 		return;
 	}

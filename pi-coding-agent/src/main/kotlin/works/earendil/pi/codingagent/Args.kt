@@ -191,7 +191,6 @@ fun parseArgs(arguments: List<String>): Args {
                 }
             }
 
-            argument == "--alt" -> result.uiMode = UiMode.FULLSCREEN
             argument == "--verbose" -> result.verbose = true
             argument == "--approve" || argument == "-a" -> result.projectTrustOverride = true
             argument == "--no-approve" || argument == "-na" -> result.projectTrustOverride = false

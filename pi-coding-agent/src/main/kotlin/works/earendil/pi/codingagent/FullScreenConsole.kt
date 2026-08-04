@@ -1,6 +1,7 @@
 package works.earendil.pi.codingagent
 
 import java.io.Closeable
+import java.util.Base64
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
@@ -45,6 +46,14 @@ internal interface FullScreenConsoleControl {
     fun setAutocompleteProvider(provider: AutocompleteProvider?)
 
     fun setTitle(title: String)
+
+    fun currentUiMode(): UiMode = UiMode.REGULAR
+
+    fun switchUiMode(mode: UiMode): Boolean = false
+
+    fun copyTextToClipboard(text: String): Boolean = false
+
+    fun flash(message: String) = Unit
 
     fun setScrollbarStyle(style: (String) -> String) = Unit
 
@@ -101,6 +110,7 @@ internal class FullScreenConsole(
     fullscreenScrollbar: ScrollViewScrollbar = ScrollViewScrollbar.AUTO,
     autocompleteMaxVisible: Int = 5,
     private val clipboardTextReader: () -> String? = ::readClipboardText,
+    private val clipboardTextWriter: (String) -> Boolean = ::writeClipboardText,
 ) : InteractiveConsole,
     FullScreenConsoleControl {
     private val header = MutableLinesComponent()
@@ -115,6 +125,8 @@ internal class FullScreenConsole(
             dock = dock,
             scrollbar = fullscreenScrollbar,
         )
+    @Volatile
+    private var uiMode = uiMode
     private val tui =
         Tui(
             terminal = terminalAdapter,
@@ -150,24 +162,14 @@ internal class FullScreenConsole(
     private var reading = false
 
     init {
-        if (uiMode == UiMode.FULLSCREEN) {
-            document.addChild(header)
-            document.addChild(transcript)
-            dock.addChild(widgetsAbove)
-            dock.addChild(prompt)
-            dock.addChild(editorSlot)
-            dock.addChild(widgetsBelow)
-            dock.addChild(footer)
-            tui.addChild(viewport)
-        } else {
-            tui.addChild(header)
-            tui.addChild(transcript)
-            tui.addChild(widgetsAbove)
-            tui.addChild(prompt)
-            tui.addChild(editorSlot)
-            tui.addChild(widgetsBelow)
-            tui.addChild(footer)
-        }
+        document.addChild(header)
+        document.addChild(transcript)
+        dock.addChild(widgetsAbove)
+        dock.addChild(prompt)
+        dock.addChild(editorSlot)
+        dock.addChild(widgetsBelow)
+        dock.addChild(footer)
+        mountUiMode(uiMode)
         tui.setFocus(editor)
         editor.onSubmit = { value ->
             if (reading) {
@@ -334,6 +336,43 @@ internal class FullScreenConsole(
 
     override fun setTitle(title: String) {
         terminalAdapter.setTitle(title)
+    }
+
+    override fun currentUiMode(): UiMode = uiMode
+
+    override fun switchUiMode(mode: UiMode): Boolean {
+        if (mode == uiMode) {
+            return true
+        }
+        val screenMode =
+            if (mode == UiMode.FULLSCREEN) {
+                TuiScreenMode.ALTERNATE
+            } else {
+                TuiScreenMode.MAIN
+            }
+        if (!tui.switchScreenMode(screenMode)) {
+            return false
+        }
+        uiMode = mode
+        mountUiMode(mode)
+        tui.requestRender()
+        return true
+    }
+
+    override fun copyTextToClipboard(text: String): Boolean {
+        if (clipboardTextWriter(text)) {
+            return true
+        }
+        val encoded = Base64.getEncoder().encodeToString(text.toByteArray(Charsets.UTF_8))
+        if (encoded.length > MAX_OSC52_ENCODED_LENGTH) {
+            return false
+        }
+        terminalAdapter.write("\u001B]52;c;$encoded\u0007")
+        return true
+    }
+
+    override fun flash(message: String) {
+        tui.flash(message)
     }
 
     override fun setScrollbarStyle(style: (String) -> String) {
@@ -571,6 +610,21 @@ internal class FullScreenConsole(
 
     private fun primaryEditor(): Component = remoteEditor ?: editor
 
+    private fun mountUiMode(mode: UiMode) {
+        tui.clear()
+        if (mode == UiMode.FULLSCREEN) {
+            tui.addChild(viewport)
+        } else {
+            tui.addChild(header)
+            tui.addChild(transcript)
+            tui.addChild(widgetsAbove)
+            tui.addChild(prompt)
+            tui.addChild(editorSlot)
+            tui.addChild(widgetsBelow)
+            tui.addChild(footer)
+        }
+    }
+
     private fun primaryEditorText(): String = remoteEditor?.text ?: editor.getExpandedText()
 
     private fun setPrimaryEditorText(text: String) {
@@ -665,6 +719,8 @@ private fun clipboardPasteKey(): String =
     } else {
         "ctrl+v"
     }
+
+private const val MAX_OSC52_ENCODED_LENGTH = 100_000
 
 private sealed interface ConsoleRead {
     data class Line(

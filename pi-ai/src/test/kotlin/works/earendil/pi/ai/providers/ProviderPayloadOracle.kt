@@ -139,6 +139,30 @@ fun main() {
                 ),
             )
             put(
+                "openai-completions-sampling",
+                buildOpenAIChatRequestBody(
+                    fixtureModel("openai-completions").copy(
+                        samplingParams =
+                            buildJsonObject {
+                                put("top_p", 0.95)
+                                put("min_p", 0.05)
+                            },
+                    ),
+                    context,
+                    options.copy(
+                        temperature = 0.0,
+                        maxTokens = 16_384,
+                        samplingParams =
+                            buildJsonObject {
+                                put("temperature", 1)
+                                put("top_p", 0.5)
+                                put("top_k", 0)
+                                put("min_p", 0.05)
+                            },
+                    ),
+                ),
+            )
+            put(
                 "anthropic-messages-reasoning",
                 buildAnthropicRequestBody(
                     fixtureModel("anthropic-messages").copy(

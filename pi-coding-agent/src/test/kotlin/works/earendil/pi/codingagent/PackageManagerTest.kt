@@ -381,6 +381,88 @@ class PackageManagerTest {
     }
 
     @Test
+    fun `current git checkout repairs missing dependencies without cleaning`() {
+        val root = Files.createTempDirectory("pi-kotlin-package-git-repair-current")
+        val cwd = Files.createDirectories(root.resolve("project"))
+        val agentDir = Files.createDirectories(root.resolve("agent"))
+        val target = agentDir.resolve("git/github.com/user/repo")
+        Files.createDirectories(target.resolve(".git"))
+        Files.writeString(
+            target.resolve("package.json"),
+            """{"name":"repo","dependencies":{"dependency":"1.0.0"}}""",
+        )
+        val head = "1111111111111111111111111111111111111111"
+        val runner =
+            RecordingPackageRunner(output = { command, _ ->
+                when {
+                    command == listOf("git", "rev-parse", "--abbrev-ref", "@{upstream}") -> "origin/main"
+                    command.take(2) == listOf("git", "fetch") -> ""
+                    command == listOf("git", "rev-parse", "HEAD") -> head
+                    command == listOf("git", "rev-parse", "@{upstream}^{commit}") -> head
+                    command == listOf("npm", "install", "--omit=dev") -> ""
+                    else -> error("Unexpected command: ${command.joinToString(" ")}")
+                }
+            })
+        val manager =
+            PackageManager(
+                cwd = cwd,
+                agentDir = agentDir,
+                settings = SettingsStore(cwd, agentDir, projectTrusted = true),
+                projectTrusted = true,
+                commandRunner = runner,
+            )
+
+        manager.installAndPersist("git:github.com/user/repo")
+
+        assertTrue(runner.commands.any { it.command == listOf("npm", "install", "--omit=dev") })
+        assertFalse(runner.commands.any { it.command == listOf("git", "clean", "-fdx") })
+    }
+
+    @Test
+    fun `failed git clean repairs deleted dependencies before reporting failure`() {
+        val root = Files.createTempDirectory("pi-kotlin-package-git-repair-clean-failure")
+        val cwd = Files.createDirectories(root.resolve("project"))
+        val agentDir = Files.createDirectories(root.resolve("agent"))
+        val target = agentDir.resolve("git/github.com/user/repo")
+        Files.createDirectories(target.resolve(".git"))
+        Files.writeString(
+            target.resolve("package.json"),
+            """{"name":"repo","dependencies":{"dependency":"1.0.0"}}""",
+        )
+        val oldHead = "1111111111111111111111111111111111111111"
+        val newHead = "2222222222222222222222222222222222222222"
+        val runner =
+            RecordingPackageRunner(output = { command, _ ->
+                when {
+                    command == listOf("git", "rev-parse", "--abbrev-ref", "@{upstream}") -> "origin/main"
+                    command.take(2) == listOf("git", "fetch") -> ""
+                    command == listOf("git", "rev-parse", "HEAD") -> oldHead
+                    command == listOf("git", "rev-parse", "@{upstream}^{commit}") -> newHead
+                    command == listOf("git", "reset", "--hard", "@{upstream}^{commit}") -> ""
+                    command == listOf("git", "clean", "-fdx") -> error("simulated clean failure")
+                    command == listOf("npm", "install", "--omit=dev") -> ""
+                    else -> error("Unexpected command: ${command.joinToString(" ")}")
+                }
+            })
+        val manager =
+            PackageManager(
+                cwd = cwd,
+                agentDir = agentDir,
+                settings = SettingsStore(cwd, agentDir, projectTrusted = true),
+                projectTrusted = true,
+                commandRunner = runner,
+            )
+
+        val error =
+            assertFailsWith<IllegalStateException> {
+                manager.installAndPersist("git:github.com/user/repo")
+            }
+
+        assertTrue(error.message.orEmpty().contains("simulated clean failure"))
+        assertTrue(runner.commands.any { it.command == listOf("npm", "install", "--omit=dev") })
+    }
+
+    @Test
     fun `package CLI installs lists and removes local sources`() {
         val root = Files.createTempDirectory("pi-kotlin-package-cli")
         val cwd = Files.createDirectories(root.resolve("project"))

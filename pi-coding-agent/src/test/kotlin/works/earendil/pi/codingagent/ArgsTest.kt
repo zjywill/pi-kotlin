@@ -62,7 +62,6 @@ class ArgsTest {
     fun `parses UI modes and reports invalid values`() {
         assertEquals(UiMode.REGULAR, parseArgs(listOf("--ui-mode", "regular")).uiMode)
         assertEquals(UiMode.FULLSCREEN, parseArgs(listOf("--ui-mode", "fullscreen")).uiMode)
-        assertEquals(UiMode.FULLSCREEN, parseArgs(listOf("--alt")).uiMode)
 
         val invalid = parseArgs(listOf("--ui-mode", "other"))
         assertEquals(

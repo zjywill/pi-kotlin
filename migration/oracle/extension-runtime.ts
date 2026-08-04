@@ -380,7 +380,7 @@ const nativeAuth = await nativeProvider.auth.apiKey?.resolve({
 	ctx: nativeAuthContext,
 	credential: nativeCredential,
 });
-const nativeStored = {
+let nativeStored = {
 	models: [{
 		...nativeProvider.getModels()[0],
 		id: "cached",
@@ -389,17 +389,38 @@ const nativeStored = {
 	checkedAt: 123,
 };
 let nativeWritten: unknown;
+const publishNative = async (publication: {
+	persist?: typeof nativeStored | null;
+	update?: () => void;
+}) => {
+	if ("persist" in publication) {
+		nativeWritten = publication.persist;
+		if (publication.persist) nativeStored = publication.persist;
+	}
+	publication.update?.();
+	return true;
+};
+await nativeProvider.refreshModels?.({
+	stored: nativeStored,
+	publish: publishNative,
+	allowNetwork: false,
+	force: false,
+	signal: new AbortController().signal,
+});
 await nativeProvider.refreshModels?.({
 	credential: { ...nativeCredential, env: { NATIVE_ACCOUNT: "oracle" } },
-	store: {
-		read: async () => nativeStored,
-		write: async entry => {
-			nativeWritten = entry;
-		},
-		delete: async () => {},
+	stored: nativeStored,
+	publish: async publication => {
+		if ("persist" in publication) {
+			nativeWritten = publication.persist;
+			if (publication.persist) nativeStored = publication.persist;
+		}
+		publication.update?.();
+		return true;
 	},
 	allowNetwork: false,
 	force: true,
+	signal: new AbortController().signal,
 });
 const nativeModels = nativeProvider.getModels();
 const nativeFiltered = nativeProvider.filterModels?.(nativeModels, nativeCredential) ?? nativeModels;
@@ -440,13 +461,14 @@ const dynamicStored = {
 };
 const dynamicModels = await dynamicRegistration.config.refreshModels({
 	credential: { type: "api_key", key: "dynamic-key" },
-	store: {
-		read: async () => dynamicStored,
-		write: async () => {},
-		delete: async () => {},
+	stored: dynamicStored,
+	publish: async publication => {
+		publication.update?.();
+		return true;
 	},
 	allowNetwork: false,
 	force: true,
+	signal: new AbortController().signal,
 });
 
 const output = {

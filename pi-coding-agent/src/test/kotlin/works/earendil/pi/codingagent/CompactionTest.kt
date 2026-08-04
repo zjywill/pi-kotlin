@@ -97,6 +97,29 @@ class CompactionTest {
         assertFalse(entries[cut.firstKeptEntryIndex].message is ToolResultMessage)
     }
 
+    @Test
+    fun `length stops below the desired output limit are recoverable`() {
+        val truncated =
+            assistant(
+                "partial",
+                usage = Usage(input = 10, output = 16, totalTokens = 26),
+            ).copy(stopReason = StopReason.LENGTH)
+
+        assertTrue(isRecoverableLength(truncated, desiredMaxOutput = 100))
+        assertFalse(isRecoverableLength(truncated, desiredMaxOutput = 16))
+    }
+
+    @Test
+    fun `context overflow includes cache write input`() {
+        val overflow =
+            assistant(
+                "",
+                usage = Usage(input = 58, output = 0, cacheRead = 900, cacheWrite = 42, totalTokens = 1_000),
+            ).copy(stopReason = StopReason.LENGTH)
+
+        assertTrue(isContextOverflow(overflow, contextWindow = 1_000))
+    }
+
     private fun entry(
         id: String,
         parent: String?,

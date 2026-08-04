@@ -16,6 +16,7 @@ const { InMemoryModelsStore } = await import(
 const { radiusProvider } = await import(
 	pathToFileURL(`${tsRoot}/packages/ai/src/providers/radius.ts`).href
 );
+const oauthSignal = new AbortController().signal;
 
 await new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -101,6 +102,7 @@ globalThis.fetch = async (input: string | URL | Request, init?: RequestInit): Pr
 
 const browserOAuth = createRadiusOAuth({ name: "Radius", gateway: "radius.example/" });
 const browserCredential = await browserOAuth.login({
+	signal: oauthSignal,
 	prompt: async (prompt) => {
 		if (prompt.type !== "select") throw new Error(`Unexpected browser prompt: ${prompt.type}`);
 		browserPrompt = {
@@ -138,6 +140,7 @@ globalThis.setTimeout = ((
 
 const deviceOAuth = createRadiusOAuth({ name: "Radius", gateway: "radius.example/" });
 const deviceCredential = await deviceOAuth.login({
+	signal: oauthSignal,
 	prompt: async (prompt) => {
 		if (prompt.type !== "select") throw new Error(`Unexpected device prompt: ${prompt.type}`);
 		devicePrompt = {
@@ -148,7 +151,7 @@ const deviceCredential = await deviceOAuth.login({
 	},
 	notify: (event) => deviceEvents.push(eventProjection(event)),
 });
-const refreshedCredential = await deviceOAuth.refresh(deviceCredential);
+const refreshedCredential = await deviceOAuth.refresh(deviceCredential, oauthSignal);
 const requestAuth = await deviceOAuth.toAuth(refreshedCredential);
 
 globalThis.fetch = originalFetch;

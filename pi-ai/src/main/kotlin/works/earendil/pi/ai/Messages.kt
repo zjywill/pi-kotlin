@@ -388,6 +388,7 @@ data class Model(
     val cost: ModelCost,
     val contextWindow: Int,
     val maxTokens: Int,
+    val samplingParams: JsonObject? = null,
     val headers: Map<String, String> = emptyMap(),
     val compat: JsonObject? = null,
 )
@@ -404,6 +405,7 @@ enum class BedrockThinkingDisplay {
 
 data class StreamOptions(
     val temperature: Double? = null,
+    val samplingParams: JsonObject? = null,
     val maxTokens: Int? = null,
     val apiKey: String? = null,
     /** Optional transport for this request. Adapters that cannot inject it may reject it. */

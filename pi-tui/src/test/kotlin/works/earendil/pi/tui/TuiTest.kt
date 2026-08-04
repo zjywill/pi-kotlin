@@ -49,6 +49,73 @@ class TuiTest {
     }
 
     @Test
+    fun `alternate screen retains a recently offscreen kitty image`() {
+        val terminal = TestTerminal(columns = 20, rows = 4)
+        val imageId = 4343L
+        registerKittyImageMetadata(
+            KittyImageMetadata(
+                imageId = imageId,
+                columns = 2,
+                rows = 2,
+                widthPx = 100,
+                heightPx = 100,
+            ),
+        )
+        val image =
+            encodeKitty(
+                base64Data = "B".repeat(8_192),
+                columns = 2,
+                rows = 2,
+                imageId = imageId,
+                moveCursor = false,
+            )
+        val content = MutableLinesComponent(listOf(image))
+        val tui =
+            Tui(
+                terminal = terminal,
+                screenMode = TuiScreenMode.ALTERNATE,
+                imageProtocol = TerminalImageProtocol.KITTY,
+            )
+        tui.addChild(content)
+        tui.start()
+
+        terminal.clearWrites()
+        content.lines = listOf("offscreen")
+        tui.requestRender()
+        assertFalse(terminal.writes().contains(deleteKittyImage(imageId)))
+
+        terminal.clearWrites()
+        content.lines = listOf(image)
+        tui.requestRender()
+        assertTrue(terminal.writes().contains("\u001B_Ga=p,q=2"))
+        assertFalse(terminal.writes().contains("\u001B_Ga=T"))
+    }
+
+    @Test
+    fun `screen mode switching preserves the renderer and rejects active overlays`() {
+        val terminal = TestTerminal(columns = 20, rows = 4)
+        val tui = Tui(terminal)
+        tui.addChild(LinesComponent(listOf("main")))
+        tui.start()
+        terminal.clearWrites()
+
+        assertTrue(tui.switchScreenMode(TuiScreenMode.ALTERNATE))
+        assertEquals(TuiScreenMode.ALTERNATE, tui.currentScreenMode())
+        assertTrue(terminal.writes().contains("\u001B[?1049h"))
+
+        val overlay = tui.showOverlay(LinesComponent(listOf("overlay")))
+        assertFalse(tui.switchScreenMode(TuiScreenMode.MAIN))
+        overlay.hide()
+
+        terminal.clearWrites()
+        assertTrue(tui.switchScreenMode(TuiScreenMode.MAIN))
+        tui.requestRender()
+        assertEquals(TuiScreenMode.MAIN, tui.currentScreenMode())
+        assertTrue(terminal.writes().contains("\u001B[?1049l"))
+        assertEquals(listOf("main"), tui.renderFrame())
+    }
+
+    @Test
     fun `alternate screen keeps dock fixed while scrolling the document`() {
         val terminal = TestTerminal(columns = 20, rows = 6)
         val document = MutableLinesComponent((0..9).map { "line-$it" })

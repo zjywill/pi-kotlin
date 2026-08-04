@@ -1,6 +1,7 @@
 package works.earendil.pi.codingagent.session
 
 import java.nio.file.Files
+import java.nio.file.Path
 import java.nio.file.attribute.FileTime
 import java.time.Instant
 import kotlinx.serialization.json.JsonPrimitive
@@ -133,6 +134,35 @@ class SessionManagerTest {
         assertEquals(listOf("session-a"), currentA.map(SessionInfo::id))
         assertEquals(setOf("session-a", "session-b"), all.map(SessionInfo::id).toSet())
         assertEquals(sessionA.getSessionFile(), continuedA.getSessionFile())
+    }
+
+    @Test
+    fun `list all discovers sessions through a symlinked directory`() {
+        val root = Files.createTempDirectory("pi-kotlin-session-symlink")
+        val originalHome = System.getProperty("user.home")
+        try {
+            System.setProperty("user.home", root.resolve("home").toString())
+            val target = Files.createDirectories(root.resolve("linked-sessions"))
+            val project = Files.createDirectories(root.resolve("project"))
+            val session =
+                SessionManager.create(project, target, NewSessionOptions(id = "linked")).also {
+                    it.appendMessage(UserMessage("linked", 1))
+                    it.appendMessage(assistant("found", 2))
+                }
+            val sessionsRoot =
+                Files.createDirectories(
+                    Path.of(System.getProperty("user.home"), ".pi", "agent", "sessions"),
+                )
+            val alias = sessionsRoot.resolve("--linked--")
+            Files.createSymbolicLink(alias, target)
+
+            val discovered = SessionManager.listAll()
+
+            assertEquals(listOf("linked"), discovered.map(SessionInfo::id))
+            assertEquals(alias.resolve(assertNotNull(session.getSessionFile()).fileName), discovered.single().path)
+        } finally {
+            System.setProperty("user.home", originalHome)
+        }
     }
 
     @Test

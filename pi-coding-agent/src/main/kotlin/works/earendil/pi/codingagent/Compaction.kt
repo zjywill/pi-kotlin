@@ -108,6 +108,36 @@ fun shouldCompact(
     settings: CompactionSettings,
 ): Boolean = settings.enabled && contextTokens > contextWindow - settings.reserveTokens
 
+fun isContextOverflow(
+    message: AssistantMessage,
+    contextWindow: Int,
+): Boolean {
+    if (
+        message.stopReason == StopReason.ERROR &&
+        message.errorMessage?.let(CONTEXT_OVERFLOW_PATTERN::containsMatchIn) == true
+    ) {
+        return true
+    }
+    if (contextWindow <= 0) {
+        return false
+    }
+    val inputTokens = message.usage.input + message.usage.cacheRead + message.usage.cacheWrite
+    if (inputTokens > contextWindow) {
+        return true
+    }
+    return message.stopReason == StopReason.LENGTH &&
+        message.usage.output == 0 &&
+        inputTokens >= (contextWindow * 0.99).toInt()
+}
+
+fun isRecoverableLength(
+    message: AssistantMessage,
+    desiredMaxOutput: Int,
+): Boolean =
+    message.stopReason == StopReason.LENGTH &&
+        desiredMaxOutput > 0 &&
+        message.usage.output < desiredMaxOutput
+
 fun estimateTokens(message: Message): Int {
     val characters =
         when (message) {
@@ -503,3 +533,23 @@ Preserve existing goals, constraints, decisions, and critical context. Update pr
 
 private const val TURN_PREFIX_SUMMARIZATION_PROMPT = """This is the prefix of a turn whose suffix is retained.
 Summarize the original request, early progress, and context needed to understand the retained suffix."""
+
+private val CONTEXT_OVERFLOW_PATTERN =
+    Regex(
+        listOf(
+            "prompt is too long",
+            "request_too_large",
+            "input is too long for requested model",
+            "exceeds the context window",
+            "maximum context length",
+            "input token count.*exceeds the maximum",
+            "maximum prompt length",
+            "exceeds the available context size",
+            "context window exceeds limit",
+            "exceeded model token limit",
+            "context[_ ]length[_ ]exceeded",
+            "too many tokens",
+            "token limit exceeded",
+        ).joinToString("|"),
+        RegexOption.IGNORE_CASE,
+    )

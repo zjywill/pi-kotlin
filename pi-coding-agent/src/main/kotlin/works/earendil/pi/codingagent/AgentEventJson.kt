@@ -50,6 +50,7 @@ private fun encodeRpcAssistantEvent(event: AssistantMessageEvent): JsonObject {
 internal fun encodeAgentEvent(
     event: AgentEvent,
     willRetry: Boolean = false,
+    linearStreaming: Boolean = false,
 ): JsonObject =
     buildJsonObject {
         when (event) {
@@ -84,10 +85,17 @@ internal fun encodeAgentEvent(
 
             is AgentEvent.MessageUpdate -> {
                 put("type", "message_update")
-                put("message", encodeRpcMessage(event.message))
+                if (!linearStreaming) {
+                    put("message", encodeRpcMessage(event.message))
+                }
+                val assistantEvent = encodeRpcAssistantEvent(event.assistantMessageEvent)
                 put(
                     "assistantMessageEvent",
-                    encodeRpcAssistantEvent(event.assistantMessageEvent),
+                    if (linearStreaming) {
+                        JsonObject(assistantEvent - "partial")
+                    } else {
+                        assistantEvent
+                    },
                 )
             }
 

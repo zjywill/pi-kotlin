@@ -1,6 +1,7 @@
 package works.earendil.pi.codingagent.tools
 
 import java.nio.file.Files
+import java.nio.file.Path
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -12,6 +13,18 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class BuiltInToolsTest {
+    @Test
+    fun `find relativization preserves the first root segment and relative results`() {
+        assertEquals(
+            Path.of("home/user/file.txt"),
+            relativizeFindResultPath(Path.of("/home/user/file.txt"), Path.of("/")),
+        )
+        assertEquals(
+            Path.of("already/relative.txt"),
+            relativizeFindResultPath(Path.of("already/relative.txt"), Path.of("/workspace")),
+        )
+    }
+
     @Test
     fun `write read and edit form a compatible file workflow`() =
         runTest {

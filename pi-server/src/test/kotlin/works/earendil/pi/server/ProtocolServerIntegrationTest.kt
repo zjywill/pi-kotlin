@@ -29,12 +29,11 @@ import kotlin.test.assertTrue
 
 class ProtocolServerIntegrationTest {
     @Test
-    fun `serves authenticated sessions over a real Unix socket`() =
+    fun `serves sessions over an authorized Unix socket`() =
         withServer { server, backend, socket ->
             val client =
                 PiClient(
                     PiClientOptions(
-                        token = TEST_TOKEN,
                         transportFactory = createUnixTransportFactory(UnixTransportOptions(socket)),
                     ),
                 )
@@ -65,21 +64,6 @@ class ProtocolServerIntegrationTest {
             assertEquals(id, reopened.id)
             assertEquals(2, backend.runtimes[id]?.size)
             client.disconnect()
-            server.close()
-        }
-
-    @Test
-    fun `rejects invalid authentication with a typed client error`() =
-        withServer { server, _, socket ->
-            val client =
-                PiClient(
-                    PiClientOptions(
-                        token = "wrong",
-                        transportFactory = createUnixTransportFactory(UnixTransportOptions(socket)),
-                    ),
-                )
-            val error = assertFailsWith<ClientServerException> { client.connect() }
-            assertEquals("auth", error.code)
             server.close()
         }
 
@@ -140,7 +124,7 @@ class ProtocolServerIntegrationTest {
             val server =
                 createUnixServer(
                     backend,
-                    UnixServerOptions(token = TEST_TOKEN, path = socket),
+                    UnixServerOptions(path = socket),
                 )
             try {
                 server.start()
@@ -172,7 +156,7 @@ private fun withServer(
     val server =
         createUnixServer(
             backend,
-            UnixServerOptions(token = TEST_TOKEN, path = socket),
+            UnixServerOptions(path = socket),
         )
     try {
         server.start()
@@ -186,7 +170,6 @@ private fun withServer(
 private fun client(socket: Path): PiClient =
     PiClient(
         PiClientOptions(
-            token = TEST_TOKEN,
             transportFactory = createUnixTransportFactory(UnixTransportOptions(socket)),
         ),
     )
@@ -434,5 +417,4 @@ private fun JsonObject.boolean(name: String): Boolean = string(name).toBooleanSt
 private fun JsonObject.objectValue(name: String): JsonObject =
     this[name] as? JsonObject ?: error("$name is required")
 
-private const val TEST_TOKEN = "server-token"
-private const val PROTOCOL_VERSION_VALUE = 2L
+private const val PROTOCOL_VERSION_VALUE = 1L

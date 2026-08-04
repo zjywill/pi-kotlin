@@ -116,7 +116,7 @@ class RemoteSessionTest {
         }
 
     private suspend fun connectClient(server: RemoteMemoryServer): PiClient =
-        PiClient(PiClientOptions("secret", server.factory)).also { client ->
+        PiClient(PiClientOptions(server.factory)).also { client ->
             client.connect()
         }
 }

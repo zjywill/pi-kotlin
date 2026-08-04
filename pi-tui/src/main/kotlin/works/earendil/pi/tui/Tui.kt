@@ -182,8 +182,25 @@ private data class FlashEntry(
 
 private data class PreparedKittyScreen(
     val lines: List<String>,
-    val staleImageDeletion: String,
+    val evictedImageDeletion: String,
 )
+
+private data class CachedKittyImage(
+    val transmissionGeneration: Long,
+    val transmissionBytes: Int,
+    val estimatedDecodedBytes: Long,
+)
+
+private data class MainScreenRenderState(
+    val previousLines: List<String>,
+    val previousWidth: Int,
+    val previousHeight: Int,
+    val hardwareCursorRow: Int,
+)
+
+private const val MAX_CACHED_OFFSCREEN_KITTY_IMAGES = 16
+private const val MAX_CACHED_OFFSCREEN_KITTY_TRANSMISSION_BYTES = 32L * 1024 * 1024
+private const val MAX_CACHED_OFFSCREEN_KITTY_DECODED_BYTES = 64L * 1024 * 1024
 
 enum class TuiScreenMode {
     MAIN,
@@ -193,9 +210,10 @@ enum class TuiScreenMode {
 class Tui(
     val terminal: Terminal,
     private val showHardwareCursor: Boolean = false,
-    private val screenMode: TuiScreenMode = TuiScreenMode.MAIN,
+    screenMode: TuiScreenMode = TuiScreenMode.MAIN,
     private val imageProtocol: TerminalImageProtocol? = detectTerminalCapabilities().images,
 ) : Container() {
+    private var screenMode = screenMode
     private val inputListeners = linkedSetOf<(String) -> InputListenerResult?>()
     private val overlayStack = mutableListOf<OverlayEntry>()
     private var focusOrder = 0L
@@ -213,7 +231,8 @@ class Tui(
     private var selectionPressActive = false
     private val flashes = mutableListOf<FlashEntry>()
     private var flashSequence = 0L
-    private val uploadedKittyImages = linkedMapOf<Long, Long>()
+    private val uploadedKittyImages = linkedMapOf<Long, CachedKittyImage>()
+    private var mainScreenRenderState: MainScreenRenderState? = null
 
     var fullRedraws: Int = 0
         private set
@@ -329,6 +348,63 @@ class Tui(
 
     fun hasOverlay(): Boolean = overlayStack.any(::isVisible)
 
+    fun hasOverlayEntries(): Boolean = overlayStack.isNotEmpty()
+
+    fun currentScreenMode(): TuiScreenMode = screenMode
+
+    fun switchScreenMode(mode: TuiScreenMode): Boolean {
+        if (mode == screenMode) {
+            return true
+        }
+        if (hasOverlayEntries()) {
+            return false
+        }
+        if (screenMode == TuiScreenMode.MAIN) {
+            mainScreenRenderState =
+                MainScreenRenderState(
+                    previousLines = previousLines.map { line -> if (isImageLine(line)) "" else line },
+                    previousWidth = previousWidth,
+                    previousHeight = previousHeight,
+                    hardwareCursorRow = hardwareCursorRow,
+                )
+            screenMode = TuiScreenMode.ALTERNATE
+            clearSelection()
+            uploadedKittyImages.clear()
+            resetRenderState()
+            if (!stopped) {
+                terminal.write(
+                    SYNC_START +
+                        ENTER_ALT_SCREEN +
+                        DISABLE_AUTOWRAP +
+                        ENABLE_MOUSE +
+                        "\u001B[2J\u001B[H" +
+                        SYNC_END,
+                )
+            }
+        } else {
+            clearSelection()
+            if (!stopped) {
+                terminal.write(
+                    buildString {
+                        append(SYNC_START)
+                        if (imageProtocol == TerminalImageProtocol.KITTY) {
+                            append(deleteAllKittyImages())
+                        }
+                        append(DISABLE_MOUSE)
+                        append(ENABLE_AUTOWRAP)
+                        append(EXIT_ALT_SCREEN)
+                        append("\u001B[?25h")
+                        append(SYNC_END)
+                    },
+                )
+            }
+            uploadedKittyImages.clear()
+            screenMode = TuiScreenMode.MAIN
+            restoreMainScreenRenderState()
+        }
+        return true
+    }
+
     override fun invalidate() {
         super.invalidate()
         overlayStack.forEach { entry -> entry.component.invalidate() }
@@ -429,6 +505,23 @@ class Tui(
             }
             throw error
         }
+    }
+
+    private fun resetRenderState() {
+        previousLines = emptyList()
+        previousWidth = -1
+        previousHeight = -1
+        hardwareCursorRow = 0
+        alternateBaseLines = emptyList()
+    }
+
+    private fun restoreMainScreenRenderState() {
+        val state = mainScreenRenderState
+        previousLines = state?.previousLines.orEmpty()
+        previousWidth = state?.previousWidth ?: 0
+        previousHeight = state?.previousHeight ?: 0
+        hardwareCursorRow = state?.hardwareCursorRow ?: 0
+        alternateBaseLines = emptyList()
     }
 
     fun flash(
@@ -614,7 +707,7 @@ class Tui(
         } else if (imagesNeedRedraw && imageProtocol == TerminalImageProtocol.KITTY) {
             buffer.append(deleteAllKittyPlacements())
         }
-        buffer.append(prepared.staleImageDeletion)
+        buffer.append(prepared.evictedImageDeletion)
         for (row in 0 until height) {
             val sourceLine = displayLines.getOrElse(row) { "" }
             if (!fullRedraw && !imagesNeedRedraw && sourceLine == previousLines.getOrElse(row) { "" }) {
@@ -650,24 +743,52 @@ class Tui(
             lines.map { line ->
                 val placement = getKittyImagePlacement(line) ?: return@map line
                 visibleImageIds += placement.imageId
-                if (uploadedKittyImages[placement.imageId] == placement.transmissionGeneration) {
+                val cached = uploadedKittyImages.remove(placement.imageId)
+                uploadedKittyImages[placement.imageId] =
+                    CachedKittyImage(
+                        transmissionGeneration = placement.transmissionGeneration,
+                        transmissionBytes = placement.transmissionBytes,
+                        estimatedDecodedBytes = placement.estimatedDecodedBytes,
+                    )
+                if (cached?.transmissionGeneration == placement.transmissionGeneration) {
                     placement.replacementLine
                 } else {
-                    uploadedKittyImages[placement.imageId] = placement.transmissionGeneration
                     line
                 }
             }
-        val stale =
+        var offscreenCount = 0
+        var offscreenTransmissionBytes = 0L
+        var offscreenDecodedBytes = 0L
+        uploadedKittyImages.forEach { (imageId, image) ->
+            if (imageId !in visibleImageIds) {
+                offscreenCount++
+                offscreenTransmissionBytes += image.transmissionBytes
+                offscreenDecodedBytes += image.estimatedDecodedBytes
+            }
+        }
+        val evicted =
             buildString {
                 val iterator = uploadedKittyImages.iterator()
                 while (iterator.hasNext()) {
                     val entry = iterator.next()
-                    if (entry.key in visibleImageIds) continue
+                    if (
+                        offscreenCount <= MAX_CACHED_OFFSCREEN_KITTY_IMAGES &&
+                        offscreenTransmissionBytes <= MAX_CACHED_OFFSCREEN_KITTY_TRANSMISSION_BYTES &&
+                        offscreenDecodedBytes <= MAX_CACHED_OFFSCREEN_KITTY_DECODED_BYTES
+                    ) {
+                        break
+                    }
+                    if (entry.key in visibleImageIds) {
+                        continue
+                    }
                     append(deleteKittyImage(entry.key))
                     iterator.remove()
+                    offscreenCount--
+                    offscreenTransmissionBytes -= entry.value.transmissionBytes
+                    offscreenDecodedBytes -= entry.value.estimatedDecodedBytes
                 }
             }
-        return PreparedKittyScreen(preparedLines, stale)
+        return PreparedKittyScreen(preparedLines, evicted)
     }
 
     private fun handleAlternateScreenInput(data: String): Boolean {

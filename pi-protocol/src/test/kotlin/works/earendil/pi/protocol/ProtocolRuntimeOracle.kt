@@ -14,7 +14,6 @@ fun main() {
         buildJsonObject {
             put("type", "hello")
             put("version", PROTOCOL_VERSION)
-            put("token", "secret")
         }
     val request =
         buildJsonObject {
@@ -131,10 +130,10 @@ fun main() {
                         put("cycle", rejects { encodeCbor(cyclic) })
                         put("trailingCbor", rejects { decodeCbor(byteArrayOf(0xf6.toByte(), 0xf6.toByte())) })
                         put(
-                            "emptyToken",
+                            "credentialField",
                             rejects {
                                 parseClientMessage(
-                                    JsonObject(clientHello + ("token" to JsonPrimitive(""))),
+                                    JsonObject(clientHello + ("token" to JsonPrimitive("secret"))),
                                 )
                             },
                         )

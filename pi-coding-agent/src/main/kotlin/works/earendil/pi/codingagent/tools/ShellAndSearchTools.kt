@@ -18,6 +18,7 @@ import works.earendil.pi.agent.AgentTool
 import works.earendil.pi.agent.AgentToolResult
 import works.earendil.pi.agent.AgentToolUpdateCallback
 import works.earendil.pi.ai.TextContent
+import works.earendil.pi.codingagent.withPiAgentEnvironment
 
 class BashTool(
     private val cwd: Path,
@@ -59,6 +60,7 @@ class BashTool(
             val process =
                 ProcessBuilder(shell)
                     .directory(cwd.toFile())
+                    .withPiAgentEnvironment()
                     .redirectInput(ProcessBuilder.Redirect.PIPE)
                     .start()
             coroutineScope {
@@ -170,7 +172,7 @@ class FindTool(
                 if (path == root || shouldSkip(path, root) || Files.isDirectory(path)) {
                     continue
                 }
-                val relative = root.relativize(path)
+                val relative = relativizeFindResultPath(path, root)
                 if (matcher.matches(relative) || matcher.matches(relative.fileName)) {
                     results += relative.toString().replace('\\', '/')
                 }
@@ -180,6 +182,16 @@ class FindTool(
         return AgentToolResult(listOf(TextContent(truncateHead(output, maxLines = Int.MAX_VALUE).content)))
     }
 }
+
+internal fun relativizeFindResultPath(
+    resultPath: Path,
+    searchRoot: Path,
+): Path =
+    if (resultPath.isAbsolute) {
+        searchRoot.relativize(resultPath)
+    } else {
+        resultPath
+    }
 
 class GrepTool(
     private val cwd: Path,

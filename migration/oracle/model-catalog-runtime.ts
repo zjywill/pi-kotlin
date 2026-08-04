@@ -48,9 +48,21 @@ const store = (initial?: Record<string, unknown>) => {
 };
 const context = (modelsStore: ReturnType<typeof store>, allowNetwork: boolean, force = false) => ({
 	credential: { type: "api_key", key: "test" },
-	store: modelsStore.scoped,
+	stored: modelsStore.read(),
+	publish: async (publication: {
+		persist?: Record<string, unknown> | null;
+		update?: () => void;
+	}) => {
+		if ("persist" in publication) {
+			if (publication.persist === null) await modelsStore.scoped.delete();
+			else if (publication.persist !== undefined) await modelsStore.scoped.write(publication.persist);
+		}
+		publication.update?.();
+		return true;
+	},
 	allowNetwork,
 	force,
+	signal: new AbortController().signal,
 });
 
 const responses = [

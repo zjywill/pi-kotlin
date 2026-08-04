@@ -43,6 +43,8 @@ data class KittyImageMetadata(
 data class KittyImagePlacement(
     val imageId: Long,
     val transmissionGeneration: Long,
+    val transmissionBytes: Int,
+    val estimatedDecodedBytes: Long,
     val sequence: String,
     val replacementLine: String,
 )
@@ -60,7 +62,10 @@ private val kittyMetadata =
         ): Boolean = size > MAX_KITTY_METADATA
     }
 
-fun detectTerminalCapabilities(environment: Map<String, String> = System.getenv()): TerminalCapabilities {
+fun detectTerminalCapabilities(
+    environment: Map<String, String> = System.getenv(),
+    osName: String = System.getProperty("os.name").orEmpty(),
+): TerminalCapabilities {
     val termProgram = environment["TERM_PROGRAM"].orEmpty().lowercase()
     val terminalEmulator = environment["TERMINAL_EMULATOR"].orEmpty().lowercase()
     val term = environment["TERM"].orEmpty().lowercase()
@@ -99,6 +104,9 @@ fun detectTerminalCapabilities(environment: Map<String, String> = System.getenv(
     }
     if (terminalEmulator == "jetbrains-jediterm") {
         return TerminalCapabilities(null, trueColorHint, false)
+    }
+    if (osName.lowercase().startsWith("windows")) {
+        return TerminalCapabilities(null, true, false)
     }
     return TerminalCapabilities(null, trueColorHint, false)
 }
@@ -203,6 +211,11 @@ fun getKittyImagePlacement(line: String): KittyImagePlacement? {
     return KittyImagePlacement(
         imageId = registered.metadata.imageId,
         transmissionGeneration = registered.transmissionGeneration,
+        transmissionBytes = transmissionEnd - firstCommand.range.first,
+        estimatedDecodedBytes =
+            registered.metadata.widthPx.toLong() *
+                registered.metadata.heightPx.toLong() *
+                4L,
         sequence = sequence,
         replacementLine =
             line.substring(0, firstCommand.range.first) +

@@ -6,6 +6,7 @@ private val DEFAULT_MODEL_IDS =
     mapOf(
         "ant-ling" to "Ring-2.6-1T",
         "anthropic" to "claude-opus-4-8",
+        "baseten" to "zai-org/GLM-5.2",
         "cerebras" to "zai-glm-4.7",
         "deepseek" to "deepseek-v4-pro",
         "fireworks" to "accounts/fireworks/models/kimi-k2p6",

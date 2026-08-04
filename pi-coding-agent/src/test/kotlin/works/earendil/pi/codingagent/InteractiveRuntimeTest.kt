@@ -1213,6 +1213,87 @@ class InteractiveRuntimeTest {
             assertTrue(console.output.contains("Ask for a name"))
         }
 
+    @Test
+    fun `copy shortcut copies the last assistant message and flashes in fullscreen`() =
+        runTest {
+            val provider = FauxProvider()
+            provider.setResponses(
+                listOf(
+                    works.earendil.pi.ai.FauxResponseStep.Message(
+                        works.earendil.pi.ai.fauxAssistantMessage("copy me"),
+                    ),
+                ),
+            )
+            var readCount = 0
+            var copied: String? = null
+            var flashed: String? = null
+            val console =
+                object : InteractiveConsole, FullScreenConsoleControl {
+                    override fun setAutocompleteProvider(provider: AutocompleteProvider?) = Unit
+
+                    override fun setTitle(title: String) = Unit
+
+                    override fun currentUiMode(): UiMode = UiMode.FULLSCREEN
+
+                    override fun copyTextToClipboard(text: String): Boolean {
+                        copied = text
+                        return true
+                    }
+
+                    override fun flash(message: String) {
+                        flashed = message
+                    }
+
+                    override fun readLine(prompt: String): String? = null
+
+                    override fun readLineWithShortcuts(
+                        prompt: String,
+                        shortcuts: List<InteractiveShortcutBinding>,
+                        initialBuffer: String,
+                    ): InteractiveReadResult =
+                        when (readCount++) {
+                            0 -> InteractiveReadResult.Line("hello")
+                            1 -> {
+                                val copy = shortcuts.single { it.key == "ctrl+x" }
+                                InteractiveReadResult.Shortcut(copy.id, initialBuffer)
+                            }
+
+                            else -> InteractiveReadResult.Line("/exit")
+                        }
+
+                    override fun print(text: String) = Unit
+
+                    override fun println(text: String) = Unit
+
+                    override fun error(text: String) {
+                        kotlin.error(text)
+                    }
+                }
+            val root = Files.createTempDirectory("pi-kotlin-interactive-copy")
+
+            val exit =
+                InteractiveRuntime(
+                    Models(listOf(provider)),
+                    cwd = root,
+                    agentDir = Files.createDirectories(root.resolve("agent")),
+                    consoleFactory = { console },
+                ).run(
+                    parseArgs(
+                        listOf(
+                            "--provider",
+                            "faux",
+                            "--model",
+                            "faux-1",
+                            "--no-session",
+                        ),
+                    ),
+                )
+
+            assertEquals(0, exit)
+            assertEquals("copy me", copied)
+            assertEquals("Copied!", flashed)
+        }
+
     private fun nodeAvailable(): Boolean =
         runCatching {
             val process = ProcessBuilder("node", "--version").start()
@@ -1401,7 +1482,7 @@ class InteractiveRuntimeTest {
             output.append(prompt)
             return when (mainReadCount++) {
                 0 -> {
-                    val shortcut = shortcuts.single()
+                    val shortcut = shortcuts.single { it.key == "ctrl+y" }
                     shortcutKey = shortcut.key
                     InteractiveReadResult.Shortcut(shortcut.id, "draft")
                 }

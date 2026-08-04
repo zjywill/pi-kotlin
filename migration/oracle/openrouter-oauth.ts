@@ -8,6 +8,7 @@ const { openRouterOAuth } = await import(
 const { stream } = await import(
 	pathToFileURL(`${tsRoot}/packages/ai/src/api/openai-completions.ts`).href
 );
+const oauthSignal = new AbortController().signal;
 
 const tokenUrl = "https://openrouter.ai/api/v1/auth/keys";
 const originalFetch = globalThis.fetch;
@@ -52,6 +53,7 @@ let callbackResponsePromise:
 let credential;
 try {
 	credential = await openRouterOAuth.login({
+		signal: oauthSignal,
 		prompt: () => new Promise<string>(() => {}),
 		notify: (event) => {
 			if (event.type === "progress") progressMessage = event.message;
@@ -70,6 +72,7 @@ try {
 		},
 	});
 	const manualCredential = await openRouterOAuth.login({
+		signal: oauthSignal,
 		prompt: async (prompt) => {
 			if (prompt.type !== "manual_code") throw new Error(`Unexpected OpenRouter prompt: ${prompt.type}`);
 			return `${prompt.placeholder}?code=manual-oracle-code`;
@@ -90,7 +93,7 @@ if (tokenRequests.length !== 2 || !callbackResponsePromise || !manualCredentialR
 const tokenRequest = tokenRequests[0];
 const manualTokenRequest = tokenRequests[1];
 const callbackResponse = await callbackResponsePromise;
-const refreshed = await openRouterOAuth.refresh(credential);
+const refreshed = await openRouterOAuth.refresh(credential, oauthSignal);
 const auth = await openRouterOAuth.toAuth(credential);
 
 type ProviderRequest = {

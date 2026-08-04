@@ -751,10 +751,26 @@ internal class OpenAIResponsesEventState(
                             )
                     }
                 val status = response.string("status")
-                rawStopReason = status
+                val incompleteReason = response.obj("incomplete_details")?.string("reason")
+                rawStopReason =
+                    if (incompleteReason == null) {
+                        status
+                    } else {
+                        "$status.$incompleteReason"
+                    }
                 stopReason =
                     when (status) {
-                        "incomplete" -> StopReason.LENGTH
+                        "incomplete" ->
+                            if (incompleteReason == "max_output_tokens") {
+                                StopReason.LENGTH
+                            } else {
+                                stopError =
+                                    incompleteReason
+                                        ?.let { "Response incomplete: $it" }
+                                        ?: "Response incomplete without a provider reason"
+                                StopReason.ERROR
+                            }
+
                         "failed", "cancelled" -> StopReason.ERROR
                         else -> StopReason.STOP
                     }
@@ -992,6 +1008,7 @@ private fun buildOpenAIResponsesRequestBodyFromInput(
                     }
                 }
             }
+            options.samplingParams?.forEach { (name, value) -> put(name, value) }
         }
     }
 

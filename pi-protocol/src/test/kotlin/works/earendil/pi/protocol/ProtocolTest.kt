@@ -12,19 +12,21 @@ import kotlin.test.assertFailsWith
 
 class ProtocolTest {
     @Test
-    fun `uses protocol version two and validates strict hello`() {
-        assertEquals(2, PROTOCOL_VERSION)
-        assertEquals(true, isSupportedProtocolVersion(2))
-        assertEquals(false, isSupportedProtocolVersion(1))
+    fun `uses protocol version one and validates strict hello`() {
+        assertEquals(1, PROTOCOL_VERSION)
+        assertEquals(true, isSupportedProtocolVersion(1))
+        assertEquals(false, isSupportedProtocolVersion(2))
         assertEquals(false, isSupportedProtocolVersion(2.5))
         parseClientMessage(clientHello())
         listOf(
             buildJsonObject {
                 put("type", "hello")
-                put("version", "2")
+                put("version", "1")
+            },
+            buildJsonObject {
+                clientHello().forEach(::put)
                 put("token", "secret")
             },
-            clientHello(token = ""),
             buildJsonObject {
                 clientHello().forEach(::put)
                 put("extra", true)
@@ -86,8 +88,8 @@ class ProtocolTest {
                 put(
                     "error",
                     buildJsonObject {
-                        put("code", "auth")
-                        put("message", "Invalid token")
+                        put("code", "version")
+                        put("message", "Unsupported version")
                     },
                 )
             }
@@ -98,11 +100,10 @@ class ProtocolTest {
     }
 }
 
-private fun clientHello(token: String = "secret"): JsonObject =
+private fun clientHello(): JsonObject =
     buildJsonObject {
         put("type", "hello")
         put("version", PROTOCOL_VERSION)
-        put("token", token)
     }
 
 private fun serverHello(): JsonObject =

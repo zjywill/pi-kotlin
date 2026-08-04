@@ -3,11 +3,15 @@ package works.earendil.pi.ai.providers
 import java.net.http.HttpClient
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import works.earendil.pi.ai.AssistantDone
 import works.earendil.pi.ai.AssistantError
@@ -427,6 +431,23 @@ internal fun buildOpenAIChatRequestBody(
                     }
                 }
 
+                "baseten" -> {
+                    resolveChatTemplateValues(
+                        values = compat.chatTemplateArgs,
+                        enabled = effort != null && effort != "off",
+                        effort = effort,
+                    )?.let { put("chat_template_args", it) }
+                    if (compat.supportsReasoningEffort) {
+                        val resolvedEffort =
+                            effort
+                                ?: options.reasoningEffort
+                                ?: model.mappedThinkingOff("")
+                        resolvedEffort
+                            ?.takeIf(String::isNotEmpty)
+                            ?.let { put("reasoning_effort", it) }
+                    }
+                }
+
                 "string-thinking" -> {
                     val value = effort?.takeUnless { it == "off" } ?: model.mappedThinkingOff("none")
                     value?.let { put("thinking", it) }
@@ -443,6 +464,7 @@ internal fun buildOpenAIChatRequestBody(
                 }
             }
         }
+        options.samplingParams?.forEach { (name, value) -> put(name, value) }
     }
 }
 
@@ -464,6 +486,7 @@ private data class OpenAIChatCompat(
     val supportsOpenAIGrammarTools: Boolean,
     val supportsReasoningEffort: Boolean,
     val thinkingFormat: String,
+    val chatTemplateArgs: JsonObject,
     val sendSessionAffinityHeaders: Boolean,
     val sessionAffinityFormat: String,
 )
@@ -537,6 +560,7 @@ private fun openAIChatCompat(model: Model): OpenAIChatCompat {
                     isOpenRouter -> "openrouter"
                     else -> "openai"
                 },
+            chatTemplateArgs = JsonObject(emptyMap()),
             sendSessionAffinityHeaders = false,
             sessionAffinityFormat = if (isOpenRouter) "openrouter" else "openai",
         )
@@ -555,10 +579,38 @@ private fun openAIChatCompat(model: Model): OpenAIChatCompat {
         supportsReasoningEffort =
             raw.boolean("supportsReasoningEffort") ?: detected.supportsReasoningEffort,
         thinkingFormat = raw.string("thinkingFormat") ?: detected.thinkingFormat,
+        chatTemplateArgs = raw["chatTemplateArgs"] as? JsonObject ?: detected.chatTemplateArgs,
         sendSessionAffinityHeaders =
             raw.boolean("sendSessionAffinityHeaders") ?: detected.sendSessionAffinityHeaders,
         sessionAffinityFormat = raw.string("sessionAffinityFormat") ?: detected.sessionAffinityFormat,
     )
+}
+
+private fun resolveChatTemplateValues(
+    values: JsonObject,
+    enabled: Boolean,
+    effort: String?,
+): JsonObject? {
+    if (values.isEmpty()) {
+        return null
+    }
+    val resolved =
+        buildMap<String, JsonElement> {
+            values.forEach { (key, value) ->
+                val variable = (value as? JsonObject)?.get("\$var")?.jsonPrimitive?.contentOrNull
+                val resolvedValue =
+                    when (variable) {
+                        "thinking.enabled" -> JsonPrimitive(enabled)
+                        "thinking.effort" -> effort?.let(::JsonPrimitive)
+                        null -> value
+                        else -> null
+                    }
+                if (resolvedValue != null) {
+                    put(key, resolvedValue)
+                }
+            }
+        }
+    return resolved.takeIf(Map<String, JsonElement>::isNotEmpty)?.let(::JsonObject)
 }
 
 private fun openAIChatBaseHeaders(

@@ -436,7 +436,7 @@ private fun googleVertexContents(
                                         buildJsonObject {
                                             put("name", block.name)
                                             put("args", block.arguments)
-                                            if (googleVertexRequiresToolCallId(model.id)) {
+                                            if (requiresGoogleToolCallId(model.id)) {
                                                 put("id", normalizeGoogleToolCallId(block.id))
                                             }
                                         },
@@ -526,7 +526,7 @@ private fun appendGoogleVertexToolResult(
             if (images.isNotEmpty() && supportsNestedImages) {
                 put("parts", JsonArray(imageParts))
             }
-            if (googleVertexRequiresToolCallId(model.id)) {
+            if (requiresGoogleToolCallId(model.id)) {
                 put("id", normalizeGoogleToolCallId(message.toolCallId))
             }
         }
@@ -823,12 +823,6 @@ private fun validGoogleSignature(
         signature
     }.getOrNull()
 }
-
-private fun normalizeGoogleToolCallId(id: String): String =
-    id.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(64)
-
-private fun googleVertexRequiresToolCallId(modelId: String): Boolean =
-    modelId.startsWith("claude-") || modelId.startsWith("gpt-oss-")
 
 private fun googleVertexSupportsMultimodalFunctionResponse(modelId: String): Boolean {
     val version = Regex("^gemini(?:-live)?-(\\d+)").find(modelId.lowercase())?.groupValues?.get(1)?.toIntOrNull()

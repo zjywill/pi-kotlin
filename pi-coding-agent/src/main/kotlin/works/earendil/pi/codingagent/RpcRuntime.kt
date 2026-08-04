@@ -258,11 +258,13 @@ class RpcRuntime(
     private var steeringMode = QueueMode.ONE_AT_A_TIME
     private var followUpMode = QueueMode.ONE_AT_A_TIME
     private var autoCompactionEnabled = true
+    private var imageAutoResize = true
     private var autoRetryEnabled = true
     private var retryMaxAttempts = 3
     private var retryBaseDelayMs = 2_000L
     private var retryAttempt = 0
     private var retryDelayJob: Job? = null
+    private var overflowRecoveryAttempted = false
     private var toolOutputExpandedOverride: Boolean? = null
     private val compacting = AtomicBoolean(false)
     private var compactionSettings = DEFAULT_COMPACTION_SETTINGS
@@ -725,6 +727,13 @@ class RpcRuntime(
         command: JsonObject,
         id: String?,
     ): JsonObject {
+        if (compacting.get()) {
+            return errorResponse(
+                id,
+                "prompt",
+                "Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.",
+            )
+        }
         findExtensionCommand(extensionHost, command.string("message").orEmpty())?.let { (name, args) ->
             val host = extensionHost
                 ?: return@let
@@ -760,7 +769,7 @@ class RpcRuntime(
 
     private fun startPrompt(prompt: Message): Boolean =
         synchronized(promptStateLock) {
-            if (closing.get() || promptJob?.isActive == true || agent.state.isStreaming) {
+            if (closing.get() || compacting.get() || promptJob?.isActive == true || agent.state.isStreaming) {
                 return@synchronized false
             }
             lateinit var launched: Job
@@ -798,11 +807,16 @@ class RpcRuntime(
         }
 
     private suspend fun runPromptWithRetry(prompt: Message) {
+        overflowRecoveryAttempted = false
         var messages: List<Message> = listOf(prompt)
         while (true) {
             agent.prompt(messages)
             val assistant = agent.state.messages.filterIsInstance<AssistantMessage>().lastOrNull()
                 ?: return
+            if (recoverContextFailure(assistant)) {
+                messages = emptyList()
+                continue
+            }
             if (!shouldRetry(assistant)) {
                 if (assistant.stopReason == StopReason.ERROR && retryAttempt > 0) {
                     emitAutoRetryEnd(
@@ -811,6 +825,9 @@ class RpcRuntime(
                         finalError = assistant.errorMessage,
                     )
                     retryAttempt = 0
+                }
+                if (assistant.stopReason == StopReason.STOP) {
+                    compactAtThreshold()
                 }
                 return
             }
@@ -854,6 +871,125 @@ class RpcRuntime(
                 return
             }
             messages = emptyList()
+        }
+    }
+
+    private suspend fun recoverContextFailure(message: AssistantMessage): Boolean {
+        val model = agent.state.model
+        val sameModel = message.provider == model.provider && message.model == model.id
+        val recoverable =
+            sameModel &&
+                (
+                    isContextOverflow(message, model.contextWindow) ||
+                        isRecoverableLength(message, model.maxTokens)
+                )
+        if (!autoCompactionEnabled || !recoverable || overflowRecoveryAttempted) {
+            return false
+        }
+        val preparation = prepareCompaction(sessionManager.getBranch(), compactionSettings) ?: return false
+        overflowRecoveryAttempted = true
+        if (agent.state.messages.lastOrNull() is AssistantMessage) {
+            agent.state.messages = agent.state.messages.dropLast(1)
+        }
+        return performAutomaticCompaction(
+            preparation = preparation,
+            reason = "overflow",
+            willRetry = true,
+            removeRetryableTail = true,
+        )
+    }
+
+    private suspend fun compactAtThreshold() {
+        if (!autoCompactionEnabled) {
+            return
+        }
+        val contextTokens = estimateContextTokens(agent.state.messages).tokens
+        if (!shouldCompact(contextTokens, agent.state.model.contextWindow, compactionSettings)) {
+            return
+        }
+        val preparation = prepareCompaction(sessionManager.getBranch(), compactionSettings) ?: return
+        performAutomaticCompaction(
+            preparation = preparation,
+            reason = "threshold",
+            willRetry = false,
+            removeRetryableTail = false,
+        )
+    }
+
+    private suspend fun performAutomaticCompaction(
+        preparation: CompactionPreparation,
+        reason: String,
+        willRetry: Boolean,
+        removeRetryableTail: Boolean,
+    ): Boolean {
+        if (!compacting.compareAndSet(false, true)) {
+            return false
+        }
+        emit(
+            buildJsonObject {
+                put("type", "compaction_start")
+                put("reason", reason)
+            },
+        )
+        return try {
+            val result =
+                compactWithRetry(
+                    preparation = preparation,
+                    customInstructions = null,
+                    reason = reason,
+                )
+            sessionManager.appendCompaction(
+                result.summary,
+                result.firstKeptEntryId,
+                result.tokensBefore,
+                result.details,
+                fromHook = false,
+                usage = result.usage,
+            )
+            agent.state.messages = sessionManager.buildSessionContext().messages
+            if (
+                removeRetryableTail &&
+                agent.state.messages.lastOrNull()
+                    ?.let { it as? AssistantMessage }
+                    ?.stopReason
+                    .let { it == StopReason.ERROR || it == StopReason.LENGTH }
+            ) {
+                agent.state.messages = agent.state.messages.dropLast(1)
+            }
+            val data =
+                buildJsonObject {
+                    put("summary", result.summary)
+                    put("firstKeptEntryId", result.firstKeptEntryId)
+                    put("tokensBefore", result.tokensBefore)
+                    put("estimatedTokensAfter", agent.state.messages.sumOf(::estimateTokens))
+                    put("usage", rpcPayloadJson.encodeToJsonElement(Usage.serializer(), result.usage))
+                    put("details", result.details)
+                }
+            emit(
+                buildJsonObject {
+                    put("type", "compaction_end")
+                    put("reason", reason)
+                    put("result", data)
+                    put("aborted", false)
+                    put("willRetry", willRetry)
+                },
+            )
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            emit(
+                buildJsonObject {
+                    put("type", "compaction_end")
+                    put("reason", reason)
+                    put("aborted", false)
+                    put("willRetry", false)
+                    put("errorMessage", error.message ?: error::class.simpleName.orEmpty())
+                },
+            )
+            false
+        } finally {
+            compacting.set(false)
         }
     }
 
@@ -1130,6 +1266,7 @@ class RpcRuntime(
                 compactWithRetry(
                     preparation = preparation,
                     customInstructions = command.string("customInstructions"),
+                    reason = "manual",
                 )
             sessionManager.appendCompaction(
                 result.summary,
@@ -1167,6 +1304,7 @@ class RpcRuntime(
     private suspend fun compactWithRetry(
         preparation: CompactionPreparation,
         customInstructions: String?,
+        reason: String,
     ): CompactionResult {
         var attempt = 0
         var retried = false
@@ -1210,7 +1348,7 @@ class RpcRuntime(
                         buildJsonObject {
                             put("type", "summarization_retry_attempt_start")
                             put("source", "compaction")
-                            put("reason", "manual")
+                            put("reason", reason)
                         },
                     )
                 }
@@ -1306,6 +1444,7 @@ class RpcRuntime(
                 val process =
                     ProcessBuilder(shell)
                         .directory(sessionManager.getCwd().toFile())
+                        .withPiAgentEnvironment()
                         .redirectErrorStream(true)
                         .start()
                 val running =
@@ -1822,6 +1961,7 @@ class RpcRuntime(
         steeringMode = runtimeSettings.steeringMode.toQueueMode()
         followUpMode = runtimeSettings.followUpMode.toQueueMode()
         autoCompactionEnabled = runtimeSettings.autoCompactionEnabled
+        imageAutoResize = runtimeSettings.imageAutoResize
         compactionSettings =
             CompactionSettings(
                 enabled = runtimeSettings.autoCompactionEnabled,
@@ -1941,12 +2081,20 @@ class RpcRuntime(
                         )
                     },
                     afterToolCall = { call ->
-                        emitExtensionAfterToolCall(
-                            host = host,
-                            context = ::currentExtensionContext,
-                            onActions = { applyExtensionActions(it) },
-                            call = call,
-                        )
+                        val patch =
+                            emitExtensionAfterToolCall(
+                                host = host,
+                                context = ::currentExtensionContext,
+                                onActions = { applyExtensionActions(it) },
+                                call = call,
+                            )
+                        val content = patch?.content ?: call.result.content
+                        val normalized = normalizeToolResultImages(content, imageAutoResize)
+                        if (patch == null && normalized === content) {
+                            null
+                        } else {
+                            (patch ?: works.earendil.pi.agent.AfterToolCallResult()).copy(content = normalized)
+                        }
                     },
                     initialState =
                         AgentInitialState(
@@ -1979,6 +2127,7 @@ class RpcRuntime(
                 val encoded =
                     encodeAgentEvent(
                         event = event,
+                        linearStreaming = true,
                         willRetry =
                             if (event is AgentEvent.AgentEnd) {
                                 event.messages
@@ -2684,6 +2833,9 @@ class RpcRuntime(
         sessionScopedModels: List<ScopedModel>,
     ): Model? {
         if (options.provider != null || options.model != null) {
+            runBlocking {
+                resolveExactModelReference(models, options.provider, options.model)
+            }?.let { return it }
             val reference = parseModelReference(options.provider, options.model)
             val provider = reference.provider
             val modelId = reference.modelId

@@ -56,6 +56,7 @@ import works.earendil.pi.ai.ModelCostTier
 import works.earendil.pi.ai.ModelInput
 import works.earendil.pi.ai.ModelThinkingLevel
 import works.earendil.pi.ai.Models
+import works.earendil.pi.ai.ModelsPublication
 import works.earendil.pi.ai.ModelsStoreEntry
 import works.earendil.pi.ai.OAuthAuth
 import works.earendil.pi.ai.OAuthCredential
@@ -467,6 +468,7 @@ private fun composeProvider(
             if (inheritedProvider?.supportsModelRefresh == true) {
                 inheritedProvider.refreshModels(context)
             }
+            var refreshedModels: List<Model>? = null
             if (hasRefreshCallback) {
                 val result =
                     invokeExtensionProviderCallback(
@@ -478,12 +480,22 @@ private fun composeProvider(
                                     "context",
                                     buildJsonObject {
                                         context.credential?.let { put("credential", it.toExtensionJson()) }
+                                        context.stored?.let {
+                                            put(
+                                                "stored",
+                                                extensionProviderJson.encodeToJsonElement(
+                                                    ModelsStoreEntry.serializer(),
+                                                    it,
+                                                ),
+                                            )
+                                        }
                                         put("allowNetwork", context.allowNetwork)
                                         put("force", context.force)
                                     },
                                 )
                             },
                         store = context.store,
+                        publish = context.publish,
                         extensionHost = extensionHost,
                         callbackScope = callbackScope,
                         activeOperations = activeOperations,
@@ -495,7 +507,7 @@ private fun composeProvider(
                         result["returned"]
                     }
                 if (refreshed != null && refreshed !is JsonNull) {
-                    val parsed =
+                    refreshedModels =
                         parseExtensionModels(
                             providerId = providerId,
                             values = refreshed.jsonArray,
@@ -503,53 +515,56 @@ private fun composeProvider(
                             configBaseUrl = configuredBaseUrl,
                             defaults = unprojectedModels.get(),
                         )
-                    unprojectedModels.set(parsed)
-                    currentModels.set(parsed)
                 }
             }
-            if (!supportsModelProjection) {
+            if (refreshedModels == null && !supportsModelProjection) {
                 return
             }
+            val sourceModels = refreshedModels ?: unprojectedModels.get()
             val credential = context.credential as? OAuthCredential
-            if (credential == null) {
-                currentModels.set(unprojectedModels.get())
-                return
-            }
-            val sourceModels = unprojectedModels.get()
-            val result =
-                invokeExtensionProviderCallback(
-                    callbackToken = requireNotNull(callbackToken),
-                    method = "oauth_modify_models",
-                    arguments =
-                        buildJsonObject {
-                            put(
-                                "models",
-                                JsonArray(
-                                    sourceModels.map {
-                                        extensionProviderJson.encodeToJsonElement(Model.serializer(), it)
-                                    },
-                                ),
-                            )
-                            put("credential", credential.toExtensionJson())
-                        },
-                    extensionHost = extensionHost,
-                    callbackScope = callbackScope,
-                    activeOperations = activeOperations,
-                )
             val updated =
-                result
-                    ?.jsonArray
-                    ?.let { values ->
-                        parseExtensionModels(
-                            providerId = providerId,
-                            values = values,
-                            configApi = configuredApi,
-                            configBaseUrl = configuredBaseUrl,
-                            defaults = sourceModels,
-                        )
-                    }
-                    ?: error("Provider $providerId oauth.modifyModels must return an array")
-            currentModels.set(updated)
+                if (!supportsModelProjection || credential == null) {
+                    sourceModels
+                } else {
+                    invokeExtensionProviderCallback(
+                        callbackToken = requireNotNull(callbackToken),
+                        method = "oauth_modify_models",
+                        arguments =
+                            buildJsonObject {
+                                put(
+                                    "models",
+                                    JsonArray(
+                                        sourceModels.map {
+                                            extensionProviderJson.encodeToJsonElement(Model.serializer(), it)
+                                        },
+                                    ),
+                                )
+                                put("credential", credential.toExtensionJson())
+                            },
+                        extensionHost = extensionHost,
+                        callbackScope = callbackScope,
+                        activeOperations = activeOperations,
+                    )
+                        ?.jsonArray
+                        ?.let { values ->
+                            parseExtensionModels(
+                                providerId = providerId,
+                                values = values,
+                                configApi = configuredApi,
+                                configBaseUrl = configuredBaseUrl,
+                                defaults = sourceModels,
+                            )
+                        }
+                        ?: error("Provider $providerId oauth.modifyModels must return an array")
+                }
+            context.publish(
+                ModelsPublication(
+                    update = {
+                        refreshedModels?.let(unprojectedModels::set)
+                        currentModels.set(updated)
+                    },
+                ),
+            )
         }
 
         override suspend fun stream(
@@ -941,6 +956,7 @@ private suspend fun invokeExtensionProviderCallback(
     interaction: AuthInteraction? = null,
     authContext: AuthContext? = null,
     store: ProviderModelsStore? = null,
+    publish: (suspend (ModelsPublication) -> Boolean)? = null,
     extensionHost: () -> ExtensionHost?,
     callbackScope: CoroutineScope,
     activeOperations: ConcurrentHashMap<String, ExtensionHost>,
@@ -961,6 +977,7 @@ private suspend fun invokeExtensionProviderCallback(
                         interaction = interaction,
                         authContext = authContext,
                         store = store,
+                        publish = publish,
                         onOperationStart = { id ->
                             operationId.set(id)
                             activeOperations[id] = host
@@ -1156,6 +1173,7 @@ private fun extensionStreamOptions(options: SimpleStreamOptions): JsonObject =
 private fun extensionStreamOptions(options: StreamOptions): JsonObject =
     buildJsonObject {
         options.temperature?.let { put("temperature", it) }
+        options.samplingParams?.let { put("samplingParams", it) }
         options.maxTokens?.let { put("maxTokens", it) }
         options.apiKey?.let { put("apiKey", it) }
         if (options.transport != Transport.AUTO) {
@@ -1375,6 +1393,7 @@ private fun parseExtensionModel(
         cost = value.modelCost() ?: fallback?.cost ?: ModelCost(0.0, 0.0, 0.0, 0.0),
         contextWindow = contextWindow,
         maxTokens = maxTokens,
+        samplingParams = value["samplingParams"] as? JsonObject ?: fallback?.samplingParams,
         headers = fallback?.headers.orEmpty() + value.stringMap("headers"),
         compat = value["compat"] as? JsonObject ?: fallback?.compat,
     )
@@ -1487,7 +1506,11 @@ private fun resolveConfigValue(
             } else {
                 listOf(System.getenv("SHELL") ?: "/bin/zsh", "-lc", command)
             }
-        val process = ProcessBuilder(shell).redirectErrorStream(true).start()
+        val process =
+            ProcessBuilder(shell)
+                .withPiAgentEnvironment()
+                .redirectErrorStream(true)
+                .start()
         val output = process.inputStream.readAllBytes().toString(StandardCharsets.UTF_8).trim()
         check(process.waitFor() == 0) { "Configured command failed: $output" }
         return output

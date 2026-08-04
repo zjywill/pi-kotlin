@@ -14,7 +14,7 @@ enum class TerminalColorScheme {
 }
 
 private val osc11Pattern = Regex("^\\u001B]11;([^\\u0007\\u001B]*)(?:\\u0007|\\u001B\\\\)$", RegexOption.IGNORE_CASE)
-private val colorSchemePattern = Regex("^\\u001B\\[\\?997;(1|2)n$")
+private val colorSchemePattern = Regex("^(?:\\u001B\\[\\?997;(1|2)n)+$")
 
 fun isOsc11BackgroundColorResponse(data: String): Boolean = osc11Pattern.matches(data)
 

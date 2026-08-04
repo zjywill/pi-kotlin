@@ -29,6 +29,10 @@ class TerminalImageTest {
                 ),
             ).images,
         )
+        assertEquals(
+            TerminalCapabilities(images = null, trueColor = true, hyperlinks = false),
+            detectTerminalCapabilities(emptyMap(), osName = "Windows 11"),
+        )
     }
 
     @Test
@@ -71,6 +75,8 @@ class TerminalImageTest {
         val placement = assertNotNull(getKittyImagePlacement("left $cropped right"))
 
         assertEquals(imageId, placement.imageId)
+        assertEquals(cropped.length, placement.transmissionBytes)
+        assertEquals(40_000L, placement.estimatedDecodedBytes)
         assertTrue(placement.sequence.contains("a=p,q=2"))
         assertTrue(placement.sequence.contains("y=66"))
         assertTrue(placement.sequence.contains("h=34"))

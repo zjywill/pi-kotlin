@@ -12,6 +12,7 @@ const { createModels } = await import(pathToFileURL(`${tsRoot}/packages/ai/src/m
 const { kimiCodingProvider } = await import(
 	pathToFileURL(`${tsRoot}/packages/ai/src/providers/kimi-coding.ts`).href
 );
+const oauthSignal = new AbortController().signal;
 
 type RequestRecord = {
 	url: string;
@@ -109,6 +110,7 @@ let auth;
 let unauthorizedMessage = "";
 try {
 	loginCredential = await kimiCodingOAuth.login({
+		signal: oauthSignal,
 		prompt: async (prompt) => {
 			throw new Error(`Unexpected Kimi prompt: ${prompt.type}`);
 		},
@@ -119,10 +121,10 @@ try {
 			}
 		},
 	});
-	refreshedCredential = await kimiCodingOAuth.refresh(loginCredential);
+	refreshedCredential = await kimiCodingOAuth.refresh(loginCredential, oauthSignal);
 	auth = await kimiCodingOAuth.toAuth(refreshedCredential);
 	try {
-		await kimiCodingOAuth.refresh(refreshedCredential);
+		await kimiCodingOAuth.refresh(refreshedCredential, oauthSignal);
 	} catch (error) {
 		unauthorizedMessage = error instanceof Error ? error.message : String(error);
 	}

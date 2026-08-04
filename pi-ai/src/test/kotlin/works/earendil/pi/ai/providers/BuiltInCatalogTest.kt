@@ -39,11 +39,11 @@ class BuiltInCatalogTest {
         assertEquals(3, catalog.schemaVersion)
         Instant.parse(assertNotNull(catalog.generatedAt))
         assertEquals(
-            "9e11c7367557f9ff620f471db7ab93db5cfdf90e7c1e0584e1b3712f77740c20",
+            "8f42becde9d67b0f50730e36639d319dd0da3f4c26c0ca8d2c6e8c93a5a566a0",
             catalog.structureHash,
         )
-        assertEquals(37, catalog.modelsByProvider.size)
-        assertEquals(1_122, catalog.modelsByProvider.values.sumOf(List<works.earendil.pi.ai.Model>::size))
+        assertEquals(38, catalog.modelsByProvider.size)
+        assertEquals(1_151, catalog.modelsByProvider.values.sumOf(List<works.earendil.pi.ai.Model>::size))
         assertEquals("openai-responses", sol.api)
         assertEquals(272_000, sol.contextWindow)
         assertEquals(128_000, sol.maxTokens)
@@ -120,14 +120,15 @@ class BuiltInCatalogTest {
         val providers = builtInProviders()
         val ids = providers.map { it.id }.toSet()
 
-        assertEquals(38, providers.size)
-        assertEquals(1_122, providers.sumOf { it.getModels().size })
+        assertEquals(39, providers.size)
+        assertEquals(1_151, providers.sumOf { it.getModels().size })
         assertTrue(
             ids.containsAll(
                 setOf(
                     "amazon-bedrock",
                     "anthropic",
                     "azure-openai-responses",
+                    "baseten",
                     "cloudflare-ai-gateway",
                     "cloudflare-workers-ai",
                     "deepseek",
@@ -160,7 +161,7 @@ class BuiltInCatalogTest {
         assertEquals(38, azure.getModels().size)
         val mistral = providers.single { it.id == "mistral" }
         assertEquals("Mistral", mistral.name)
-        assertEquals(30, mistral.getModels().size)
+        assertEquals(31, mistral.getModels().size)
         val cloudflareGateway = providers.single { it.id == "cloudflare-ai-gateway" }
         assertEquals("Cloudflare AI Gateway", cloudflareGateway.name)
         assertEquals(43, cloudflareGateway.getModels().size)

@@ -92,6 +92,19 @@ payloads["openai-responses-reasoning"] = await capturePayload(
 	{ apiKey: "test", cacheRetention: "none", maxTokens: 123, reasoning: "high" },
 	true,
 );
+payloads["openai-completions-sampling"] = await capturePayload(
+	"openai-completions",
+	{
+		...fixtureModel("openai-completions"),
+		samplingParams: { top_p: 0.95, min_p: 0.05 },
+	},
+	{
+		apiKey: "test",
+		temperature: 0,
+		samplingParams: { temperature: 1, top_p: 0.5, top_k: 0 },
+	},
+	true,
+);
 payloads["azure-openai-responses-reasoning"] = await capturePayload(
 	"azure-openai-responses",
 	{

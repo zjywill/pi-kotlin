@@ -104,4 +104,91 @@ class ToolValidationTest {
 
         assertEquals(JsonNull, validateToolArguments(tool, call)["values"])
     }
+
+    @Test
+    fun `preserves values that already match nullable union branches`() {
+        listOf("anyOf", "oneOf").forEach { keyword ->
+            val tool =
+                ToolDefinition(
+                    name = "nullable",
+                    description = "Nullable value",
+                    parameters =
+                        buildJsonObject {
+                            put("type", "object")
+                            put(
+                                "properties",
+                                buildJsonObject {
+                                    put(
+                                        "value",
+                                        buildJsonObject {
+                                            put(
+                                                keyword,
+                                                JsonArray(
+                                                    listOf(
+                                                        buildJsonObject { put("type", "number") },
+                                                        buildJsonObject { put("type", "null") },
+                                                    ),
+                                                ),
+                                            )
+                                        },
+                                    )
+                                },
+                            )
+                            put("required", JsonArray(listOf(JsonPrimitive("value"))))
+                        },
+                )
+            val call =
+                ToolCall(
+                    id = "tool-$keyword",
+                    name = "nullable",
+                    arguments = buildJsonObject { put("value", JsonNull) },
+                )
+
+            assertEquals(JsonNull, validateToolArguments(tool, call)["value"])
+        }
+    }
+
+    @Test
+    fun `coerces values that do not yet match a nullable union branch`() {
+        val tool =
+            ToolDefinition(
+                name = "nullable",
+                description = "Nullable value",
+                parameters =
+                    buildJsonObject {
+                        put("type", "object")
+                        put(
+                            "properties",
+                            buildJsonObject {
+                                put(
+                                    "value",
+                                    buildJsonObject {
+                                        put(
+                                            "anyOf",
+                                            JsonArray(
+                                                listOf(
+                                                    buildJsonObject { put("type", "number") },
+                                                    buildJsonObject { put("type", "null") },
+                                                ),
+                                            ),
+                                        )
+                                    },
+                                )
+                            },
+                        )
+                    },
+            )
+
+        val result =
+            validateToolArguments(
+                tool,
+                ToolCall(
+                    id = "tool-coerce",
+                    name = "nullable",
+                    arguments = buildJsonObject { put("value", "42") },
+                ),
+            )
+
+        assertEquals(42.0, result.getValue("value").jsonPrimitive.double)
+    }
 }

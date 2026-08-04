@@ -3,12 +3,17 @@ package works.earendil.pi.ai
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.sync.withLock
 
 fun interface StreamFunction {
     suspend fun stream(
@@ -59,6 +64,7 @@ interface Provider {
             model,
             context,
             options.stream.copy(
+                samplingParams = mergeSamplingParams(model.samplingParams, options.stream.samplingParams),
                 reasoning = options.reasoning,
                 thinkingBudgets = options.thinkingBudgets,
             ),
@@ -67,19 +73,55 @@ interface Provider {
 
 data class RefreshModelsContext(
     val credential: Credential? = null,
+    val stored: ModelsStoreEntry? = null,
     val store: ProviderModelsStore,
     val allowNetwork: Boolean,
     val force: Boolean = false,
+    val publish: suspend (ModelsPublication) -> Boolean = { publication ->
+        when (val persistence = publication.persistence) {
+            ModelsPersistence.None -> Unit
+            ModelsPersistence.Delete -> store.delete()
+            is ModelsPersistence.Write -> store.write(persistence.entry)
+        }
+        publication.update?.invoke()
+        true
+    },
+)
+
+sealed interface ModelsPersistence {
+    data object None : ModelsPersistence
+
+    data object Delete : ModelsPersistence
+
+    data class Write(
+        val entry: ModelsStoreEntry,
+    ) : ModelsPersistence
+}
+
+data class ModelsPublication(
+    val persistence: ModelsPersistence = ModelsPersistence.None,
+    val update: (() -> Unit)? = null,
 )
 
 data class ModelsRefreshOptions(
     val allowNetwork: Boolean = true,
+    val providers: Set<String>? = null,
     val force: Boolean = false,
 )
 
 data class ModelsRefreshResult(
     val aborted: Boolean,
     val errors: Map<String, Throwable>,
+)
+
+class CredentialSynchronizationException(
+    val providerId: String,
+    val operation: String,
+    val credential: Credential?,
+    cause: Throwable,
+) : RuntimeException(
+        "Credential $operation committed for $providerId, but local synchronization failed",
+        cause,
 )
 
 class Models(
@@ -91,6 +133,8 @@ class Models(
     private val currentTimeMillis: () -> Long = System::currentTimeMillis,
 ) {
     private val providersById = ConcurrentHashMap<String, Provider>()
+    private val refreshGenerations = ConcurrentHashMap<String, AtomicLong>()
+    private val publicationMutexes = ConcurrentHashMap<String, Mutex>()
     private val authContext =
         authContext
             ?: object : AuthContext {
@@ -117,14 +161,17 @@ class Models(
     }
 
     fun setProvider(provider: Provider) {
+        supersedeProviderRefresh(provider.id)
         providersById[provider.id] = provider
     }
 
     fun deleteProvider(id: String) {
+        supersedeProviderRefresh(id)
         providersById.remove(id)
     }
 
     fun clearProviders() {
+        (providersById.keys + refreshGenerations.keys).forEach(::supersedeProviderRefresh)
         providersById.clear()
     }
 
@@ -287,92 +334,22 @@ class Models(
 
     suspend fun refresh(options: ModelsRefreshOptions = ModelsRefreshOptions()): ModelsRefreshResult {
         val errors = ConcurrentHashMap<String, Throwable>()
-        val refreshableProviders = providersById.values.filter(Provider::supportsModelRefresh)
-        val storedEntries =
-            runCatching {
-                modelsStore.readAll(refreshableProviders.map(Provider::id))
-            }.getOrElse { error ->
-                return ModelsRefreshResult(
-                    aborted = false,
-                    errors = refreshableProviders.associate { it.id to error },
-                )
+        val selectedProviders = options.providers
+        val refreshableProviders =
+            providersById.values.filter { provider ->
+                provider.supportsModelRefresh &&
+                    (selectedProviders == null || provider.id in selectedProviders)
             }
-        val entries = ConcurrentHashMap(storedEntries)
-        val writes = ConcurrentHashMap<String, ModelsStoreEntry>()
-        val deletes = ConcurrentHashMap.newKeySet<String>()
         val refreshSemaphore = Semaphore(MAX_CONCURRENT_MODEL_REFRESHES)
         supervisorScope {
             refreshableProviders
                 .map { provider ->
                     async {
                         refreshSemaphore.withPermit {
-                            val store =
-                                object : ProviderModelsStore {
-                                    override suspend fun read(): ModelsStoreEntry? =
-                                        if (provider.id in deletes) {
-                                            null
-                                        } else {
-                                            entries[provider.id]
-                                        }
-
-                                    override suspend fun write(entry: ModelsStoreEntry) {
-                                        entries[provider.id] = entry
-                                        writes[provider.id] = entry
-                                        deletes.remove(provider.id)
-                                    }
-
-                                    override suspend fun delete() {
-                                        entries.remove(provider.id)
-                                        writes.remove(provider.id)
-                                        deletes += provider.id
-                                    }
-                                }
-                            try {
-                                val stored = readStoredCredential(provider.id)
-                                val credential =
-                                    resolveRefreshCredential(
-                                        provider = provider,
-                                        stored = stored,
-                                        allowNetwork = options.allowNetwork,
-                                    )
-                                if (
-                                    credential == null &&
-                                    (provider.apiKey != null || provider.oauth != null)
-                                ) {
-                                    return@withPermit
-                                }
-                                provider.refreshModels(
-                                    RefreshModelsContext(
-                                        credential = credential,
-                                        store = store,
-                                        allowNetwork = options.allowNetwork,
-                                        force = options.force,
-                                    ),
-                                )
-                            } catch (error: CancellationException) {
-                                throw error
-                            } catch (error: Throwable) {
-                                errors[provider.id] = error
-                                runCatching {
-                                    provider.refreshModels(
-                                        RefreshModelsContext(
-                                            credential = runCatching { readStoredCredential(provider.id) }.getOrNull(),
-                                            store = store,
-                                            allowNetwork = false,
-                                        ),
-                                    )
-                                }
-                            }
+                            refreshProvider(provider, options, errors)
                         }
                     }
                 }.awaitAll()
-        }
-        runCatching {
-            modelsStore.applyChanges(writes, deletes)
-        }.onFailure { error ->
-            (writes.keys + deletes).forEach { providerId ->
-                errors.putIfAbsent(providerId, error)
-            }
         }
         return ModelsRefreshResult(
             aborted = false,
@@ -380,10 +357,123 @@ class Models(
         )
     }
 
+    private suspend fun refreshProvider(
+        provider: Provider,
+        options: ModelsRefreshOptions,
+        errors: ConcurrentHashMap<String, Throwable>,
+    ) {
+        val generation = supersedeProviderRefresh(provider.id)
+        try {
+            var storedCredential: Credential? = null
+            var credentialError: Throwable? = null
+            try {
+                storedCredential = readStoredCredential(provider.id)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                credentialError = error
+            }
+            runProviderRefreshPhase(
+                provider = provider,
+                credential = storedCredential,
+                allowNetwork = false,
+                force = false,
+                generation = generation,
+            )
+            credentialError?.let { throw it }
+            if (!options.allowNetwork) {
+                return
+            }
+            val credential =
+                resolveRefreshCredential(
+                    provider = provider,
+                    stored = storedCredential,
+                )
+            if (credential == null && (provider.apiKey != null || provider.oauth != null)) {
+                return
+            }
+            runProviderRefreshPhase(
+                provider = provider,
+                credential = credential,
+                allowNetwork = true,
+                force = options.force,
+                generation = generation,
+            )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            errors[provider.id] = error
+        }
+    }
+
+    private suspend fun runProviderRefreshPhase(
+        provider: Provider,
+        credential: Credential?,
+        allowNetwork: Boolean,
+        force: Boolean,
+        generation: Long,
+    ) {
+        val stored = modelsStore.read(provider.id)
+        val publish: suspend (ModelsPublication) -> Boolean = { publication ->
+            publishProviderModels(provider.id, generation, publication)
+        }
+        val store =
+            object : ProviderModelsStore {
+                override suspend fun read(): ModelsStoreEntry? = stored
+
+                override suspend fun write(entry: ModelsStoreEntry) {
+                    publish(ModelsPublication(ModelsPersistence.Write(entry)))
+                }
+
+                override suspend fun delete() {
+                    publish(ModelsPublication(ModelsPersistence.Delete))
+                }
+            }
+        provider.refreshModels(
+            RefreshModelsContext(
+                credential = credential,
+                stored = stored,
+                store = store,
+                publish = publish,
+                allowNetwork = allowNetwork,
+                force = force,
+            ),
+        )
+    }
+
+    private suspend fun publishProviderModels(
+        providerId: String,
+        generation: Long,
+        publication: ModelsPublication,
+    ): Boolean {
+        currentCoroutineContext().ensureActive()
+        return publicationMutexes.computeIfAbsent(providerId) { Mutex() }.withLock {
+            if (refreshGeneration(providerId) != generation) {
+                return@withLock false
+            }
+            when (val persistence = publication.persistence) {
+                ModelsPersistence.None -> Unit
+                ModelsPersistence.Delete -> modelsStore.delete(providerId)
+                is ModelsPersistence.Write -> modelsStore.write(providerId, persistence.entry)
+            }
+            currentCoroutineContext().ensureActive()
+            if (refreshGeneration(providerId) != generation) {
+                return@withLock false
+            }
+            publication.update?.invoke()
+            true
+        }
+    }
+
+    private fun supersedeProviderRefresh(providerId: String): Long =
+        refreshGenerations.computeIfAbsent(providerId) { AtomicLong() }.incrementAndGet()
+
+    private fun refreshGeneration(providerId: String): Long =
+        refreshGenerations[providerId]?.get() ?: 0L
+
     private suspend fun resolveRefreshCredential(
         provider: Provider,
         stored: Credential?,
-        allowNetwork: Boolean,
     ): Credential? =
         when (stored) {
             is ApiKeyCredential ->
@@ -406,7 +496,7 @@ class Models(
             is OAuthCredential -> {
                 val oauth = provider.oauth
                 when {
-                    !allowNetwork || currentTimeMillis() < stored.expires -> stored
+                    currentTimeMillis() < stored.expires -> stored
                     oauth == null -> null
                     else -> refreshStoredOAuth(provider, oauth)
                 }
@@ -795,3 +885,13 @@ private fun mergeAuthHeaders(
     }
     return result
 }
+
+private fun mergeSamplingParams(
+    model: kotlinx.serialization.json.JsonObject?,
+    request: kotlinx.serialization.json.JsonObject?,
+): kotlinx.serialization.json.JsonObject? =
+    if (model == null && request == null) {
+        null
+    } else {
+        kotlinx.serialization.json.JsonObject(model.orEmpty() + request.orEmpty())
+    }

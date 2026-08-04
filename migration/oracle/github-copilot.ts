@@ -10,6 +10,7 @@ const { buildCopilotDynamicHeaders } = await import(
 const { githubCopilotProvider } = await import(
 	pathToFileURL(`${tsRoot}/packages/ai/src/providers/github-copilot.ts`).href
 );
+const oauthSignal = new AbortController().signal;
 
 type RequestRecord = {
 	url: string;
@@ -85,6 +86,7 @@ let promptProjection: unknown;
 let deviceProjection: unknown;
 const progress: string[] = [];
 const credential = await githubCopilotOAuth.login({
+	signal: oauthSignal,
 	prompt: async (prompt) => {
 		if (prompt.type !== "text") throw new Error(`Unexpected prompt: ${prompt.type}`);
 		promptProjection = {

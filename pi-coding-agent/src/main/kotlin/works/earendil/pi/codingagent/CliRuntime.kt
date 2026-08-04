@@ -385,6 +385,12 @@ class CliRuntime(
                 extensionTools = extensionTools,
             )
         baseSystemPrompt = buildCodingSystemPrompt(runtimeCwd, selectedTools, promptResources)
+        val imageAutoResize =
+            SettingsStore(
+                cwd = runtimeCwd,
+                agentDir = agentDir,
+                projectTrusted = projectTrusted,
+            ).agentRuntimeSettings().imageAutoResize
         val agent =
             Agent(
                 AgentOptions(
@@ -402,12 +408,20 @@ class CliRuntime(
                         )
                     },
                     afterToolCall = { call ->
-                        emitExtensionAfterToolCall(
-                            host = extensionHost,
-                            context = ::currentExtensionContext,
-                            onActions = ::applyExtensionActions,
-                            call = call,
-                        )
+                        val patch =
+                            emitExtensionAfterToolCall(
+                                host = extensionHost,
+                                context = ::currentExtensionContext,
+                                onActions = ::applyExtensionActions,
+                                call = call,
+                            )
+                        val content = patch?.content ?: call.result.content
+                        val normalized = normalizeToolResultImages(content, imageAutoResize)
+                        if (patch == null && normalized === content) {
+                            null
+                        } else {
+                            (patch ?: works.earendil.pi.agent.AfterToolCallResult()).copy(content = normalized)
+                        }
                     },
                     initialState =
                         AgentInitialState(
@@ -479,7 +493,12 @@ class CliRuntime(
                 onActions = ::applyExtensionActions,
             )
             if (args.mode == OutputMode.JSON) {
-                stdout.println(protocolJson.encodeToString(JsonObject.serializer(), encodeAgentEvent(event)))
+                stdout.println(
+                    protocolJson.encodeToString(
+                        JsonObject.serializer(),
+                        encodeAgentEvent(event, linearStreaming = true),
+                    ),
+                )
             }
             if (event is AgentEvent.MessageEnd) {
                 appendAgentMessage(sessionManager, event.message)
@@ -627,6 +646,7 @@ class CliRuntime(
         if (args.provider == null && args.model == null && scopedModels.isNotEmpty()) {
             return scopedModels.first().model
         }
+        resolveExactModelReference(models, args.provider, args.model)?.let { return it }
         val reference = parseModelReference(args.provider, args.model)
         val providerName = reference.provider ?: "google"
         val candidates = models.getAvailable(providerName)

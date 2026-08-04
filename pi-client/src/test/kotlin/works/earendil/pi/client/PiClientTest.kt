@@ -26,14 +26,12 @@ class PiClientTest {
             server.onMessage = { message ->
                 if (message.string("type") == "hello") {
                     assertEquals(PROTOCOL_VERSION.toString(), message.string("version"))
-                    assertEquals("secret", message.string("token"))
                     server.send(serverHello())
                 }
             }
             val client =
                 PiClient(
                     PiClientOptions(
-                        token = "secret",
                         transportFactory = server.factory,
                         onListenerError = listenerErrors::add,
                     ),
@@ -56,7 +54,7 @@ class PiClientTest {
                     "request" -> requests += message
                 }
             }
-            val client = PiClient(PiClientOptions("secret", server.factory))
+            val client = PiClient(PiClientOptions(server.factory))
             client.connect()
             val list = async { client.listSessions() }
             val attach = async { client.attachSession("session-1") }
@@ -168,7 +166,7 @@ class PiClientTest {
                     }
                 }
             }
-            val client = PiClient(PiClientOptions("secret", server.factory))
+            val client = PiClient(PiClientOptions(server.factory))
             client.connect()
             val first = client.attachSession("session-1")
             assertEquals(10, first.snapshot?.long("revision"))
@@ -225,7 +223,7 @@ class PiClientTest {
                     }
                 }
             }
-            val client = PiClient(PiClientOptions("secret", server.factory))
+            val client = PiClient(PiClientOptions(server.factory))
             client.connect()
 
             val first = client.attachSession("session-1")
@@ -288,7 +286,7 @@ class PiClientTest {
                     }
                 }
             }
-            val client = PiClient(PiClientOptions("secret", server.factory))
+            val client = PiClient(PiClientOptions(server.factory))
             client.connect()
             val shared = client.acquireSession("session-1", SessionLeaseMode.SHARED)
             assertFailsWith<PiSessionOwnershipException> {
@@ -314,7 +312,6 @@ class PiClientTest {
             val client =
                 PiClient(
                     PiClientOptions(
-                        token = "secret",
                         transportFactory =
                             ByteTransportFactory { handlers ->
                                 handlers.onData(encodeServerMessage(serverHello()))

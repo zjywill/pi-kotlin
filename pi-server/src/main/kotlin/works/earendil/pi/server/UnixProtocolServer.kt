@@ -22,7 +22,6 @@ import kotlinx.coroutines.withContext
 import works.earendil.pi.protocol.DEFAULT_MAX_FRAME_LENGTH
 
 data class UnixServerOptions(
-    val token: String,
     val path: Path,
     val serverId: String = java.util.UUID.randomUUID().toString(),
     val maxFrameLength: Int = DEFAULT_MAX_FRAME_LENGTH,
@@ -62,7 +61,6 @@ fun createUnixServer(
         backend,
         PiServerOptions(
             listeners = listOf(listener),
-            token = options.token,
             serverId = options.serverId,
             maxFrameLength = options.maxFrameLength,
             handshakeTimeoutMs = options.handshakeTimeoutMs,

@@ -49,7 +49,7 @@ class OpenAIResponsesPendingTest {
 
             state.handle(messageEvent("response.output_item.added", "final_answer", emptyContent = true))
             state.handle(messageEvent("response.output_item.done", "final_answer"))
-            state.handle(terminalEvent("incomplete"))
+            state.handle(terminalEvent("incomplete", "max_output_tokens"))
             state.finish()
 
             val events = stream.events.toList()
@@ -57,9 +57,23 @@ class OpenAIResponsesPendingTest {
             assertEquals(StopReason.STOP, events.filterIsInstance<TextStart>().single().partial.stopReason)
             assertEquals(StopReason.LENGTH, events.filterIsInstance<AssistantDone>().single().reason)
             assertEquals(
-                "incomplete",
+                "incomplete.max_output_tokens",
                 events.filterIsInstance<AssistantDone>().single().message.rawStopReason,
             )
+        }
+
+    @Test
+    fun `content filtered incomplete response is a non retryable error`() =
+        runTest {
+            val stream = createAssistantMessageEventStream()
+            val state = OpenAIResponsesEventState(model(), stream, emptyMap())
+
+            state.handle(terminalEvent("incomplete", "content_filter"))
+            state.finish()
+
+            val error = stream.events.toList().filterIsInstance<AssistantError>().single()
+            assertEquals("incomplete.content_filter", error.error.rawStopReason)
+            assertEquals("Response incomplete: content_filter", error.error.errorMessage)
         }
 
     @Test
@@ -126,7 +140,10 @@ class OpenAIResponsesPendingTest {
         )
     }
 
-    private fun terminalEvent(status: String) =
+    private fun terminalEvent(
+        status: String,
+        incompleteReason: String? = null,
+    ) =
         buildJsonObject {
             put("type", if (status == "incomplete") "response.incomplete" else "response.completed")
             put(
@@ -134,6 +151,12 @@ class OpenAIResponsesPendingTest {
                 buildJsonObject {
                     put("id", "resp-1")
                     put("status", status)
+                    incompleteReason?.let { reason ->
+                        put(
+                            "incomplete_details",
+                            buildJsonObject { put("reason", reason) },
+                        )
+                    }
                 },
             )
         }

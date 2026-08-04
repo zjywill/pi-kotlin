@@ -51,13 +51,11 @@ fun interface ByteTransportFactory {
 }
 
 data class PiClientOptions(
-    val token: String,
     val transportFactory: ByteTransportFactory,
     val maxFrameLength: Int = DEFAULT_MAX_FRAME_LENGTH,
     val onListenerError: ((Throwable) -> Unit)? = null,
 ) {
     init {
-        require(token.isNotEmpty()) { "PiClient token must not be empty" }
         require(maxFrameLength > 0) { "PiClient maxFrameLength must be positive" }
     }
 }
@@ -290,7 +288,6 @@ class PiClient(
                     buildJsonObject {
                         put("type", "hello")
                         put("version", PROTOCOL_VERSION)
-                        put("token", options.token)
                     },
                     options.maxFrameLength,
                 ),

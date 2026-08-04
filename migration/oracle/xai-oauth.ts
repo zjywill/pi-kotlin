@@ -8,6 +8,7 @@ const { InMemoryCredentialStore } = await import(
 );
 const { createModels } = await import(pathToFileURL(`${tsRoot}/packages/ai/src/models.ts`).href);
 const { xaiProvider } = await import(pathToFileURL(`${tsRoot}/packages/ai/src/providers/xai.ts`).href);
+const oauthSignal = new AbortController().signal;
 
 type RequestRecord = {
 	url: string;
@@ -95,6 +96,7 @@ let refreshedCredential;
 let auth;
 try {
 	loginCredential = await xaiOAuth.login({
+		signal: oauthSignal,
 		prompt: async (prompt) => {
 			throw new Error(`Unexpected xAI prompt: ${prompt.type}`);
 		},
@@ -105,7 +107,7 @@ try {
 			}
 		},
 	});
-	refreshedCredential = await xaiOAuth.refresh(loginCredential);
+	refreshedCredential = await xaiOAuth.refresh(loginCredential, oauthSignal);
 	auth = await xaiOAuth.toAuth(refreshedCredential);
 } finally {
 	globalThis.fetch = originalFetch;

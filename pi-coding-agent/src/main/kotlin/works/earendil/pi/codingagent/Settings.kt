@@ -103,6 +103,7 @@ internal data class AgentRuntimeSettings(
     val autoCompactionEnabled: Boolean = true,
     val compactionReserveTokens: Int = 16_384,
     val compactionKeepRecentTokens: Int = 20_000,
+    val imageAutoResize: Boolean = true,
     val autoRetryEnabled: Boolean = true,
     val retryMaxAttempts: Int = 3,
     val retryBaseDelayMs: Long = 2_000,
@@ -170,6 +171,7 @@ internal class SettingsStore(
                 nested("compaction", "reserveTokens").intValue()?.coerceAtLeast(0) ?: 16_384,
             compactionKeepRecentTokens =
                 nested("compaction", "keepRecentTokens").intValue()?.coerceAtLeast(0) ?: 20_000,
+            imageAutoResize = nested("images", "autoResize").booleanValue() ?: true,
             autoRetryEnabled = nested("retry", "enabled").booleanValue() ?: true,
             retryMaxAttempts = nested("retry", "maxRetries").intValue()?.coerceAtLeast(0) ?: 3,
             retryBaseDelayMs =

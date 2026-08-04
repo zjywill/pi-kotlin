@@ -147,12 +147,12 @@ async function captureBedrockEvents(): Promise<{ events: unknown[]; request: Rec
 		cacheRetention: "none",
 		maxTokens: 123,
 		reasoning: "high",
-		headers: {
-			Authorization: "blocked",
-			"X-Amz-Date": "blocked",
-			"x-fixture": "yes",
-		},
-	});
+			headers: {
+				Authorization: "blocked",
+				"X-Amz-Date": "blocked",
+				"x-fixture": "yes",
+			},
+		});
 	const events: unknown[] = [];
 	for await (const event of stream) {
 		events.push(canonicalEvent(event as Record<string, unknown>));
@@ -380,6 +380,7 @@ function cloudflareRequestProjection(request: FixtureRequest): Record<string, un
 }
 
 async function captureCloudflareAuthResolution(): Promise<Record<string, unknown>> {
+	const signal = new AbortController().signal;
 	const ambient = {
 		CLOUDFLARE_API_KEY: "ambient-key",
 		CLOUDFLARE_ACCOUNT_ID: "ambient-account",
@@ -398,6 +399,7 @@ async function captureCloudflareAuthResolution(): Promise<Record<string, unknown
 			key: "stored-key",
 			env: { CLOUDFLARE_ACCOUNT_ID: "stored-account" },
 		},
+		signal,
 	});
 	const workers = await workersAuth.resolve({
 		ctx: context,
@@ -406,6 +408,7 @@ async function captureCloudflareAuthResolution(): Promise<Record<string, unknown
 			key: "stored-key",
 			env: { CLOUDFLARE_ACCOUNT_ID: "stored-account" },
 		},
+		signal,
 	});
 	const missingGateway = await gatewayAuth.resolve({
 		ctx: {
@@ -415,6 +418,7 @@ async function captureCloudflareAuthResolution(): Promise<Record<string, unknown
 				],
 			fileExists: async () => false,
 		},
+		signal,
 	});
 	return {
 		gateway: {

@@ -4,6 +4,7 @@ const tsRoot = process.env.PI_TYPESCRIPT_ROOT ?? "/Users/junyizhang/Git/pi";
 const { openaiCodexOAuth } = await import(
 	pathToFileURL(`${tsRoot}/packages/ai/src/auth/oauth/openai-codex.ts`).href
 );
+const oauthSignal = new AbortController().signal;
 
 type RequestRecord = {
 	url: string;
@@ -83,6 +84,7 @@ let browserUrl = "";
 let browserPrompt: unknown;
 const browserStart = Date.now();
 const browserCredential = await openaiCodexOAuth.login({
+	signal: oauthSignal,
 	prompt: async (prompt) => {
 		if (prompt.type === "select") {
 			browserPrompt = {
@@ -106,6 +108,7 @@ let devicePrompt: unknown;
 let deviceEvent: unknown;
 const deviceStart = Date.now();
 const deviceCredential = await openaiCodexOAuth.login({
+	signal: oauthSignal,
 	prompt: async (prompt) => {
 		if (prompt.type !== "select") throw new Error(`Unexpected device prompt: ${prompt.type}`);
 		devicePrompt = {
@@ -132,7 +135,7 @@ const refreshCredential = await openaiCodexOAuth.refresh({
 	access: "old-access",
 	refresh: "old-refresh",
 	expires: 0,
-});
+}, oauthSignal);
 
 const authorization = new URL(browserUrl);
 const browserExchange = requests.find((request) => new URLSearchParams(request.body).get("code") === "browser-code")!;
