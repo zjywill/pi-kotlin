@@ -382,6 +382,32 @@ class GitHubCopilotOAuthTest {
                 ).let { it as kotlinx.serialization.json.JsonObject },
             ),
         )
+        assertEquals(
+            listOf("policy-enabled"),
+            parseAvailableGitHubCopilotModelIds(
+                providerJson.parseToJsonElement(
+                    """
+                    {
+                      "data":[
+                        {
+                          "id":"policy-enabled",
+                          "model_picker_enabled":false,
+                          "policy":{"state":"enabled"},
+                          "capabilities":{"supports":{"tool_calls":true}}
+                        },
+                        {
+                          "id":"no-tools",
+                          "model_picker_enabled":false,
+                          "policy":{"state":"enabled"},
+                          "capabilities":{"supports":{"tool_calls":false}}
+                        }
+                      ]
+                    }
+                    """.trimIndent(),
+                ) as kotlinx.serialization.json.JsonObject,
+                allowPolicyFallback = true,
+            ),
+        )
         assertFailsWith<IllegalStateException> {
             parseAvailableGitHubCopilotModelIds(
                 providerJson.parseToJsonElement("""{"models":[]}""")

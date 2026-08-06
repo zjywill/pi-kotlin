@@ -194,7 +194,7 @@ fun printHelp() {
           --export <file>                Export session file to HTML and exit
           --list-models [search]         List available models (with optional fuzzy search)
           --verbose                      Force verbose startup (overrides quietStartup setting)
-          --ui-mode <mode>               UI mode: regular (default) or fullscreen
+          --tui-mode <mode>              TUI mode: regular (default) or fullscreen
           --approve, -a                  Trust project-local files for this run
           --no-approve, -na              Ignore project-local files for this run
           --offline                      Disable startup network operations (same as PI_OFFLINE=1)

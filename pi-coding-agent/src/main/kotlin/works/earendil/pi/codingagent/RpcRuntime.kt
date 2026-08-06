@@ -332,21 +332,35 @@ class RpcRuntime(
         extensionHost?.registrations?.autocompleteProviderCount ?: 0
 
     internal fun extensionMarkdownTransformerCount(): Int =
-        extensionHost?.registrations?.markdownTransformerCount ?: 0
+        (extensionHost?.registrations?.markdownTransformerCount ?: 0) + 1
 
     internal fun transformMarkdown(
         markdown: String,
         messageType: String,
         isStreaming: Boolean,
         availableWidth: Int,
-    ): String =
-        extensionHost?.invokeMarkdownTransform(
-            markdown = markdown,
-            messageType = messageType,
-            isStreaming = isStreaming,
-            availableWidth = availableWidth,
-            context = extensionContextProvider(),
-        ) ?: markdown
+    ): String {
+        val mode =
+            runtimeSettingsStore?.mergedMermaidRenderingMode()
+                ?: MermaidRenderingMode.STREAMING
+        val builtIn =
+            transformMermaidMarkdown(
+                markdown = markdown,
+                mode = mode,
+                messageType = messageType,
+                isStreaming = isStreaming,
+                availableWidth = availableWidth,
+            )
+        val extended =
+            extensionHost?.invokeMarkdownTransform(
+                markdown = builtIn,
+                messageType = messageType,
+                isStreaming = isStreaming,
+                availableWidth = availableWidth,
+                context = extensionContextProvider(),
+            ) ?: builtIn
+        return works.earendil.pi.tui.renderMarkdownLatex(extended)
+    }
 
     internal suspend fun invokeExtensionShortcut(id: String): Boolean {
         val host = extensionHost ?: return false

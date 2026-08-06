@@ -11,6 +11,7 @@ kotlin {
 }
 
 dependencies {
+    api(project(":pi-telemetry"))
     implementation("com.google.auth:google-auth-library-oauth2-http:1.30.1")
     implementation("com.github.luben:zstd-jni:1.5.7-7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")

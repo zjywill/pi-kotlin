@@ -796,6 +796,7 @@ private fun StopReason.radiusValue(): String =
         StopReason.TOOL_USE -> "toolUse"
         StopReason.ERROR -> "error"
         StopReason.ABORTED -> "aborted"
+        StopReason.DEFERRED -> "deferred"
     }
 
 private fun parseRadiusOracleForm(body: String): Map<String, String> =

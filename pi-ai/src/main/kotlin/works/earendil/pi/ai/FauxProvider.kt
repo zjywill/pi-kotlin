@@ -16,6 +16,8 @@ data class FauxModelDefinition(
 
 data class FauxState(
     var callCount: Int = 0,
+    var deferredFetchCount: Int = 0,
+    val cancelledDeferred: MutableList<DeferredHandle> = mutableListOf(),
 )
 
 sealed interface FauxResponseStep {
@@ -33,6 +35,8 @@ class FauxProvider(
     override val name: String = "Faux",
     override val oauth: OAuthAuth? = null,
     private val api: String = "faux",
+    private val deferredPendingFetches: Int = 0,
+    private val deferredPollAfterMs: Long? = null,
     definitions: List<FauxModelDefinition> =
         listOf(
             FauxModelDefinition(
@@ -58,6 +62,7 @@ class FauxProvider(
 
     private val responses = ArrayDeque<FauxResponseStep>()
     private val promptCache = mutableMapOf<String, String>()
+    private val deferredResponses = mutableMapOf<String, FauxDeferredEntry>()
     private val models =
         definitions.map { definition ->
             Model(
@@ -103,42 +108,181 @@ class FauxProvider(
         model: Model,
         context: Context,
         options: StreamOptions,
+    ): AssistantMessageEventStream =
+        streamResponse(
+            model = model,
+            context = context,
+            options = SimpleStreamOptions(stream = options),
+        )
+
+    override suspend fun streamSimple(
+        model: Model,
+        context: Context,
+        options: SimpleStreamOptions,
+    ): AssistantMessageEventStream =
+        streamResponse(
+            model = model,
+            context = context,
+            options = options,
+        )
+
+    override val supportsDeferredResponses: Boolean = true
+
+    override suspend fun fetchDeferred(
+        model: Model,
+        handle: DeferredHandle,
+        options: DeferredFetchOptions,
     ): AssistantMessageEventStream {
         val stream = createAssistantMessageEventStream()
+        val entry =
+            synchronized(this) {
+                state.deferredFetchCount++
+                deferredResponses[handle.id]
+            }
+        options.request.onResponse?.invoke(ProviderResponse(200, emptyMap()), model)
+
+        val response =
+            try {
+                requireNotNull(entry) {
+                    "Unknown faux deferred response: ${handle.id}"
+                }
+                require(
+                    entry.handle.provider == handle.provider &&
+                        entry.handle.modelId == handle.modelId &&
+                        entry.handle.api == handle.api,
+                ) {
+                    "Unknown faux deferred response: ${handle.id}"
+                }
+                check(!entry.cancelled) {
+                    "Faux deferred response was cancelled: ${handle.id}"
+                }
+                if (entry.pendingFetches > 0) {
+                    synchronized(this) {
+                        entry.pendingFetches--
+                    }
+                    createDeferredMessage(model, entry.handle)
+                } else {
+                    entry.finalMessage
+                        ?: resolveResponse(
+                            step = entry.step,
+                            context = entry.context,
+                            options = entry.options.stream,
+                            model = entry.model,
+                        ).also { resolved ->
+                            synchronized(this) {
+                                entry.finalMessage = resolved
+                            }
+                        }
+                }
+            } catch (error: Throwable) {
+                val errorMessage = createErrorMessage(model, error)
+                stream.push(AssistantError(StopReason.ERROR, errorMessage))
+                return stream
+            }
+
+        emitResponse(stream, response)
+        return stream
+    }
+
+    override suspend fun cancelDeferred(
+        model: Model,
+        handle: DeferredHandle,
+        options: DeferredCancelOptions,
+    ) {
+        synchronized(this) {
+            state.cancelledDeferred += handle.copy()
+            deferredResponses[handle.id]?.cancelled = true
+        }
+        options.request.onResponse?.invoke(ProviderResponse(200, emptyMap()), model)
+    }
+
+    private suspend fun streamResponse(
+        model: Model,
+        context: Context,
+        options: SimpleStreamOptions,
+    ): AssistantMessageEventStream {
+        val stream = createAssistantMessageEventStream()
+        val streamOptions =
+            options.stream.copy(
+                samplingParams =
+                    if (model.samplingParams == null && options.stream.samplingParams == null) {
+                        null
+                    } else {
+                        kotlinx.serialization.json.JsonObject(
+                            model.samplingParams.orEmpty() + options.stream.samplingParams.orEmpty(),
+                        )
+                    },
+                reasoning = options.reasoning,
+                thinkingBudgets = options.thinkingBudgets,
+            )
+        val normalizedOptions = options.copy(stream = streamOptions)
         val step =
             synchronized(this) {
                 state.callCount++
                 responses.pollFirst()
             }
+        streamOptions.onResponse?.invoke(ProviderResponse(200, emptyMap()), model)
 
         val response =
             try {
-                when (step) {
-                    is FauxResponseStep.Message -> step.value
-                    is FauxResponseStep.Factory -> step.create(context, options, state, model)
-                    null -> error("No more faux responses queued")
+                val queued = requireNotNull(step) { "No more faux responses queued" }
+                if (options.deferred != null) {
+                    val handle =
+                        DeferredHandle(
+                            provider = model.provider,
+                            modelId = model.id,
+                            api = model.api,
+                            id = "deferred:${uuidv7()}",
+                            pollAfterMs = deferredPollAfterMs,
+                        )
+                    synchronized(this) {
+                        deferredResponses[handle.id] =
+                            FauxDeferredEntry(
+                                handle = handle,
+                                step = queued,
+                                context = context,
+                                options = normalizedOptions,
+                                model = model,
+                                pendingFetches = deferredPendingFetches.coerceAtLeast(0),
+                            )
+                    }
+                    createDeferredMessage(model, handle)
+                } else {
+                    resolveResponse(queued, context, streamOptions, model)
                 }
             } catch (error: Throwable) {
-                val errorMessage =
-                    AssistantMessage(
-                        content = emptyList(),
-                        api = api,
-                        provider = id,
-                        model = model.id,
-                        stopReason = StopReason.ERROR,
-                        errorMessage = error.message ?: error::class.simpleName.orEmpty(),
-                    )
+                val errorMessage = createErrorMessage(model, error)
                 stream.push(AssistantError(StopReason.ERROR, errorMessage))
                 return stream
             }
 
-        val finalMessage =
-            response.copy(
-                api = api,
-                provider = id,
-                model = model.id,
-                usage = estimateUsage(response, context, options),
-            )
+        emitResponse(stream, response)
+        return stream
+    }
+
+    private suspend fun resolveResponse(
+        step: FauxResponseStep,
+        context: Context,
+        options: StreamOptions,
+        model: Model,
+    ): AssistantMessage {
+        val response =
+            when (step) {
+                is FauxResponseStep.Message -> step.value
+                is FauxResponseStep.Factory -> step.create(context, options, state, model)
+            }
+        return response.copy(
+            api = api,
+            provider = id,
+            model = model.id,
+            usage = estimateUsage(response, context, options),
+        )
+    }
+
+    private fun emitResponse(
+        stream: AssistantMessageEventStream,
+        finalMessage: AssistantMessage,
+    ) {
         emitContentEvents(stream, finalMessage)
         if (finalMessage.stopReason == StopReason.PENDING) {
             val error =
@@ -147,17 +291,42 @@ class FauxProvider(
                     errorMessage = "Faux response ended without a stop reason",
                 )
             stream.push(AssistantError(StopReason.ERROR, error))
-            return stream
+            return
         }
-        val terminal =
+        stream.push(
             if (finalMessage.stopReason == StopReason.ERROR || finalMessage.stopReason == StopReason.ABORTED) {
                 AssistantError(finalMessage.stopReason, finalMessage)
             } else {
                 AssistantDone(finalMessage.stopReason, finalMessage)
-            }
-        stream.push(terminal)
-        return stream
+            },
+        )
     }
+
+    private fun createDeferredMessage(
+        model: Model,
+        handle: DeferredHandle,
+    ): AssistantMessage =
+        AssistantMessage(
+            content = emptyList(),
+            api = api,
+            provider = id,
+            model = model.id,
+            stopReason = StopReason.DEFERRED,
+            deferred = handle,
+        )
+
+    private fun createErrorMessage(
+        model: Model,
+        error: Throwable,
+    ): AssistantMessage =
+        AssistantMessage(
+            content = emptyList(),
+            api = api,
+            provider = id,
+            model = model.id,
+            stopReason = StopReason.ERROR,
+            errorMessage = error.message ?: error::class.simpleName.orEmpty(),
+        )
 
     private fun emitContentEvents(
         stream: AssistantMessageEventStream,
@@ -278,6 +447,7 @@ fun fauxToolCall(
 fun fauxAssistantMessage(
     content: List<ContentBlock>,
     stopReason: StopReason = StopReason.STOP,
+    deferred: DeferredHandle? = null,
     errorMessage: String? = null,
     responseId: String? = null,
     timestamp: Long = System.currentTimeMillis(),
@@ -288,6 +458,7 @@ fun fauxAssistantMessage(
         provider = "faux",
         model = "faux-1",
         stopReason = stopReason,
+        deferred = deferred,
         errorMessage = errorMessage,
         responseId = responseId,
         timestamp = timestamp,
@@ -297,3 +468,14 @@ fun fauxAssistantMessage(
     text: String,
     stopReason: StopReason = StopReason.STOP,
 ): AssistantMessage = fauxAssistantMessage(listOf(fauxText(text)), stopReason)
+
+private data class FauxDeferredEntry(
+    val handle: DeferredHandle,
+    val step: FauxResponseStep,
+    val context: Context,
+    val options: SimpleStreamOptions,
+    val model: Model,
+    var pendingFetches: Int,
+    var cancelled: Boolean = false,
+    var finalMessage: AssistantMessage? = null,
+)

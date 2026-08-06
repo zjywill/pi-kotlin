@@ -157,9 +157,10 @@ fun encodeITerm2(
     height: String? = null,
     preserveAspectRatio: Boolean = true,
 ): String {
+    val size = Base64.getDecoder().decode(base64Data).size
     val heightParameter = height?.let { ";height=$it" }.orEmpty()
     val ratio = if (preserveAspectRatio) "" else ";preserveAspectRatio=0"
-    return "\u001B]1337;File=inline=1;width=$width$heightParameter$ratio:$base64Data\u0007"
+    return "\u001B]1337;File=inline=1;size=$size;width=$width$heightParameter$ratio:$base64Data\u0007"
 }
 
 fun deleteKittyImage(imageId: Long): String = "$KITTY_PREFIX" + "a=d,d=I,i=$imageId,q=2$STRING_TERMINATOR"

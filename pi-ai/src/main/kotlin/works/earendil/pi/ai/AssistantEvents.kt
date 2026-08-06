@@ -95,7 +95,12 @@ data class AssistantDone(
     val message: AssistantMessage,
 ) : AssistantMessageEvent {
     init {
-        require(reason == StopReason.STOP || reason == StopReason.LENGTH || reason == StopReason.TOOL_USE) {
+        require(
+            reason == StopReason.STOP ||
+                reason == StopReason.LENGTH ||
+                reason == StopReason.TOOL_USE ||
+                reason == StopReason.DEFERRED,
+        ) {
             "Assistant done event requires a successful terminal stop reason"
         }
     }

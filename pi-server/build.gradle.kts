@@ -1,7 +1,6 @@
 plugins {
     kotlin("jvm")
     kotlin("plugin.serialization")
-    application
 }
 
 kotlin {
@@ -11,13 +10,8 @@ kotlin {
     }
 }
 
-application {
-    applicationName = "pi-server"
-    mainClass = "works.earendil.pi.server.MainKt"
-}
-
 dependencies {
-    api(project(":pi-coding-agent"))
+    api(project(":pi-ai"))
     api(project(":pi-protocol"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
@@ -26,10 +20,4 @@ dependencies {
     testImplementation(kotlin("test-junit5"))
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.13.4")
-}
-
-tasks.register<JavaExec>("serverRecoveryOracle") {
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets["test"].runtimeClasspath
-    mainClass = "works.earendil.pi.server.ServerRecoveryOracleKt"
 }

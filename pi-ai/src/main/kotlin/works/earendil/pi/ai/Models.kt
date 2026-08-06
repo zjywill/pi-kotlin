@@ -4,12 +4,14 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.TimeoutException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -69,6 +71,24 @@ interface Provider {
                 thinkingBudgets = options.thinkingBudgets,
             ),
         )
+
+    val supportsDeferredResponses: Boolean
+        get() = false
+
+    suspend fun fetchDeferred(
+        model: Model,
+        handle: DeferredHandle,
+        options: DeferredFetchOptions = DeferredFetchOptions(),
+    ): AssistantMessageEventStream =
+        throw UnsupportedOperationException("Provider $id does not support deferred responses")
+
+    suspend fun cancelDeferred(
+        model: Model,
+        handle: DeferredHandle,
+        options: DeferredCancelOptions = DeferredCancelOptions(),
+    ) {
+        throw UnsupportedOperationException("Provider $id does not support deferred responses")
+    }
 }
 
 data class RefreshModelsContext(
@@ -581,6 +601,51 @@ class Models(
         options: SimpleStreamOptions = SimpleStreamOptions(),
     ): AssistantMessage = streamSimple(model, context, options).result()
 
+    suspend fun fetchDeferred(
+        model: Model,
+        handle: DeferredHandle,
+        options: DeferredFetchOptions = DeferredFetchOptions(),
+    ): AssistantMessage {
+        val provider =
+            providersById[model.provider]
+                ?: throw ModelsAuthException("provider", "Unknown provider: ${model.provider}")
+        if (!provider.supportsDeferredResponses) {
+            throw ModelsAuthException(
+                "provider",
+                "Provider ${model.provider} does not support deferred responses",
+            )
+        }
+        val prepared = prepareStoredAuth(model, provider, options.request)
+        return provider
+            .fetchDeferred(
+                prepared.model,
+                handle,
+                options.copy(request = prepared.options),
+            ).result()
+    }
+
+    suspend fun cancelDeferred(
+        model: Model,
+        handle: DeferredHandle,
+        options: DeferredCancelOptions = DeferredCancelOptions(),
+    ) {
+        val provider =
+            providersById[model.provider]
+                ?: throw ModelsAuthException("provider", "Unknown provider: ${model.provider}")
+        if (!provider.supportsDeferredResponses) {
+            throw ModelsAuthException(
+                "provider",
+                "Provider ${model.provider} does not support deferred responses",
+            )
+        }
+        val prepared = prepareStoredAuth(model, provider, options.request)
+        provider.cancelDeferred(
+            prepared.model,
+            handle,
+            options.copy(request = prepared.options),
+        )
+    }
+
     private suspend fun prepareStoredAuth(
         model: Model,
         provider: Provider,
@@ -817,7 +882,11 @@ class Models(
                     null
                 } else {
                     try {
-                        oauth.refresh(current)
+                        withTimeoutOrNull(DEFAULT_OAUTH_REFRESH_TIMEOUT_MS) {
+                            oauth.refresh(current)
+                        } ?: throw TimeoutException(
+                            "OAuth refresh timed out after ${DEFAULT_OAUTH_REFRESH_TIMEOUT_MS}ms",
+                        )
                     } catch (error: CancellationException) {
                         throw error
                     } catch (error: Throwable) {
@@ -862,6 +931,7 @@ class Models(
 
 private const val MAX_CONCURRENT_MODEL_REFRESHES = 8
 private const val DEFAULT_OAUTH_MINIMUM_VALIDITY_MS = 5 * 60 * 1_000L
+private const val DEFAULT_OAUTH_REFRESH_TIMEOUT_MS = 15_000L
 
 private data class PreparedRequest(
     val model: Model,

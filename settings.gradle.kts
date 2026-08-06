@@ -15,6 +15,7 @@ dependencyResolutionManagement {
 rootProject.name = "pi-kotlin"
 
 include(
+    "pi-telemetry",
     "pi-ai",
     "pi-agent-core",
     "pi-protocol",

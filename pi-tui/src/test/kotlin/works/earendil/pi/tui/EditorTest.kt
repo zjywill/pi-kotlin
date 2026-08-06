@@ -52,6 +52,39 @@ class EditorTest {
     }
 
     @Test
+    fun `dedicated history bindings browse without moving the cursor first`() {
+        val keybindings =
+            KeybindingsManager(
+                TUI_KEYBINDINGS,
+                mapOf(
+                    "tui.editor.historyPrevious" to listOf("ctrl+p"),
+                    "tui.editor.historyNext" to listOf("ctrl+n"),
+                ),
+            )
+        val editor = Editor(Tui(EditorTerminal()), keybindings = keybindings)
+        editor.addToHistory("older prompt")
+        editor.addToHistory("newer\nmultiline prompt")
+        editor.setText("draft")
+        editor.handleInput("\u001B[D")
+        editor.handleInput("\u001B[D")
+
+        editor.handleInput("\u0010")
+        assertEquals("newer\nmultiline prompt", editor.getText())
+        assertEquals(EditorCursor(0, 0), editor.getCursor())
+
+        editor.handleInput("\u0010")
+        assertEquals("older prompt", editor.getText())
+
+        editor.handleInput("\u000E")
+        assertEquals("newer\nmultiline prompt", editor.getText())
+        assertEquals(EditorCursor(1, 16), editor.getCursor())
+
+        editor.handleInput("\u000E")
+        assertEquals("draft", editor.getText())
+        assertEquals(EditorCursor(0, 3), editor.getCursor())
+    }
+
+    @Test
     fun `bracketed paste undo kill and yank preserve text`() {
         val editor = Editor(Tui(EditorTerminal()))
         editor.handleInput("\u001B[200~hello\nworld\u001B[201~")

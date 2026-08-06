@@ -143,12 +143,12 @@ class ExperimentalCommandTest {
         )
         assertEquals(
             listOf(
-                "Invalid UI mode \"wrong\". Valid values: regular, fullscreen",
+                "Invalid TUI mode \"wrong\". Valid values: regular, fullscreen",
                 "The experimental client command does not support existing CLI options yet",
             ),
             assertIs<ExperimentalCommandParseResult.Failure>(
                 parseExperimentalCommand(
-                    listOf("client", "--ui-mode", "wrong", "--model", "claude-sonnet"),
+                    listOf("client", "--tui-mode", "wrong", "--model", "claude-sonnet"),
                 ),
             ).errors,
         )

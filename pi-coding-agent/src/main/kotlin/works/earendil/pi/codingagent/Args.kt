@@ -63,7 +63,7 @@ data class Args(
     var listModels: String? = null,
     var listModelsRequested: Boolean = false,
     var offline: Boolean = false,
-    var uiMode: UiMode? = null,
+    var tuiMode: TuiMode? = null,
     var verbose: Boolean = false,
     var projectTrustOverride: Boolean? = null,
     val messages: MutableList<String> = mutableListOf(),
@@ -164,29 +164,29 @@ fun parseArgs(arguments: List<String>): Args {
                 }
             }
 
-            argument == "--ui-mode" -> {
+            argument == "--tui-mode" -> {
                 val value = arguments.getOrNull(index + 1)
                 val mode =
                     when (value) {
-                        UiMode.REGULAR.wireValue -> UiMode.REGULAR
-                        UiMode.FULLSCREEN.wireValue -> UiMode.FULLSCREEN
+                        TuiMode.REGULAR.wireValue -> TuiMode.REGULAR
+                        TuiMode.FULLSCREEN.wireValue -> TuiMode.FULLSCREEN
                         else -> null
                     }
                 if (mode != null) {
-                    result.uiMode = mode
+                    result.tuiMode = mode
                     index++
                 } else if (value == null || value.startsWith("-")) {
                     result.diagnostics +=
                         Diagnostic(
                             Diagnostic.Type.ERROR,
-                            "--ui-mode requires regular or fullscreen",
+                            "--tui-mode requires regular or fullscreen",
                         )
                 } else {
                     index++
                     result.diagnostics +=
                         Diagnostic(
                             Diagnostic.Type.ERROR,
-                            "Invalid UI mode \"$value\". Valid values: regular, fullscreen",
+                            "Invalid TUI mode \"$value\". Valid values: regular, fullscreen",
                         )
                 }
             }

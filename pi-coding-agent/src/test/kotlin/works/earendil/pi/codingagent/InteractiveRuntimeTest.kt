@@ -1233,7 +1233,7 @@ class InteractiveRuntimeTest {
 
                     override fun setTitle(title: String) = Unit
 
-                    override fun currentUiMode(): UiMode = UiMode.FULLSCREEN
+                    override fun currentTuiMode(): TuiMode = TuiMode.FULLSCREEN
 
                     override fun copyTextToClipboard(text: String): Boolean {
                         copied = text

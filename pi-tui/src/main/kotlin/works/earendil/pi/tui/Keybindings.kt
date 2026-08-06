@@ -16,6 +16,10 @@ val TUI_KEYBINDINGS: Map<String, KeybindingDefinition> =
     mapOf(
         "tui.editor.cursorUp" to KeybindingDefinition("up", "Move cursor up"),
         "tui.editor.cursorDown" to KeybindingDefinition("down", "Move cursor down"),
+        "tui.editor.historyPrevious" to
+            KeybindingDefinition(emptyList(), "Select previous prompt history entry"),
+        "tui.editor.historyNext" to
+            KeybindingDefinition(emptyList(), "Select next prompt history entry"),
         "tui.editor.cursorLeft" to KeybindingDefinition(listOf("left", "ctrl+b"), "Move cursor left"),
         "tui.editor.cursorRight" to KeybindingDefinition(listOf("right", "ctrl+f"), "Move cursor right"),
         "tui.editor.cursorWordLeft" to KeybindingDefinition(listOf("alt+left", "ctrl+left", "alt+b"), "Move cursor word left"),

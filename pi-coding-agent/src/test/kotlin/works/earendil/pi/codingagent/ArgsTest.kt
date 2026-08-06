@@ -59,19 +59,23 @@ class ArgsTest {
     }
 
     @Test
-    fun `parses UI modes and reports invalid values`() {
-        assertEquals(UiMode.REGULAR, parseArgs(listOf("--ui-mode", "regular")).uiMode)
-        assertEquals(UiMode.FULLSCREEN, parseArgs(listOf("--ui-mode", "fullscreen")).uiMode)
+    fun `parses TUI modes and reports invalid values`() {
+        assertEquals(TuiMode.REGULAR, parseArgs(listOf("--tui-mode", "regular")).tuiMode)
+        assertEquals(TuiMode.FULLSCREEN, parseArgs(listOf("--tui-mode", "fullscreen")).tuiMode)
 
-        val invalid = parseArgs(listOf("--ui-mode", "other"))
+        val invalid = parseArgs(listOf("--tui-mode", "other"))
         assertEquals(
-            "Invalid UI mode \"other\". Valid values: regular, fullscreen",
+            "Invalid TUI mode \"other\". Valid values: regular, fullscreen",
             invalid.diagnostics.single().message,
         )
 
-        val missing = parseArgs(listOf("--ui-mode", "--offline"))
-        assertEquals("--ui-mode requires regular or fullscreen", missing.diagnostics.single().message)
+        val missing = parseArgs(listOf("--tui-mode", "--offline"))
+        assertEquals("--tui-mode requires regular or fullscreen", missing.diagnostics.single().message)
         assertTrue(missing.offline)
+
+        val legacy = parseArgs(listOf("--ui-mode", "fullscreen"))
+        assertEquals("fullscreen", legacy.unknownFlags["ui-mode"])
+        assertEquals(null, legacy.tuiMode)
     }
 
     @Test

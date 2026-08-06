@@ -27,6 +27,7 @@ import works.earendil.pi.tui.EditorTheme
 import works.earendil.pi.tui.Focusable
 import works.earendil.pi.tui.InputListenerResult
 import works.earendil.pi.tui.Key
+import works.earendil.pi.tui.KeybindingsManager
 import works.earendil.pi.tui.OverlayAnchor
 import works.earendil.pi.tui.OverlayHandle
 import works.earendil.pi.tui.OverlayMargin
@@ -35,6 +36,7 @@ import works.earendil.pi.tui.ScrollViewScrollbar
 import works.earendil.pi.tui.SizeValue
 import works.earendil.pi.tui.Terminal
 import works.earendil.pi.tui.Tui
+import works.earendil.pi.tui.TUI_KEYBINDINGS
 import works.earendil.pi.tui.TuiScreenMode
 import works.earendil.pi.tui.ViewportLayout
 import works.earendil.pi.tui.matchesKey
@@ -47,9 +49,9 @@ internal interface FullScreenConsoleControl {
 
     fun setTitle(title: String)
 
-    fun currentUiMode(): UiMode = UiMode.REGULAR
+    fun currentTuiMode(): TuiMode = TuiMode.REGULAR
 
-    fun switchUiMode(mode: UiMode): Boolean = false
+    fun switchTuiMode(mode: TuiMode): Boolean = false
 
     fun copyTextToClipboard(text: String): Boolean = false
 
@@ -106,9 +108,10 @@ internal interface FullScreenConsoleControl {
 internal class FullScreenConsole(
     private val terminalAdapter: Terminal = JLineTuiTerminal(),
     private val closeTerminal: Closeable? = terminalAdapter as? Closeable,
-    uiMode: UiMode = UiMode.REGULAR,
+    tuiMode: TuiMode = TuiMode.REGULAR,
     fullscreenScrollbar: ScrollViewScrollbar = ScrollViewScrollbar.AUTO,
     autocompleteMaxVisible: Int = 5,
+    private val keybindings: KeybindingsManager = KeybindingsManager(TUI_KEYBINDINGS),
     private val clipboardTextReader: () -> String? = ::readClipboardText,
     private val clipboardTextWriter: (String) -> Boolean = ::writeClipboardText,
 ) : InteractiveConsole,
@@ -126,12 +129,12 @@ internal class FullScreenConsole(
             scrollbar = fullscreenScrollbar,
         )
     @Volatile
-    private var uiMode = uiMode
+    private var tuiMode = tuiMode
     private val tui =
         Tui(
             terminal = terminalAdapter,
             screenMode =
-                if (uiMode == UiMode.FULLSCREEN) {
+                if (tuiMode == TuiMode.FULLSCREEN) {
                     TuiScreenMode.ALTERNATE
                 } else {
                     TuiScreenMode.MAIN
@@ -146,6 +149,7 @@ internal class FullScreenConsole(
                     paddingX = 1,
                     autocompleteMaxVisible = autocompleteMaxVisible,
                 ),
+            keybindings = keybindings,
         )
     private val editorSlot = ComponentSlot(editor)
     private val widgetsBelow = SurfaceCollectionComponent()
@@ -169,7 +173,7 @@ internal class FullScreenConsole(
         dock.addChild(editorSlot)
         dock.addChild(widgetsBelow)
         dock.addChild(footer)
-        mountUiMode(uiMode)
+        mountTuiMode(tuiMode)
         tui.setFocus(editor)
         editor.onSubmit = { value ->
             if (reading) {
@@ -296,6 +300,15 @@ internal class FullScreenConsole(
             reads.offer(ConsoleRead.End)
             return InputListenerResult(consume = true)
         }
+        if (
+            remoteEditor == null &&
+            (
+                keybindings.matches(data, "tui.editor.historyPrevious") ||
+                    keybindings.matches(data, "tui.editor.historyNext")
+            )
+        ) {
+            return null
+        }
         val shortcut =
             synchronized(activeShortcuts) {
                 activeShortcuts.entries.firstOrNull { (_, key) -> matchesKey(data, key) }
@@ -338,14 +351,14 @@ internal class FullScreenConsole(
         terminalAdapter.setTitle(title)
     }
 
-    override fun currentUiMode(): UiMode = uiMode
+    override fun currentTuiMode(): TuiMode = tuiMode
 
-    override fun switchUiMode(mode: UiMode): Boolean {
-        if (mode == uiMode) {
+    override fun switchTuiMode(mode: TuiMode): Boolean {
+        if (mode == tuiMode) {
             return true
         }
         val screenMode =
-            if (mode == UiMode.FULLSCREEN) {
+            if (mode == TuiMode.FULLSCREEN) {
                 TuiScreenMode.ALTERNATE
             } else {
                 TuiScreenMode.MAIN
@@ -353,8 +366,8 @@ internal class FullScreenConsole(
         if (!tui.switchScreenMode(screenMode)) {
             return false
         }
-        uiMode = mode
-        mountUiMode(mode)
+        tuiMode = mode
+        mountTuiMode(mode)
         tui.requestRender()
         return true
     }
@@ -610,9 +623,9 @@ internal class FullScreenConsole(
 
     private fun primaryEditor(): Component = remoteEditor ?: editor
 
-    private fun mountUiMode(mode: UiMode) {
+    private fun mountTuiMode(mode: TuiMode) {
         tui.clear()
-        if (mode == UiMode.FULLSCREEN) {
+        if (mode == TuiMode.FULLSCREEN) {
             tui.addChild(viewport)
         } else {
             tui.addChild(header)

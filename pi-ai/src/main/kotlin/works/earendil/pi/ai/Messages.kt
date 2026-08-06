@@ -16,6 +16,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.decodeFromJsonElement
+import works.earendil.pi.telemetry.TelemetryContext
 
 @Serializable
 enum class ThinkingLevel {
@@ -223,7 +224,21 @@ enum class StopReason {
 
     @SerialName("aborted")
     ABORTED,
+
+    @SerialName("deferred")
+    DEFERRED,
 }
+
+@Serializable
+data class DeferredHandle(
+    val provider: String,
+    val modelId: String,
+    val api: String,
+    val id: String,
+    val expiresAt: Long? = null,
+    val pollAfterMs: Long? = null,
+    val data: JsonElement? = null,
+)
 
 @Serializable
 data class AssistantMessageDiagnostic(
@@ -277,6 +292,7 @@ data class AssistantMessage(
     val diagnostics: List<AssistantMessageDiagnostic>? = null,
     val usage: Usage = Usage(),
     val stopReason: StopReason = StopReason.STOP,
+    val deferred: DeferredHandle? = null,
     val errorMessage: String? = null,
     override val timestamp: Long = System.currentTimeMillis(),
     val rawStopReason: String? = null,
@@ -407,6 +423,7 @@ data class StreamOptions(
     val temperature: Double? = null,
     val samplingParams: JsonObject? = null,
     val maxTokens: Int? = null,
+    val telemetryContext: TelemetryContext? = null,
     val apiKey: String? = null,
     /** Optional transport for this request. Adapters that cannot inject it may reject it. */
     val fetch: ProviderHttpTransport? = null,
@@ -448,7 +465,27 @@ data class StreamOptions(
 data class SimpleStreamOptions(
     val stream: StreamOptions = StreamOptions(),
     val reasoning: ThinkingLevel? = null,
+    val deferred: DeferredRequest? = null,
     val thinkingBudgets: ThinkingBudgets? = null,
+)
+
+data class DeferredRequest(
+    val window: Window? = null,
+) {
+    enum class Window {
+        FIFTEEN_MINUTES,
+        ONE_HOUR,
+        TWENTY_FOUR_HOURS,
+    }
+}
+
+data class DeferredFetchOptions(
+    val request: StreamOptions = StreamOptions(),
+    val waitMs: Long = 0L,
+)
+
+data class DeferredCancelOptions(
+    val request: StreamOptions = StreamOptions(),
 )
 
 fun contentText(

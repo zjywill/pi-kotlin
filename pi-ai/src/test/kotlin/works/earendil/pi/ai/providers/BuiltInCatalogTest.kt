@@ -33,17 +33,17 @@ class BuiltInCatalogTest {
                 .single { it.id == "claude-opus-5" }
         val qwenTokenPlan = catalog.modelsByProvider.getValue("qwen-token-plan")
         val qwenDeepSeek = qwenTokenPlan.single { it.id == "deepseek-v4-flash" }
-        val qwen38 = qwenTokenPlan.single { it.id == "qwen3.8-max-preview" }
+        val qwen38 = qwenTokenPlan.single { it.id == "qwen3.8-max" }
         val qwenUnsupported = qwenTokenPlan.single { it.id == "qwen3.7-plus" }
 
         assertEquals(3, catalog.schemaVersion)
         Instant.parse(assertNotNull(catalog.generatedAt))
         assertEquals(
-            "8f42becde9d67b0f50730e36639d319dd0da3f4c26c0ca8d2c6e8c93a5a566a0",
+            "64517866e53821714ea5653d84bc08e6154b438fa3a65760859f1e97218e28fd",
             catalog.structureHash,
         )
         assertEquals(38, catalog.modelsByProvider.size)
-        assertEquals(1_151, catalog.modelsByProvider.values.sumOf(List<works.earendil.pi.ai.Model>::size))
+        assertEquals(1_150, catalog.modelsByProvider.values.sumOf(List<works.earendil.pi.ai.Model>::size))
         assertEquals("openai-responses", sol.api)
         assertEquals(272_000, sol.contextWindow)
         assertEquals(128_000, sol.maxTokens)
@@ -104,6 +104,7 @@ class BuiltInCatalogTest {
             null,
             qwen38.thinkingLevelMap[works.earendil.pi.ai.ModelThinkingLevel.HIGH],
         )
+        assertTrue(qwenTokenPlan.none { it.id == "qwen3.8-max-preview" })
         assertFalse(
             qwenUnsupported.compat
                 ?.get("supportsReasoningEffort")
@@ -121,7 +122,7 @@ class BuiltInCatalogTest {
         val ids = providers.map { it.id }.toSet()
 
         assertEquals(39, providers.size)
-        assertEquals(1_151, providers.sumOf { it.getModels().size })
+        assertEquals(1_150, providers.sumOf { it.getModels().size })
         assertTrue(
             ids.containsAll(
                 setOf(
@@ -150,8 +151,8 @@ class BuiltInCatalogTest {
         assertEquals(
             mapOf(
                 "anthropic-messages" to 10,
-                "openai-completions" to 7,
-                "openai-responses" to 12,
+                "openai-completions" to 6,
+                "openai-responses" to 13,
             ),
             copilot.getModels().groupingBy { it.api }.eachCount(),
         )

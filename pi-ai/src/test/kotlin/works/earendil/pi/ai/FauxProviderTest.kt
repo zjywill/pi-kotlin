@@ -6,6 +6,8 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class FauxProviderTest {
@@ -136,5 +138,95 @@ class FauxProviderTest {
             assertTrue(events.last() is AssistantError)
             assertEquals(StopReason.ERROR, response.stopReason)
             assertEquals("Faux response ended without a stop reason", response.errorMessage)
+        }
+
+    @Test
+    fun `models poll deferred responses until the scripted result is ready`() =
+        runTest {
+            val provider =
+                FauxProvider(
+                    deferredPendingFetches = 1,
+                    deferredPollAfterMs = 250,
+                )
+            val model = requireNotNull(provider.getModel())
+            val models = Models(listOf(provider))
+            provider.setResponses(
+                listOf(
+                    FauxResponseStep.Message(fauxAssistantMessage("ready")),
+                ),
+            )
+
+            val submitted =
+                models.completeSimple(
+                    model,
+                    Context(messages = mutableListOf(UserMessage("start"))),
+                    SimpleStreamOptions(deferred = DeferredRequest()),
+                )
+            val handle = assertNotNull(submitted.deferred)
+            assertEquals(StopReason.DEFERRED, submitted.stopReason)
+            assertEquals(250, handle.pollAfterMs)
+
+            val pending = models.fetchDeferred(model, handle)
+            assertEquals(StopReason.DEFERRED, pending.stopReason)
+            assertEquals(handle, pending.deferred)
+
+            val ready = models.fetchDeferred(model, handle)
+            assertEquals(StopReason.STOP, ready.stopReason)
+            assertEquals("ready", contentText(ready.content))
+            assertEquals(2, provider.state.deferredFetchCount)
+        }
+
+    @Test
+    fun `deferred cancellation is recorded and prevents later fetches`() =
+        runTest {
+            val provider = FauxProvider()
+            val model = requireNotNull(provider.getModel())
+            val models = Models(listOf(provider))
+            provider.setResponses(
+                listOf(
+                    FauxResponseStep.Message(fauxAssistantMessage("must not be returned")),
+                ),
+            )
+            val submitted =
+                models.completeSimple(
+                    model,
+                    Context(),
+                    SimpleStreamOptions(deferred = DeferredRequest()),
+                )
+            val handle = assertNotNull(submitted.deferred)
+
+            models.cancelDeferred(model, handle)
+            val cancelled = models.fetchDeferred(model, handle)
+
+            assertEquals(listOf(handle), provider.state.cancelledDeferred)
+            assertEquals(StopReason.ERROR, cancelled.stopReason)
+            assertTrue(cancelled.errorMessage.orEmpty().contains("was cancelled"))
+        }
+
+    @Test
+    fun `models reject deferred operations for unsupported providers`() =
+        runTest {
+            val provider =
+                object : Provider by FauxProvider() {
+                    override val id: String = "plain"
+                    override val supportsDeferredResponses: Boolean = false
+                }
+            val model = provider.getModels().first().copy(provider = provider.id)
+            val models = Models(listOf(provider))
+            val handle =
+                DeferredHandle(
+                    provider = provider.id,
+                    modelId = model.id,
+                    api = model.api,
+                    id = "missing",
+                )
+
+            val error =
+                assertFailsWith<ModelsAuthException> {
+                    models.fetchDeferred(model, handle)
+                }
+
+            assertEquals("provider", error.code)
+            assertTrue(error.message.orEmpty().contains("does not support deferred responses"))
         }
 }

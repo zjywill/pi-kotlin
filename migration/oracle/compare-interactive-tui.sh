@@ -73,9 +73,9 @@ set stty_init "rows $env(PTY_ROWS) columns $env(PTY_WIDTH)"
 log_user 1
 cd $env(PTY_PROJECT)
 if {$env(PTY_RUNTIME) eq "typescript"} {
-  spawn -noecho env HOME=$env(PTY_HOME) PI_CODING_AGENT_DIR=$env(PTY_AGENT) PI_TUI_PTY_SCENARIO=$env(PTY_SCENARIO) NODE_NO_WARNINGS=1 TERM=xterm-256color $env(PTY_NODE_BIN) $env(PTY_TS_CLI) --ui-mode $env(PTY_UI_MODE) --extension $env(PTY_UI_FIXTURE) --extension $env(PTY_PROVIDER_FIXTURE) --provider rpc-fixture --model model-a --no-session --offline --approve
+  spawn -noecho env HOME=$env(PTY_HOME) PI_CODING_AGENT_DIR=$env(PTY_AGENT) PI_TUI_PTY_SCENARIO=$env(PTY_SCENARIO) NODE_NO_WARNINGS=1 TERM=xterm-256color $env(PTY_NODE_BIN) $env(PTY_TS_CLI) --tui-mode $env(PTY_UI_MODE) --extension $env(PTY_UI_FIXTURE) --extension $env(PTY_PROVIDER_FIXTURE) --provider rpc-fixture --model model-a --no-session --offline --approve
 } else {
-  spawn -noecho env HOME=$env(PTY_HOME) PI_CODING_AGENT_DIR=$env(PTY_AGENT) PI_TUI_PTY_SCENARIO=$env(PTY_SCENARIO) NODE_NO_WARNINGS=1 TERM=xterm-256color $env(PTY_KT_CLI) --ui-mode $env(PTY_UI_MODE) --extension $env(PTY_UI_FIXTURE) --extension $env(PTY_PROVIDER_FIXTURE) --provider rpc-fixture --model model-a --no-session --offline --approve
+  spawn -noecho env HOME=$env(PTY_HOME) PI_CODING_AGENT_DIR=$env(PTY_AGENT) PI_TUI_PTY_SCENARIO=$env(PTY_SCENARIO) NODE_NO_WARNINGS=1 TERM=xterm-256color $env(PTY_KT_CLI) --tui-mode $env(PTY_UI_MODE) --extension $env(PTY_UI_FIXTURE) --extension $env(PTY_PROVIDER_FIXTURE) --provider rpc-fixture --model model-a --no-session --offline --approve
 }
 
 proc wait_for {value label} {
@@ -261,7 +261,7 @@ for width in "${widths[@]}"; do
   done
 done
 
-printf 'Interactive TUI parity passed for widths [%s], runtimes [%s], scenarios [%s], and UI modes [%s].\n' \
+printf 'Interactive TUI parity passed for widths [%s], runtimes [%s], scenarios [%s], and TUI modes [%s].\n' \
   "${widths[*]}" \
   "${runtimes[*]}" \
   "${scenarios[*]}" \

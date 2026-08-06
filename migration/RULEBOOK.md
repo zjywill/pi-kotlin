@@ -57,12 +57,11 @@ through the commit recorded in `sync-state.tsv`.
 - `./migration/oracle/compare-radius.sh`
 - `./migration/oracle/compare-resource-loading.sh`
 - `./migration/oracle/compare-rpc-runtime.sh`
-- `./migration/oracle/compare-server-recovery.sh`
 - `./migration/oracle/compare-session-jsonl.sh`
 - `./migration/oracle/compare-terminal-image-runtime.sh`
 - `./migration/oracle/compare-theme-runtime.sh`
 - `./migration/oracle/compare-xai-oauth.sh`
-- Installed CLI and server smoke tests for process-level changes
+- Installed CLI smoke tests for process-level changes
 
 ## Done gate
 

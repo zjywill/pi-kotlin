@@ -48,7 +48,9 @@ import works.earendil.pi.codingagent.session.SessionManager
 import works.earendil.pi.tui.AutocompleteItem
 import works.earendil.pi.tui.AutocompleteProvider
 import works.earendil.pi.tui.CombinedAutocompleteProvider
+import works.earendil.pi.tui.KeybindingsManager
 import works.earendil.pi.tui.SlashCommand
+import works.earendil.pi.tui.TUI_KEYBINDINGS
 import works.earendil.pi.tui.fuzzyFilter
 import works.earendil.pi.tui.renderTerminalImageLines
 
@@ -494,12 +496,12 @@ class InteractiveRuntime(
                         input.startsWith("/model ") -> setModel(runtime, input.removePrefix("/model ").trim(), console)
                         input == "/ui-mode" ->
                             console.println(
-                                "UI mode: " +
-                                    ((console as? FullScreenConsoleControl)?.currentUiMode()?.wireValue ?: "regular"),
+                                "TUI mode: " +
+                                    ((console as? FullScreenConsoleControl)?.currentTuiMode()?.wireValue ?: "regular"),
                             )
 
                         input.startsWith("/ui-mode ") ->
-                            switchUiMode(
+                            switchTuiMode(
                                 value = input.removePrefix("/ui-mode ").trim(),
                                 console = console,
                                 runtime = runtime,
@@ -1104,15 +1106,15 @@ class InteractiveRuntime(
         )
     }
 
-    private fun switchUiMode(
+    private fun switchTuiMode(
         value: String,
         console: InteractiveConsole,
         runtime: RpcRuntime,
     ) {
         val mode =
             when (value) {
-                UiMode.REGULAR.wireValue -> UiMode.REGULAR
-                UiMode.FULLSCREEN.wireValue -> UiMode.FULLSCREEN
+                TuiMode.REGULAR.wireValue -> TuiMode.REGULAR
+                TuiMode.FULLSCREEN.wireValue -> TuiMode.FULLSCREEN
                 else -> {
                     console.error("Usage: /ui-mode <regular|fullscreen>")
                     return
@@ -1120,19 +1122,19 @@ class InteractiveRuntime(
             }
         val fullScreen = console as? FullScreenConsoleControl
         if (fullScreen == null) {
-            console.error("UI mode switching is unavailable for this console.")
+            console.error("TUI mode switching is unavailable for this console.")
             return
         }
-        if (!fullScreen.switchUiMode(mode)) {
-            console.error("Close active overlays before changing UI mode.")
+        if (!fullScreen.switchTuiMode(mode)) {
+            console.error("Close active overlays before changing TUI mode.")
             return
         }
         SettingsStore(
             cwd = runtime.currentCwd(),
             agentDir = agentDir,
             projectTrusted = runtime.currentProjectTrusted(),
-        ).setUiMode(mode)
-        console.println("UI mode: ${mode.wireValue}")
+        ).setTuiMode(mode)
+        console.println("TUI mode: ${mode.wireValue}")
     }
 
     private suspend fun copyLastAssistantMessage(
@@ -1154,7 +1156,7 @@ class InteractiveRuntime(
             console.error("Failed to copy to clipboard.")
             return
         }
-        if (fullScreen?.currentUiMode() == UiMode.FULLSCREEN) {
+        if (fullScreen?.currentTuiMode() == TuiMode.FULLSCREEN) {
             fullScreen.flash("Copied!")
         } else {
             console.println("Copied last agent message to clipboard.")
@@ -1483,10 +1485,16 @@ class InteractiveRuntime(
     private fun createConsole(args: Args): InteractiveConsole {
         consoleFactory?.let { return it() }
         val settings = SettingsStore(cwd, agentDir, projectTrusted = false)
+        val resolvedKeybindings = loadExtensionShortcutKeybindings(agentDir)
         return FullScreenConsole(
-            uiMode = args.uiMode ?: settings.mergedUiMode(),
+            tuiMode = args.tuiMode ?: settings.mergedTuiMode(),
             fullscreenScrollbar = settings.mergedFullscreenScrollbar(),
             autocompleteMaxVisible = settings.mergedAutocompleteMaxVisible(),
+            keybindings =
+                KeybindingsManager(
+                    TUI_KEYBINDINGS,
+                    resolvedKeybindings.filterKeys(TUI_KEYBINDINGS::containsKey),
+                ),
         )
     }
 
@@ -1667,11 +1675,11 @@ private fun interactiveSlashCommands(
         SlashCommand("model", "Show or change the model", "<provider/model>", modelCompletions),
         SlashCommand(
             "ui-mode",
-            "Show or change the UI mode",
+            "Show or change the TUI mode",
             "<regular|fullscreen>",
         ) { prefix ->
             fuzzyFilter(
-                listOf(UiMode.REGULAR.wireValue, UiMode.FULLSCREEN.wireValue),
+                listOf(TuiMode.REGULAR.wireValue, TuiMode.FULLSCREEN.wireValue),
                 prefix,
                 String::toString,
             ).map(::AutocompleteItem)

@@ -24,7 +24,7 @@ internal enum class SettingsScope {
     PROJECT,
 }
 
-enum class UiMode(
+enum class TuiMode(
     val wireValue: String,
 ) {
     REGULAR("regular"),
@@ -81,7 +81,8 @@ internal data class SettingsSnapshot(
     val enabledModels: List<String>? = null,
     val npmCommand: List<String>? = null,
     val quietStartup: Boolean? = null,
-    val uiMode: UiMode? = null,
+    val tuiMode: TuiMode? = null,
+    val mermaidRenderingMode: MermaidRenderingMode? = null,
     val fullscreenScrollbar: works.earendil.pi.tui.ScrollViewScrollbar? = null,
     val autocompleteMaxVisible: Int? = null,
 ) {
@@ -135,7 +136,12 @@ internal class SettingsStore(
 
     fun mergedThemeSetting(): String? = project().theme ?: global().theme
 
-    fun mergedUiMode(): UiMode = project().uiMode ?: global().uiMode ?: UiMode.REGULAR
+    fun mergedTuiMode(): TuiMode = project().tuiMode ?: global().tuiMode ?: TuiMode.REGULAR
+
+    fun mergedMermaidRenderingMode(): MermaidRenderingMode =
+        project().mermaidRenderingMode
+            ?: global().mermaidRenderingMode
+            ?: MermaidRenderingMode.STREAMING
 
     fun mergedFullscreenScrollbar(): works.earendil.pi.tui.ScrollViewScrollbar =
         project().fullscreenScrollbar
@@ -217,8 +223,12 @@ internal class SettingsStore(
         updateGlobal { put("theme", theme) }
     }
 
-    fun setUiMode(mode: UiMode) {
-        updateGlobal { put("uiMode", mode.wireValue) }
+    fun setTuiMode(mode: TuiMode) {
+        updateGlobal { put("tuiMode", mode.wireValue) }
+    }
+
+    fun setMermaidRenderingMode(mode: MermaidRenderingMode) {
+        updateGlobalNested("markdown", "mermaid", JsonPrimitive(mode.wireValue))
     }
 
     fun setFullscreenScrollbar(mode: works.earendil.pi.tui.ScrollViewScrollbar) {
@@ -303,10 +313,17 @@ internal class SettingsStore(
                         .getOrNull()
                 },
             quietStartup = raw["quietStartup"].booleanValue(),
-            uiMode =
-                when (raw["uiMode"].stringValue()) {
-                    UiMode.FULLSCREEN.wireValue -> UiMode.FULLSCREEN
-                    UiMode.REGULAR.wireValue -> UiMode.REGULAR
+            tuiMode =
+                when (raw["tuiMode"].stringValue()) {
+                    TuiMode.FULLSCREEN.wireValue -> TuiMode.FULLSCREEN
+                    TuiMode.REGULAR.wireValue -> TuiMode.REGULAR
+                    else -> null
+                },
+            mermaidRenderingMode =
+                when ((raw["markdown"] as? JsonObject)?.get("mermaid").stringValue()) {
+                    MermaidRenderingMode.OFF.wireValue -> MermaidRenderingMode.OFF
+                    MermaidRenderingMode.FINAL.wireValue -> MermaidRenderingMode.FINAL
+                    MermaidRenderingMode.STREAMING.wireValue -> MermaidRenderingMode.STREAMING
                     else -> null
                 },
             fullscreenScrollbar =

@@ -11,6 +11,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class ModelsAuthTest {
     @Test
@@ -184,6 +185,45 @@ class ModelsAuthTest {
             assertEquals("fresh-access", models.getAuth("faux")?.auth?.apiKey)
             assertEquals(1, refreshes.get())
             assertEquals("fresh-access", (store.read("faux") as OAuthCredential).access)
+        }
+
+    @Test
+    fun `OAuth refresh is bounded to fifteen seconds`() =
+        runTest {
+            val store =
+                InMemoryCredentialStore(
+                    mapOf(
+                        "faux" to
+                            OAuthCredential(
+                                access = "old-access",
+                                refresh = "refresh",
+                                expires = 1_060_000,
+                            ),
+                    ),
+                )
+            val oauth =
+                object : OAuthAuth {
+                    override val name: String = "Slow OAuth"
+
+                    override suspend fun login(interaction: AuthInteraction): OAuthCredential =
+                        error("not used")
+
+                    override suspend fun refresh(credential: OAuthCredential): OAuthCredential {
+                        delay(Long.MAX_VALUE)
+                        return credential
+                    }
+
+                    override suspend fun toAuth(credential: OAuthCredential): ModelAuth =
+                        ModelAuth(apiKey = credential.access)
+                }
+            val models = Models(listOf(FauxProvider(oauth = oauth)), InMemoryModelsStore(), store) { 1_000_000 }
+
+            val error =
+                kotlin.test.assertFailsWith<ModelsAuthException> {
+                    models.getAuth("faux")
+                }
+
+            assertTrue(error.message.orEmpty().contains("timed out after 15000ms"))
         }
 
     @Test

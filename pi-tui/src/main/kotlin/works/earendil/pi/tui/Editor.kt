@@ -220,6 +220,16 @@ class Editor(
             return
         }
         when {
+            keybindings.matches(data, "tui.editor.historyPrevious") -> {
+                cancelAutocomplete()
+                navigateHistory(-1)
+            }
+
+            keybindings.matches(data, "tui.editor.historyNext") -> {
+                cancelAutocomplete()
+                navigateHistory(1)
+            }
+
             keybindings.matches(data, "tui.editor.undo") -> undo()
             keybindings.matches(data, "tui.input.tab") -> requestAutocomplete(force = true)
             keybindings.matches(data, "tui.editor.deleteToLineEnd") -> deleteToLineEnd()

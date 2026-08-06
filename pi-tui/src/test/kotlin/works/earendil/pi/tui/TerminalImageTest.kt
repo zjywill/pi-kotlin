@@ -84,6 +84,14 @@ class TerminalImageTest {
         assertFalse(placement.replacementLine.contains("AAAA"))
     }
 
+    @Test
+    fun `iTerm image payload includes decoded byte size`() {
+        assertEquals(
+            "\u001B]1337;File=inline=1;size=3;width=20:QUFB\u0007",
+            encodeITerm2("QUFB", width = 20),
+        )
+    }
+
     private fun pngBase64(
         width: Int,
         height: Int,

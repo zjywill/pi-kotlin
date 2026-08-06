@@ -367,8 +367,13 @@ internal fun buildOpenAIChatRequestBody(
                 ),
             )
         }
+        val effort =
+            if (model.reasoning) {
+                options.reasoningEffort ?: options.reasoning?.let(model::mappedThinkingLevel)
+            } else {
+                null
+            }
         if (model.reasoning) {
-            val effort = options.reasoning?.let(model::mappedThinkingLevel)
             when (compat.thinkingFormat) {
                 "zai" -> {
                     put(
@@ -464,6 +469,31 @@ internal fun buildOpenAIChatRequestBody(
                 }
             }
         }
+        if (compat.supportsThinkingTokenBudget && effort != null && effort != "off") {
+            val defaultBudget =
+                when (effort.lowercase()) {
+                    "minimal" -> 1_024
+                    "low" -> 2_048
+                    "medium" -> 8_192
+                    else -> 16_384
+                }
+            val configuredBudget =
+                when (effort.lowercase()) {
+                    "minimal" -> options.thinkingBudgets?.minimal
+                    "low" -> options.thinkingBudgets?.low
+                    "medium" -> options.thinkingBudgets?.medium
+                    else -> options.thinkingBudgets?.high
+                }
+            val ceiling = options.maxTokens ?: model.maxTokens
+            val budget =
+                minOf(
+                    configuredBudget ?: defaultBudget,
+                    (ceiling - MIN_OPENAI_ANSWER_TOKENS).coerceAtLeast(0),
+                )
+            if (budget > 0) {
+                put("thinking_token_budget", budget)
+            }
+        }
         options.samplingParams?.forEach { (name, value) -> put(name, value) }
     }
 }
@@ -485,6 +515,7 @@ private data class OpenAIChatCompat(
     val supportsStrictMode: Boolean,
     val supportsOpenAIGrammarTools: Boolean,
     val supportsReasoningEffort: Boolean,
+    val supportsThinkingTokenBudget: Boolean,
     val thinkingFormat: String,
     val chatTemplateArgs: JsonObject,
     val sendSessionAffinityHeaders: Boolean,
@@ -551,6 +582,7 @@ private fun openAIChatCompat(model: Model): OpenAIChatCompat {
                     !isCloudflareGateway &&
                     !isNvidia &&
                     !isAntLing,
+            supportsThinkingTokenBudget = false,
             thinkingFormat =
                 when {
                     isDeepSeek -> "deepseek"
@@ -578,6 +610,8 @@ private fun openAIChatCompat(model: Model): OpenAIChatCompat {
             raw.boolean("supportsOpenAIGrammarTools") ?: detected.supportsOpenAIGrammarTools,
         supportsReasoningEffort =
             raw.boolean("supportsReasoningEffort") ?: detected.supportsReasoningEffort,
+        supportsThinkingTokenBudget =
+            raw.boolean("supportsThinkingTokenBudget") ?: detected.supportsThinkingTokenBudget,
         thinkingFormat = raw.string("thinkingFormat") ?: detected.thinkingFormat,
         chatTemplateArgs = raw["chatTemplateArgs"] as? JsonObject ?: detected.chatTemplateArgs,
         sendSessionAffinityHeaders =
@@ -642,3 +676,5 @@ private fun JsonObject.boolean(name: String): Boolean? =
     this[name]?.let { element ->
         (element as? kotlinx.serialization.json.JsonPrimitive)?.booleanOrNull
     }
+
+private const val MIN_OPENAI_ANSWER_TOKENS = 1_024

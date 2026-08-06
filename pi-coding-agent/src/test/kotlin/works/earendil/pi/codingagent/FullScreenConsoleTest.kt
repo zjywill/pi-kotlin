@@ -14,6 +14,8 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import works.earendil.pi.tui.Terminal
 import works.earendil.pi.tui.InputListenerResult
+import works.earendil.pi.tui.KeybindingsManager
+import works.earendil.pi.tui.TUI_KEYBINDINGS
 import works.earendil.pi.tui.CombinedAutocompleteProvider
 import works.earendil.pi.tui.SlashCommand
 import kotlinx.coroutines.runBlocking
@@ -28,7 +30,7 @@ class FullScreenConsoleTest {
             FullScreenConsole(
                 terminalAdapter = terminal,
                 closeTerminal = null,
-                uiMode = UiMode.FULLSCREEN,
+                tuiMode = TuiMode.FULLSCREEN,
                 fullscreenScrollbar = works.earendil.pi.tui.ScrollViewScrollbar.ALWAYS,
             )
 
@@ -44,18 +46,18 @@ class FullScreenConsoleTest {
     }
 
     @Test
-    fun `UI mode switches at runtime without replacing the console`() {
+    fun `TUI mode switches at runtime without replacing the console`() {
         val terminal = ConsoleTerminal(columns = 30, rows = 8)
         val console = FullScreenConsole(terminal, closeTerminal = null)
 
-        assertEquals(UiMode.REGULAR, console.currentUiMode())
-        assertTrue(console.switchUiMode(UiMode.FULLSCREEN))
-        assertEquals(UiMode.FULLSCREEN, console.currentUiMode())
+        assertEquals(TuiMode.REGULAR, console.currentTuiMode())
+        assertTrue(console.switchTuiMode(TuiMode.FULLSCREEN))
+        assertEquals(TuiMode.FULLSCREEN, console.currentTuiMode())
         assertTrue(terminal.output().contains("\u001B[?1049h"))
 
         console.println("switched")
-        assertTrue(console.switchUiMode(UiMode.REGULAR))
-        assertEquals(UiMode.REGULAR, console.currentUiMode())
+        assertTrue(console.switchTuiMode(TuiMode.REGULAR))
+        assertEquals(TuiMode.REGULAR, console.currentTuiMode())
         assertTrue(terminal.output().contains("\u001B[?1049l"))
         assertTrue(terminal.output().contains("switched"))
         console.close()
@@ -104,7 +106,7 @@ class FullScreenConsoleTest {
             FullScreenConsole(
                 terminalAdapter = terminal,
                 closeTerminal = null,
-                uiMode = UiMode.FULLSCREEN,
+                tuiMode = TuiMode.FULLSCREEN,
                 clipboardTextWriter = { false },
             )
 
@@ -180,6 +182,49 @@ class FullScreenConsoleTest {
         assertEquals(
             InteractiveReadResult.Shortcut("extension:one", "draft"),
             result.get(2, TimeUnit.SECONDS),
+        )
+        console.close()
+    }
+
+    @Test
+    fun `explicit history binding takes precedence over a conflicting shortcut`() {
+        val terminal = ConsoleTerminal()
+        val keybindings =
+            KeybindingsManager(
+                TUI_KEYBINDINGS,
+                mapOf(
+                    "tui.editor.historyPrevious" to listOf("ctrl+p"),
+                    "tui.editor.historyNext" to listOf("ctrl+n"),
+                ),
+            )
+        val console =
+            FullScreenConsole(
+                terminalAdapter = terminal,
+                closeTerminal = null,
+                keybindings = keybindings,
+            )
+
+        val first = CompletableFuture.supplyAsync { console.readLine("> ") }
+        terminal.awaitOutput("> ")
+        terminal.sendText("previous prompt")
+        terminal.sendInput("\r")
+        assertEquals("previous prompt", first.get(2, TimeUnit.SECONDS))
+
+        val second =
+            CompletableFuture.supplyAsync {
+                console.readLineWithShortcuts(
+                    prompt = "> ",
+                    shortcuts = listOf(InteractiveShortcutBinding("conflict", "ctrl+p")),
+                    initialBuffer = "draft",
+                )
+            }
+        terminal.awaitOutput("draft")
+        terminal.sendInput("\u0010")
+        terminal.sendInput("\r")
+
+        assertEquals(
+            InteractiveReadResult.Line("previous prompt"),
+            second.get(2, TimeUnit.SECONDS),
         )
         console.close()
     }

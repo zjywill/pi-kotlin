@@ -6,7 +6,10 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.double
+import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import works.earendil.pi.ai.providers.buildOpenAIChatRequestBody
 import works.earendil.pi.ai.providers.buildOpenAIResponsesRequestBody
 
@@ -82,6 +85,29 @@ class SamplingOptionsTest {
             assertEquals(0.5, captured?.samplingParams?.getValue("top_p")?.jsonPrimitive?.double)
             assertEquals(0.05, captured?.samplingParams?.getValue("min_p")?.jsonPrimitive?.double)
         }
+
+    @Test
+    fun `OpenAI completions caps vLLM thinking budget and leaves answer room`() {
+        val reasoningModel =
+            model("openai-completions").copy(
+                reasoning = true,
+                maxTokens = 10_000,
+                compat = buildJsonObject { put("supportsThinkingTokenBudget", true) },
+            )
+
+        val payload =
+            buildOpenAIChatRequestBody(
+                reasoningModel,
+                Context(),
+                StreamOptions(
+                    maxTokens = 5_000,
+                    reasoningEffort = "high",
+                    thinkingBudgets = ThinkingBudgets(high = 8_000),
+                ),
+            )
+
+        assertEquals(3_976, payload.getValue("thinking_token_budget").jsonPrimitive.int)
+    }
 
     private fun model(api: String): Model =
         Model(

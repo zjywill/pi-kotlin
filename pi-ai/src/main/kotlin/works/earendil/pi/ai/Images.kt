@@ -3,6 +3,7 @@ package works.earendil.pi.ai
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
+import works.earendil.pi.telemetry.TelemetryContext
 
 sealed interface ImagesContent
 
@@ -49,6 +50,7 @@ data class ImagesModel(
 
 data class ImagesOptions(
     val apiKey: String? = null,
+    val telemetryContext: TelemetryContext? = null,
     /** Optional transport for this image request. */
     val fetch: ProviderHttpTransport? = null,
     val env: Map<String, String> = emptyMap(),

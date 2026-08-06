@@ -1,5 +1,6 @@
 package works.earendil.pi.ai
 
+import java.util.concurrent.TimeoutException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
@@ -9,6 +10,7 @@ import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 interface ImagesProvider {
     val id: String
@@ -302,7 +304,11 @@ class ImagesModels(
                             null
                         } else {
                             try {
-                                oauth.refresh(current)
+                                withTimeoutOrNull(DEFAULT_IMAGES_OAUTH_REFRESH_TIMEOUT_MS) {
+                                    oauth.refresh(current)
+                                } ?: throw TimeoutException(
+                                    "OAuth refresh timed out after ${DEFAULT_IMAGES_OAUTH_REFRESH_TIMEOUT_MS}ms",
+                                )
                             } catch (error: CancellationException) {
                                 throw error
                             } catch (error: Throwable) {
@@ -438,3 +444,5 @@ internal fun imageFailure(
         stopReason = reason,
         errorMessage = message,
     )
+
+private const val DEFAULT_IMAGES_OAUTH_REFRESH_TIMEOUT_MS = 15_000L

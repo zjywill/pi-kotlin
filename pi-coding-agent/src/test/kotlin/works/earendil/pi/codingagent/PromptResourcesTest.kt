@@ -31,6 +31,20 @@ class PromptResourcesTest {
     }
 
     @Test
+    fun `AGENTS override takes precedence within a context directory`() {
+        val root = Files.createTempDirectory("pi-kotlin-context-override")
+        val agentDir = Files.createDirectories(root.resolve("agent"))
+        val project = Files.createDirectories(root.resolve("project"))
+        Files.writeString(project.resolve("AGENTS.md"), "base instructions")
+        Files.writeString(project.resolve("AGENTS.override.md"), "override instructions")
+
+        val files = loadProjectContextFiles(project, agentDir)
+
+        assertEquals(listOf("override instructions"), files.map(ProjectContextFile::content))
+        assertEquals(listOf(project.resolve("AGENTS.override.md")), files.map(ProjectContextFile::path))
+    }
+
+    @Test
     fun `prompt resources honor disabling and file based overrides`() {
         val root = Files.createTempDirectory("pi-kotlin-prompt-resources")
         val agentDir = Files.createDirectories(root.resolve("agent"))

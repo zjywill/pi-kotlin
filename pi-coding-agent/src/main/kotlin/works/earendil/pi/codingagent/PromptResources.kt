@@ -380,7 +380,8 @@ internal fun buildCodingSystemPrompt(
     }
 }
 
-private val CONTEXT_FILE_NAMES = listOf("AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD")
+private val CONTEXT_FILE_NAMES =
+    listOf("AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD")
 private val FILE_EXPLORATION_TOOLS = setOf("grep", "find", "ls")
 
 private fun discoverPromptFile(

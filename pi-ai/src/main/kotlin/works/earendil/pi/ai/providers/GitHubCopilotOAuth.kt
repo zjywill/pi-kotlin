@@ -223,10 +223,11 @@ internal class GitHubCopilotOAuth(
         copilotToken: String,
         enterpriseDomain: String?,
     ): List<String> {
+        val baseUrl = githubCopilotBaseUrl(copilotToken, enterpriseDomain)
         val response =
             transport.execute(
                 OAuthHttpRequest(
-                    url = "${githubCopilotBaseUrl(copilotToken, enterpriseDomain)}/models",
+                    url = "$baseUrl/models",
                     method = "GET",
                     headers =
                         COPILOT_HEADERS +
@@ -239,7 +240,10 @@ internal class GitHubCopilotOAuth(
                     timeoutMs = COPILOT_MODELS_TIMEOUT_MS,
                 ),
             )
-        return parseAvailableGitHubCopilotModelIds(fetchJson(response))
+        return parseAvailableGitHubCopilotModelIds(
+            fetchJson(response),
+            allowPolicyFallback = baseUrl == "https://api.individual.githubcopilot.com",
+        )
     }
 
     private suspend fun enableAllModels(
@@ -335,16 +339,21 @@ internal fun githubCopilotBaseUrl(
         ?: "https://api.individual.githubcopilot.com"
 }
 
-internal fun parseAvailableGitHubCopilotModelIds(json: JsonObject): List<String> {
+internal fun parseAvailableGitHubCopilotModelIds(
+    json: JsonObject,
+    allowPolicyFallback: Boolean = false,
+): List<String> {
     val data = json["data"] as? JsonArray ?: error("Invalid Copilot models response")
-    return data.mapNotNull { raw ->
-        val item = raw as? JsonObject ?: return@mapNotNull null
-        val id = item.string("id") ?: return@mapNotNull null
+    val pickerIds = mutableListOf<String>()
+    val policyEnabledIds = mutableListOf<String>()
+    data.forEach { raw ->
+        val item = raw as? JsonObject ?: return@forEach
+        val id = item.string("id") ?: return@forEach
         val pickerEnabled = item["model_picker_enabled"]?.jsonPrimitive?.booleanOrNull == true
-        val policyDisabled =
+        val policyState =
             item["policy"]
                 ?.let { it as? JsonObject }
-                ?.string("state") == "disabled"
+                ?.string("state")
         val toolCallsUnsupported =
             item["capabilities"]
                 ?.let { it as? JsonObject }
@@ -353,8 +362,16 @@ internal fun parseAvailableGitHubCopilotModelIds(json: JsonObject): List<String>
                 ?.get("tool_calls")
                 ?.jsonPrimitive
                 ?.booleanOrNull == false
-        id.takeIf { pickerEnabled && !policyDisabled && !toolCallsUnsupported }
+        if (!toolCallsUnsupported) {
+            if (pickerEnabled && policyState != "disabled") {
+                pickerIds += id
+            }
+            if (policyState == "enabled") {
+                policyEnabledIds += id
+            }
+        }
     }
+    return if (pickerIds.isNotEmpty() || !allowPolicyFallback) pickerIds else policyEnabledIds
 }
 
 private fun normalizeVerificationUri(value: String): String {
