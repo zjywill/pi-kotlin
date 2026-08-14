@@ -505,3 +505,16 @@ c93ea6ccf0a398c293641e8001db06b8f7997c79	ported	fix(coding-agent): preserve usag
 46bb9a2c3bdb296b0d2179f7309ec6b79a7f3106	not-applicable	docs(coding-agent): clarify Windows paths in settings
 6f707eb36064e82af9c1320a7634f4dfad21049b	ported	fix(coding-agent): show managed-tool startup status in TUI
 9d2ec7ffabe927bfad2214c1cee25b6632a78dcf	ported	fix(ai): use pi user agent for Kimi Coding requests
+5f7195c51eac43cdf329f813a7ef020d7bd74527	not-applicable	TypeScript Cloudflare compatibility test model substitution only
+d268454e9c347c115ac334b4abd719216e34046b	not-applicable	TypeScript subagent example frontmatter parsing only; the example is not part of the JVM distribution
+6633618350a9d9ea91fdc11668442e771869a56f	not-applicable	Node development-only nanoid dependency update
+83aed2ba5829654694ac972ba40b8e89e83de089	ported	Fullscreen selection accepts generic SGR mouse release button codes
+e14afc648e10fb6c527ea88fa627091ada764306	ported	Fallback tool text collapses after ten lines and expands through the configured app.tools.expand binding
+5093641a562cf9c78c0a8cf9af5d341418b7a112	ported	Google and Vertex preserve MAX_TOKENS or provider errors when tool calls are present
+ab0dc51fcfd1e4c0f8c04ab685812b748f3b8a70	not-applicable	Kotlin produces the fixed pi application and has no piConfig rebranding contract
+4caa3c440baaf94c9fe9ec054e04b9528b0a07ef	ported	Fullscreen selection uses the host clipboard and reports verified copy failures
+d10c974b940d7ce3c8439fcdf02d140f3a206458	not-applicable	Changelog audit only
+9b4adc823fa05f883565fa6b7a2ea58de3e39254	not-applicable	Changelog attribution audit only
+914cf1472e715297caa30db4b9535d534a9eb718	ported	Release-generated OpenRouter image catalog adds Seedream 5.0 and Grok Imagine Image 2.0 models
+0e0021fbbe83d67338b910aca8820bd99126793d	not-applicable	Post-release changelog scaffolding only
+e429d90b800f9a37c8a5812f4c9c10a8cdcc85a7	ported	Z.AI Coding Plan defaults resolve glm-5.3 from the refreshed generated catalog

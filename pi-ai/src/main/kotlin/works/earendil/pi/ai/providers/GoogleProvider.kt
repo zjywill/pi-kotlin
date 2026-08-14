@@ -206,7 +206,7 @@ class GoogleProvider(
             candidate?.string("finishReason")?.let { reason ->
                 rawStopReason = reason
                 stopReason = mapGoogleStopReason(reason)
-                if (blocks.any { it is ToolCall }) {
+                if (stopReason == StopReason.STOP && blocks.any { it is ToolCall }) {
                     stopReason = StopReason.TOOL_USE
                 }
             }

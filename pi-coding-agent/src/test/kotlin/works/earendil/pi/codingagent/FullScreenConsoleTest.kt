@@ -119,6 +119,29 @@ class FullScreenConsoleTest {
     }
 
     @Test
+    fun `tool results collapse and expand through the configured binding`() {
+        val terminal = ConsoleTerminal(columns = 40, rows = 18)
+        val console =
+            FullScreenConsole(
+                terminalAdapter = terminal,
+                closeTerminal = null,
+                tuiMode = TuiMode.FULLSCREEN,
+                toolExpandKeys = listOf("ctrl+o"),
+            )
+        val expanded = (1..15).map { index -> "line-$index" }
+        val collapsed = expanded.take(10) + "... (5 more lines, Ctrl+O to expand)"
+
+        console.appendToolResult(collapsed, expanded)
+
+        terminal.awaitOutput("line-10")
+        assertFalse(terminal.output().contains("line-11"))
+        terminal.sendInput("\u000F")
+        terminal.awaitOutput("line-15")
+        assertTrue(console.toolsExpanded())
+        console.close()
+    }
+
+    @Test
     fun `secret input is masked and ctrl d returns eof only when empty`() {
         val terminal = ConsoleTerminal()
         val console = FullScreenConsole(terminal, closeTerminal = null)

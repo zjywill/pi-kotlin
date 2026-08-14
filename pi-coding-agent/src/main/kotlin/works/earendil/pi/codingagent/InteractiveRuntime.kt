@@ -203,7 +203,10 @@ class InteractiveRuntime(
                         extensionRenderOptionsProvider = {
                             ExtensionRenderOptions(
                                 width = console.width(),
-                                expanded = false,
+                                expanded =
+                                    (console as? FullScreenConsoleControl)
+                                        ?.toolsExpanded()
+                                        ?: false,
                                 outputPad = 1,
                             )
                         },
@@ -307,6 +310,7 @@ class InteractiveRuntime(
                         }
 
                         "tool_execution_end" -> {
+                            renderToolResultText(event, console, runtime)
                             renderToolResultImages(event, console)
                             if (event["isError"]?.jsonPrimitive?.booleanOrNull == true) {
                                 console.error("${event.string("toolName").orEmpty()} failed")
@@ -1516,6 +1520,7 @@ class InteractiveRuntime(
                     TUI_KEYBINDINGS,
                     resolvedKeybindings.filterKeys(TUI_KEYBINDINGS::containsKey),
                 ),
+            toolExpandKeys = resolvedKeybindings["app.tools.expand"].orEmpty(),
         )
     }
 
@@ -2118,6 +2123,7 @@ private fun printInteractiveHotkeys(
     console.println("Ctrl-D                         Exit when the editor is empty")
     console.println("Ctrl-C                         Clear or interrupt input")
     console.println("Ctrl-X                         Copy the last agent message")
+    console.println("Ctrl-O                         Expand or collapse tool output")
     if (resolution.shortcuts.isNotEmpty()) {
         console.println()
         console.println("Extensions")
@@ -2143,6 +2149,53 @@ private fun formatShortcutKey(key: String): String =
                 else -> part.replaceFirstChar(Char::uppercase)
             }
         }
+
+private fun renderToolResultText(
+    event: JsonObject,
+    console: InteractiveConsole,
+    runtime: RpcRuntime,
+) {
+    val output =
+        (event["result"] as? JsonObject)
+            ?.get("content")
+            ?.let { it as? kotlinx.serialization.json.JsonArray }
+            .orEmpty()
+            .mapNotNull { value ->
+                val block = value as? JsonObject ?: return@mapNotNull null
+                block.string("text").takeIf { block.string("type") == "text" }
+            }.joinToString("\n")
+            .replace("\r", "")
+            .replace(TOOL_RESULT_ANSI, "")
+    if (output.isEmpty()) {
+        return
+    }
+    val key =
+        (console as? FullScreenConsoleControl)
+            ?.toolExpandKey()
+            ?.let(::formatShortcutKey)
+            ?: "Ctrl+O"
+    fun foreground(
+        color: String,
+        text: String,
+    ): String =
+        if (console.supportsAnsi()) {
+            runtime.currentTheme().fg(color, text)
+        } else {
+            text
+        }
+    fun styled(expanded: Boolean): List<String> =
+        fallbackToolResultLines(output, expanded, key).map { line ->
+            foreground(if (line.startsWith("... (")) "muted" else "toolOutput", line)
+        }
+    val collapsed = styled(expanded = false)
+    val expanded = styled(expanded = true)
+    val fullScreen = console as? FullScreenConsoleControl
+    if (fullScreen == null) {
+        collapsed.forEach(console::println)
+    } else {
+        fullScreen.appendToolResult(collapsed, expanded)
+    }
+}
 
 private fun renderToolResultImages(
     event: JsonObject,
@@ -2171,3 +2224,25 @@ private fun JsonObject.string(name: String): String? = (this[name] as? JsonPrimi
 private fun JsonObject.value(name: String): String? = this[name]?.jsonPrimitive?.contentOrNull
 
 private fun JsonObject.success(): Boolean = this["success"]?.jsonPrimitive?.booleanOrNull == true
+
+internal fun fallbackToolResultLines(
+    output: String,
+    expanded: Boolean,
+    expandKey: String,
+): List<String> {
+    val lines =
+        output
+            .replace("\r", "")
+            .replace(TOOL_RESULT_ANSI, "")
+            .split('\n')
+    val visible = if (expanded) lines else lines.take(FALLBACK_TOOL_PREVIEW_LINES)
+    val remaining = lines.size - visible.size
+    return if (remaining > 0) {
+        visible + "... ($remaining more lines, $expandKey to expand)"
+    } else {
+        visible
+    }
+}
+
+private const val FALLBACK_TOOL_PREVIEW_LINES = 10
+private val TOOL_RESULT_ANSI = Regex("""\u001B\[[\d;]*m""")

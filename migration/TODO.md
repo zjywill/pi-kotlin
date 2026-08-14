@@ -5,7 +5,7 @@ Last reviewed: August 14, 2026
 ## Completion gate
 
 - Source repository: `/Users/junyizhang/Git/pi`
-- Reviewed source commit: `9d2ec7ffabe927bfad2214c1cee25b6632a78dcf`
+- Reviewed source commit: `b1efcf7d7c5d7394fbb12ede0174e04d39ee7004`
 - Target repository: `/Users/junyizhang/Git/pi-kotlin`
 - The migration is complete only when:
 
@@ -193,6 +193,15 @@ request fixes, and the latest telemetry/model catalog changes. The complete
 remaining upstream commits are documentation, packaging, test-only, or other
 non-runtime changes.
 
+The current August 14 synchronization pass advances the reviewed source through
+`b1efcf7d7`. It ports generic SGR mouse-release handling, verified host-clipboard
+copy failures, collapsed and configurable expansion for extension-tool fallback
+output, Google and Vertex `MAX_TOKENS`/provider-error preservation during tool
+calls, the refreshed 45-model OpenRouter image catalog, and Z.AI Coding Plan
+defaults for `glm-5.3`. The new `compare-tool-fallback.sh` oracle completes the
+32-judge rulebook, and all 261 upstream commits in the complete range are
+classified.
+
 ## Completion checklist
 
 ### 1. Upstream synchronization
@@ -322,29 +331,33 @@ non-runtime changes.
 
 ## Follow-up
 
-No migration gaps remain against source commit `9d2ec7ff`. Future work starts
+No migration gaps remain against source commit `b1efcf7d7`. Future work starts
 only when the TypeScript source advances and a new synchronization range is
 recorded.
 
 Evidence for the latest August 14 upstream synchronization:
 
-- [x] Source fast-forwarded from `a96fb984` through `9d2ec7ff` with a clean
+- [x] Source fast-forwarded from `9d2ec7ff` through `b1efcf7d7` with a clean
       tracked TypeScript worktree; `git pull --ff-only` reported it was already
       up to date
 - [x] Every commit in the synchronization range is classified in
       `migration/upstream-sync.tsv`
-- [x] Hydrated schema-v3 catalog contains 38 provider files and 1,151 model
+- [x] Hydrated schema-v3 catalog contains 39 provider files and 1,269 model
       records with manifest structure hash
-      `8f42becde9d67b0f50730e36639d319dd0da3f4c26c0ca8d2c6e8c93a5a566a0`
-- [x] `./gradlew clean test installDist --max-workers=1 --no-daemon` with 573
+      `cb7d0bd4a172d03605b6a03fa548921ea130cbafb452f126ae4c9ba673194859`
+- [x] OpenRouter image catalog contains 45 models with independent catalog
+      hash `dece50d8a3c27ec0ffe2ac81ef0ef12f88db00f00015d5bfec69b98f99dc9181`
+- [x] `./gradlew clean test installDist --max-workers=1 --no-daemon` with 579
       tests and no failures, errors, or skips
-- [x] All 32 deterministic migration oracles against `9d2ec7ff`
+- [x] Source `./test.sh` with 221 passing test files, 6 skipped, 1,927 passing
+      tests, and 49 skipped tests
+- [x] All 32 deterministic migration oracles against `b1efcf7d7`
 - [x] Installed TypeScript/Kotlin TUI matrix at 40, 80, and 120 columns in
       regular and fullscreen modes
 - [x] Installed `pi` version/help; `pi-server` Unix socket integration tests and
       installed `pi --mode rpc` spawn/status/state/stop/empty-list smoke passed
 - [x] `./migration/audit-migration.sh sync` and
-      `./migration/audit-migration.sh full` through `9d2ec7ff`
+      `./migration/audit-migration.sh full` through `b1efcf7d7`
 - [x] Kotlin API-key input remains masked and stable during concurrent renders;
       the pinned TypeScript clear-text secret-prompt regression is documented
 - [x] Zero unchecked migration TODOs, incomplete inventory rows, port markers,

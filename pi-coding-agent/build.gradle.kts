@@ -131,3 +131,9 @@ tasks.register<JavaExec>("htmlBuiltinToolRendererOracle") {
     classpath = sourceSets["test"].runtimeClasspath
     mainClass = "works.earendil.pi.codingagent.HtmlBuiltinToolRendererOracleKt"
 }
+
+tasks.register<JavaExec>("toolFallbackOracle") {
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass = "works.earendil.pi.codingagent.ToolFallbackOracleKt"
+}

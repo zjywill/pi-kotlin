@@ -65,7 +65,7 @@ manual redirect-URL fallback, PKCE authorization, permanent API-key exchange,
 callback response headers, no-op refresh, request-auth derivation, and a real
 local OpenRouter-compatible provider request using the stored OAuth credential.
 
-The OpenRouter Images comparison covers the exact 40-model generated catalog
+The OpenRouter Images comparison covers the exact 45-model generated catalog
 and checksum, final `/chat/completions` URL/headers/payload, text and data-URL
 image parsing, invalid image filtering, response ID, cache-aware usage and
 cost, payload/response callbacks, retry behavior, HTTP error-body passthrough,

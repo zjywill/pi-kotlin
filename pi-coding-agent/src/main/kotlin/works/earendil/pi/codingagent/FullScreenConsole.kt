@@ -56,6 +56,15 @@ internal interface FullScreenConsoleControl {
 
     fun copyTextToClipboard(text: String): Boolean = false
 
+    fun appendToolResult(
+        collapsed: List<String>,
+        expanded: List<String>,
+    ) = Unit
+
+    fun toolsExpanded(): Boolean = false
+
+    fun toolExpandKey(): String? = null
+
     fun flash(message: String) = Unit
 
     fun setScrollbarStyle(style: (String) -> String) = Unit
@@ -118,6 +127,7 @@ internal class FullScreenConsole(
     fullscreenScrollbar: ScrollViewScrollbar = ScrollViewScrollbar.AUTO,
     autocompleteMaxVisible: Int = 5,
     private val keybindings: KeybindingsManager = KeybindingsManager(TUI_KEYBINDINGS),
+    private val toolExpandKeys: List<String> = DEFAULT_TOOL_EXPAND_KEYS,
     private val clipboardTextReader: () -> String? = ::readClipboardText,
     private val clipboardTextWriter: (String) -> Boolean = ::writeClipboardText,
 ) : InteractiveConsole,
@@ -147,6 +157,7 @@ internal class FullScreenConsole(
                 } else {
                     TuiScreenMode.MAIN
                 },
+            copySelectionToClipboard = clipboardTextWriter,
         )
     private val editor =
         Editor(
@@ -172,6 +183,8 @@ internal class FullScreenConsole(
     private var remoteEditor: RemoteEditorComponent? = null
     @Volatile
     private var reading = false
+    @Volatile
+    private var toolsExpanded = false
 
     init {
         document.addChild(header)
@@ -296,6 +309,12 @@ internal class FullScreenConsole(
     }
 
     private fun handleGlobalInput(data: String): InputListenerResult? {
+        if (toolExpandKeys.any { key -> matchesKey(data, key) }) {
+            toolsExpanded = !toolsExpanded
+            transcript.setToolsExpanded(toolsExpanded)
+            tui.requestRender()
+            return InputListenerResult(consume = true)
+        }
         if (!reading) {
             return null
         }
@@ -392,6 +411,18 @@ internal class FullScreenConsole(
         terminalAdapter.write("\u001B]52;c;$encoded\u0007")
         return true
     }
+
+    override fun appendToolResult(
+        collapsed: List<String>,
+        expanded: List<String>,
+    ) {
+        transcript.appendCollapsible(collapsed, expanded)
+        tui.requestRender()
+    }
+
+    override fun toolsExpanded(): Boolean = toolsExpanded
+
+    override fun toolExpandKey(): String? = toolExpandKeys.firstOrNull()
 
     override fun flash(message: String) {
         tui.flash(message)
@@ -979,21 +1010,44 @@ private fun overlayAnchor(value: String): OverlayAnchor =
     }
 
 private class TranscriptComponent : Component {
-    private val lines = mutableListOf("")
+    private val entries = mutableListOf<TranscriptEntry>(TranscriptEntry.Text(""))
     private var transient: String? = null
+    private var toolsExpanded = false
 
     @Synchronized
     fun append(value: String) {
         val parts = value.split('\n')
-        lines[lines.lastIndex] += parts.first()
+        val line = entries.lastOrNull() as? TranscriptEntry.Text
+            ?: TranscriptEntry.Text("").also(entries::add)
+        line.value += parts.first()
         parts.drop(1).forEach { part ->
-            lines += part
+            entries += TranscriptEntry.Text(part)
         }
     }
 
     @Synchronized
     fun newLine() {
-        lines += ""
+        entries += TranscriptEntry.Text("")
+    }
+
+    @Synchronized
+    fun appendCollapsible(
+        collapsed: List<String>,
+        expanded: List<String>,
+    ) {
+        if (collapsed.isEmpty() && expanded.isEmpty()) {
+            return
+        }
+        if ((entries.lastOrNull() as? TranscriptEntry.Text)?.value.isNullOrEmpty()) {
+            entries.removeLast()
+        }
+        entries += TranscriptEntry.Collapsible(collapsed.toList(), expanded.toList())
+        entries += TranscriptEntry.Text("")
+    }
+
+    @Synchronized
+    fun setToolsExpanded(expanded: Boolean) {
+        toolsExpanded = expanded
     }
 
     @Synchronized
@@ -1015,18 +1069,40 @@ private class TranscriptComponent : Component {
     override fun render(width: Int): List<String> =
         buildList {
             val stable =
-                if (transient != null && lines.lastOrNull().isNullOrEmpty()) {
-                    lines.dropLast(1)
+                if (
+                    transient != null &&
+                    (entries.lastOrNull() as? TranscriptEntry.Text)?.value.isNullOrEmpty()
+                ) {
+                    entries.dropLast(1)
                 } else {
-                    lines
+                    entries
                 }
-            stable.forEach { line ->
-                addAll(wrapTextWithAnsi(line, width.coerceAtLeast(1)))
+            stable.forEach { entry ->
+                val lines =
+                    when (entry) {
+                        is TranscriptEntry.Text -> listOf(entry.value)
+                        is TranscriptEntry.Collapsible ->
+                            if (toolsExpanded) entry.expanded else entry.collapsed
+                    }
+                lines.forEach { line ->
+                    addAll(wrapTextWithAnsi(line, width.coerceAtLeast(1)))
+                }
             }
             transient?.let { value ->
                 addAll(wrapTextWithAnsi(value, width.coerceAtLeast(1)))
             }
         }
+}
+
+private sealed interface TranscriptEntry {
+    data class Text(
+        var value: String,
+    ) : TranscriptEntry
+
+    data class Collapsible(
+        val collapsed: List<String>,
+        val expanded: List<String>,
+    ) : TranscriptEntry
 }
 
 private class PromptComponent : Component {

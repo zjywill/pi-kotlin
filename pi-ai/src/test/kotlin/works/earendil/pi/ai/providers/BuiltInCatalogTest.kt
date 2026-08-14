@@ -39,11 +39,11 @@ class BuiltInCatalogTest {
         assertEquals(3, catalog.schemaVersion)
         Instant.parse(assertNotNull(catalog.generatedAt))
         assertEquals(
-            "aba2d7fae935146aed631847a2de2a179f63eed57c2fed368db5eaeb04b7be8c",
+            "cb7d0bd4a172d03605b6a03fa548921ea130cbafb452f126ae4c9ba673194859",
             catalog.structureHash,
         )
         assertEquals(39, catalog.modelsByProvider.size)
-        assertEquals(1_243, catalog.modelsByProvider.values.sumOf(List<works.earendil.pi.ai.Model>::size))
+        assertEquals(1_269, catalog.modelsByProvider.values.sumOf(List<works.earendil.pi.ai.Model>::size))
         assertEquals("openai-responses", sol.api)
         assertEquals(272_000, sol.contextWindow)
         assertEquals(128_000, sol.maxTokens)
@@ -122,7 +122,7 @@ class BuiltInCatalogTest {
         val ids = providers.map { it.id }.toSet()
 
         assertEquals(40, providers.size)
-        assertEquals(1_243, providers.sumOf { it.getModels().size })
+        assertEquals(1_269, providers.sumOf { it.getModels().size })
         assertTrue(
             ids.containsAll(
                 setOf(
@@ -147,11 +147,11 @@ class BuiltInCatalogTest {
         )
         val copilot = providers.single { it.id == "github-copilot" }
         assertEquals("GitHub Copilot", copilot.name)
-        assertEquals(31, copilot.getModels().size)
+        assertEquals(33, copilot.getModels().size)
         assertEquals(
             mapOf(
                 "anthropic-messages" to 10,
-                "openai-completions" to 7,
+                "openai-completions" to 9,
                 "openai-responses" to 14,
             ),
             copilot.getModels().groupingBy { it.api }.eachCount(),
@@ -165,7 +165,7 @@ class BuiltInCatalogTest {
         assertEquals(31, mistral.getModels().size)
         val cloudflareGateway = providers.single { it.id == "cloudflare-ai-gateway" }
         assertEquals("Cloudflare AI Gateway", cloudflareGateway.name)
-        assertEquals(43, cloudflareGateway.getModels().size)
+        assertEquals(57, cloudflareGateway.getModels().size)
         val cloudflareWorkers = providers.single { it.id == "cloudflare-workers-ai" }
         assertEquals("Cloudflare Workers AI", cloudflareWorkers.name)
         assertEquals(13, cloudflareWorkers.getModels().size)

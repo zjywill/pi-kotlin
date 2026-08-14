@@ -248,10 +248,57 @@ class TuiTest {
 
         terminal.sendInput("\u001B[<0;1;3M")
         terminal.sendInput("\u001B[<32;5;3M")
-        terminal.sendInput("\u001B[<0;5;3m")
+        terminal.sendInput("\u001B[<3;5;3m")
 
         assertTrue(terminal.writes().contains("\u001B]52;c;aGVsbG8=\u0007"))
         assertTrue(terminal.writes().contains("Copied!"))
+    }
+
+    @Test
+    fun `alternate screen routes generic release selection through host clipboard`() {
+        val terminal = TestTerminal(columns = 20, rows = 3)
+        var copied: String? = null
+        val tui =
+            Tui(
+                terminal = terminal,
+                screenMode = TuiScreenMode.ALTERNATE,
+                copySelectionToClipboard = { text ->
+                    copied = text
+                    true
+                },
+            )
+        tui.addChild(LinesComponent(listOf("hello world")))
+        tui.start()
+        terminal.clearWrites()
+
+        terminal.sendInput("\u001B[<0;1;3M")
+        terminal.sendInput("\u001B[<32;5;3M")
+        terminal.sendInput("\u001B[<3;5;3m")
+
+        assertEquals("hello", copied)
+        assertFalse(terminal.writes().contains("\u001B]52;c;"))
+        assertTrue(terminal.writes().contains("Copied!"))
+    }
+
+    @Test
+    fun `alternate screen reports host clipboard failure`() {
+        val terminal = TestTerminal(columns = 20, rows = 3)
+        val tui =
+            Tui(
+                terminal = terminal,
+                screenMode = TuiScreenMode.ALTERNATE,
+                copySelectionToClipboard = { false },
+            )
+        tui.addChild(LinesComponent(listOf("hello world")))
+        tui.start()
+        terminal.clearWrites()
+
+        terminal.sendInput("\u001B[<0;1;3M")
+        terminal.sendInput("\u001B[<32;5;3M")
+        terminal.sendInput("\u001B[<3;5;3m")
+
+        assertFalse(terminal.writes().contains("\u001B]52;c;"))
+        assertTrue(terminal.writes().contains("Copy failed"))
     }
 
     @Test

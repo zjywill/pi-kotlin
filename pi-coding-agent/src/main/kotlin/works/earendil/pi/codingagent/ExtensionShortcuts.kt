@@ -9,6 +9,8 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import works.earendil.pi.tui.TUI_KEYBINDINGS
 
+internal val DEFAULT_TOOL_EXPAND_KEYS = listOf("ctrl+o")
+
 private val RESERVED_EXTENSION_SHORTCUT_KEYBINDINGS =
     setOf(
         "app.interrupt",
@@ -215,7 +217,7 @@ private fun defaultCodingAgentKeybindings(osName: String): Map<String, List<Stri
         put("app.model.cycleForward", listOf("ctrl+p"))
         put("app.model.cycleBackward", listOf("shift+ctrl+p"))
         put("app.model.select", listOf("ctrl+l"))
-        put("app.tools.expand", listOf("ctrl+o"))
+        put("app.tools.expand", DEFAULT_TOOL_EXPAND_KEYS)
         put("app.thinking.toggle", listOf("ctrl+t"))
         put("app.session.toggleNamedFilter", listOf("ctrl+n"))
         put("app.editor.external", listOf("ctrl+g"))

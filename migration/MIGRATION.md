@@ -14,7 +14,7 @@ The source commit is immutable for the first migration pass. Upstream changes
 land in a later synchronization pass so that parity failures have one cause.
 
 The latest reviewed synchronization pass reaches
-`9d2ec7ffabe927bfad2214c1cee25b6632a78dcf` (August 13, 2026). The original
+`b1efcf7d7c5d7394fbb12ede0174e04d39ee7004` (August 14, 2026). The original
 baseline remains recorded so regressions can be attributed either to the first
 translation or to a later upstream sync.
 
@@ -74,7 +74,7 @@ features outside that slice remain migration work.
 | --- | --- | --- |
 | Gradle multi-module build | Functional slice | Six JVM 21 modules; `clean test installDist` passes with warnings as errors |
 | Core AI messages and stream protocol | Functional slice | Message, event-stream, provider-native raw stop reason, image-generation result, UUIDv7, generic sampling parameters, tool validation, and faux-provider tests |
-| Model catalog | Functional slice | Hydrated schema-v3 manifest and 38 chat-provider files verify by SHA-256; all 1,151 static chat model records plus the credential-backed dynamic Radius catalog are exposed through 39 executable chat providers, including Baseten GLM-5.2/Kimi-K2.6 reasoning controls, 29 credential-filtered GitHub Copilot models, and Qwen Token Plan metadata; a separate immutable catalog exposes all 40 OpenRouter image models with an independent checksum |
+| Model catalog | Functional slice | Hydrated schema-v3 manifest and 39 chat-provider files verify by SHA-256; all 1,269 static chat model records plus the credential-backed dynamic Radius catalog are exposed through 40 executable chat providers, including Baseten GLM-5.2/Kimi-K2.6 reasoning controls, 33 credential-filtered GitHub Copilot models, and Qwen Token Plan metadata; a separate immutable catalog exposes all 45 OpenRouter image models with an independent checksum |
 | Provider HTTP implementations | Functional slice | All 10 upstream chat API families plus `openrouter-images` have executable Kotlin paths. Coverage includes Google Generative AI, Google Vertex AI, Anthropic Messages plus Claude Pro/Max OAuth, OpenRouter Chat Completions and Images plus shared browser OAuth, xAI Chat Completions/Responses plus device OAuth, Kimi Coding Anthropic Messages plus device OAuth, Radius `pi-messages` plus discovered browser/device OAuth and dynamic models, OpenAI Chat Completions including Baseten `chat_template_args`, generic sampling-parameter last-write merging, and function-payload precedence over malformed empty `custom` objects, OpenAI Responses and Azure OpenAI Responses with the same sampling merge, Mistral Conversations, Amazon Bedrock ConverseStream, OpenAI Codex Responses SSE/WebSocket plus browser/device OAuth, GitHub Copilot device OAuth and Anthropic/OpenAI Chat/OpenAI Responses delegates, Cloudflare Workers AI, and Cloudflare AI Gateway with independent payload/event/auth/image parity |
 | Agent loop | Functional slice | Streaming, tool calls, parallel execution, steering, follow-up, abort, and session tests using the faux provider; coding-message projection has independent parity for bash/custom/branch/compaction messages |
 | CLI argument contract | Complete | Parser tests, byte-for-byte top-level/auth/package help, installed package/model-update error contracts, provider-prefixed and slash-containing model IDs, authenticated-provider ambiguity resolution, thinking suffixes, text/linear-JSON/RPC/print modes, session selection/forking, resource/tool flags, offline behavior, quiet/verbose startup, credential print, bounded interactive OAuth/API-key login/logout, and child-process agent markers are covered by independent CLI/package and RPC runtime oracles plus installed PTYs |
@@ -94,16 +94,19 @@ features outside that slice remain migration work.
 ## Verification snapshot
 
 Verified on August 14, 2026 against source commit
-`9d2ec7ffabe927bfad2214c1cee25b6632a78dcf`:
+`b1efcf7d7c5d7394fbb12ede0174e04d39ee7004`:
 
-- `./gradlew clean test installDist --max-workers=1 --no-daemon`: passed, 573
+- `./gradlew clean test installDist --max-workers=1 --no-daemon`: passed, 579
   tests, 0 failures, 0 errors, and 0 skipped.
-- The source checkout passed `npm ci --ignore-scripts` and
-  `npm run build:offline` after refreshing the lockfile's `openai@6.40.0`
-  dependency; the tracked source worktree remained clean.
-- The hydrated schema-v3 catalog contains 38 provider files and 1,151 model
+- The source checkout passed `npm ci --ignore-scripts`, `npm run build:offline`,
+  and `./test.sh`: 221 test files passed with 6 skipped, covering 1,927
+  passing tests with 49 skipped; the tracked source worktree remained clean.
+- The hydrated schema-v3 catalog contains 39 provider files and 1,269 model
   records. Its manifest structure hash is
-  `8f42becde9d67b0f50730e36639d319dd0da3f4c26c0ca8d2c6e8c93a5a566a0`.
+  `cb7d0bd4a172d03605b6a03fa548921ea130cbafb452f126ae4c9ba673194859`.
+- The immutable OpenRouter image catalog contains 45 models and its independent
+  catalog hash is
+  `dece50d8a3c27ec0ffe2ac81ef0ef12f88db00f00015d5bfec69b98f99dc9181`.
 - `./migration/oracle/compare-cli-help.sh`: passed with byte-for-byte CLI help
   parity.
 - `./migration/oracle/compare-cli-package-runtime.sh`: passed for installed
@@ -192,11 +195,17 @@ Verified on August 14, 2026 against source commit
   fullscreen copy confirmation, bounded Kitty image caching, Windows truecolor,
   symlink session discovery, provider-scoped generation-safe model refresh,
   generic sampling parameters, failed-clean dependency repair, root `find`
-  normalization, and concurrent masked-input rendering.
+  normalization, concurrent masked-input rendering, Google/Vertex
+  `MAX_TOKENS` and provider-error preservation during tool calls, generic SGR
+  mouse-release handling, host-clipboard copy failure reporting, and
+  collapsed/expanded extension-tool fallback output.
+- `./migration/oracle/compare-tool-fallback.sh`: passed with normalized
+  collapsed and expanded fallback rendering, configured expansion binding,
+  remaining-line counts, and transcript persistence.
 - All 32 deterministic migration oracles passed against the same source
   baseline.
 - `./migration/audit-migration.sh sync` and
-  `./migration/audit-migration.sh full` both passed through `9d2ec7ff`.
+  `./migration/audit-migration.sh full` both passed through `b1efcf7d7`.
 - Installed `pi --export` output was byte-identical to upstream with SHA-256
   `3613ceef433cc31040a5413427db35c4fd5b1d480aab0988b1613f634809bcb6`.
 - A Playwright browser smoke rendered the Markdown heading, two highlighted
@@ -250,7 +259,7 @@ Verified on August 14, 2026 against source commit
   no-op refresh, request-auth derivation, and a real local OpenRouter-compatible
   provider request consuming the stored OAuth credential.
 - `./migration/oracle/compare-openrouter-images.sh`: passed with exact parity
-  for the 40-model image catalog and checksum, final `/chat/completions`
+  for the 45-model image catalog and checksum, final `/chat/completions`
   URL/headers/payload, text and valid/invalid data-URL image parsing, response
   IDs, cache-aware usage/cost, payload and response callbacks, retry behavior,
   HTTP status/body errors, missing-key results, stored OpenRouter OAuth
@@ -658,12 +667,12 @@ Verified on August 14, 2026 against source commit
 
 ## Remaining major gaps
 
-None against the pinned source commit `9d2ec7ff`. A future source update must
+None against the pinned source commit `b1efcf7d7`. A future source update must
 start a new synchronization range and rerun the complete rulebook.
 
 ## Completeness audit
 
-The migration inventory is complete through `9d2ec7ff`; no row in
+The migration inventory is complete through `b1efcf7d7`; no row in
 `migration/inventory.tsv` remains `partial` or `missing`.
 
 ```bash

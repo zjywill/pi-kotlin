@@ -212,6 +212,7 @@ class Tui(
     private val showHardwareCursor: Boolean = false,
     screenMode: TuiScreenMode = TuiScreenMode.MAIN,
     private val imageProtocol: TerminalImageProtocol? = detectTerminalCapabilities().images,
+    private val copySelectionToClipboard: ((String) -> Boolean)? = null,
 ) : Container() {
     private var screenMode = screenMode
     private val inputListeners = linkedSetOf<(String) -> InputListenerResult?>()
@@ -813,7 +814,8 @@ class Tui(
             return true
         }
         val event = parseSgrMouseEvent(data) ?: return false
-        if (event.button and 3 != 0) {
+        val button = event.button and 3
+        if (button != 0 && !(event.release && button == 3)) {
             return true
         }
         val point =
@@ -914,6 +916,10 @@ class Tui(
                 ).trimEnd()
             }.joinToString("\n")
         if (selected.isEmpty()) {
+            return
+        }
+        copySelectionToClipboard?.let { copy ->
+            flash(if (copy(selected)) "Copied!" else "Copy failed")
             return
         }
         val encoded = Base64.getEncoder().encodeToString(selected.toByteArray(Charsets.UTF_8))

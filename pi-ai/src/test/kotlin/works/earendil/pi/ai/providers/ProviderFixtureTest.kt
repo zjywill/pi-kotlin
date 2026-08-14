@@ -538,6 +538,47 @@ class ProviderFixtureTest {
         }
 
     @Test
+    fun `google provider preserves max tokens when a tool call is present`() =
+        runTest {
+            val fixture =
+                fixtureServer(
+                    """
+                    data: {"candidates":[{"content":{"parts":[{"functionCall":{"id":"call-1","name":"echo","args":{"value":"truncated"}}}]},"finishReason":"MAX_TOKENS"}]}
+
+                    """.trimIndent(),
+                )
+            try {
+                val model =
+                    model(
+                        id = "fixture",
+                        api = "google-generative-ai",
+                        provider = "fixture",
+                        baseUrl = fixture.baseUrl,
+                    )
+                val provider =
+                    GoogleProvider(
+                        "fixture",
+                        "Fixture",
+                        fixture.baseUrl,
+                        listOf(model),
+                        listOf("UNUSED"),
+                    )
+                val result =
+                    provider.stream(
+                        model,
+                        Context(messages = mutableListOf(UserMessage("hi"))),
+                        StreamOptions(apiKey = "test"),
+                    ).result()
+
+                assertEquals(StopReason.LENGTH, result.stopReason)
+                assertEquals("MAX_TOKENS", result.rawStopReason)
+                assertEquals("echo", result.content.filterIsInstance<ToolCall>().single().name)
+            } finally {
+                fixture.close()
+            }
+        }
+
+    @Test
     fun `google history keeps signed empty blocks only for the same model`() {
         val signature = "AAAAAAAAAAAAAAAAAAAAAA=="
         val model =

@@ -33,6 +33,6 @@ private val DEFAULT_MODEL_IDS =
         "xiaomi-token-plan-ams" to "mimo-v2.5-pro",
         "xiaomi-token-plan-cn" to "mimo-v2.5-pro",
         "xiaomi-token-plan-sgp" to "mimo-v2.5-pro",
-        "zai" to "glm-5.1",
-        "zai-coding-cn" to "glm-5.1",
+        "zai" to "glm-5.3",
+        "zai-coding-cn" to "glm-5.3",
     )

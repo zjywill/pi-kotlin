@@ -158,6 +158,49 @@ class GoogleVertexProviderTest {
         }
 
     @Test
+    fun `preserves max tokens when a tool call is present`() =
+        runTest {
+            val captured = AtomicReference<CapturedRequest>()
+            val server =
+                vertexFixtureServer(
+                    captured,
+                    """
+                    data: {"candidates":[{"content":{"parts":[{"functionCall":{"id":"call-1","name":"echo","args":{"value":"truncated"}}}]},"finishReason":"MAX_TOKENS"}]}
+
+                    """.trimIndent(),
+                )
+            server.start()
+            try {
+                val model = vertexModel("http://127.0.0.1:${server.address.port}/collection")
+                val provider =
+                    GoogleVertexProvider(
+                        id = "google-vertex",
+                        name = "Google Vertex AI",
+                        models = listOf(model),
+                        environment = { null },
+                        accessTokenProvider = { "adc-token" },
+                    )
+                val result =
+                    provider
+                        .stream(
+                            model,
+                            Context(messages = mutableListOf(UserMessage("hello"))),
+                            StreamOptions(
+                                apiKey = "gcp-vertex-credentials",
+                                project = "project-id",
+                                location = "us-central1",
+                            ),
+                        ).result()
+
+                assertEquals(StopReason.LENGTH, result.stopReason)
+                assertEquals("MAX_TOKENS", result.rawStopReason)
+                assertEquals("echo", result.content.filterIsInstance<ToolCall>().single().name)
+            } finally {
+                server.stop(0)
+            }
+        }
+
+    @Test
     fun `resolves express regional global multi-region and versioned custom endpoints`() {
         val model = vertexModel("https://{location}-aiplatform.googleapis.com")
         val noEnvironment: (String) -> String? = { null }
@@ -308,7 +351,10 @@ class GoogleVertexProviderTest {
             reasoning = true,
         )
 
-    private fun vertexFixtureServer(captured: AtomicReference<CapturedRequest>): HttpServer {
+    private fun vertexFixtureServer(
+        captured: AtomicReference<CapturedRequest>,
+        response: String = VERTEX_RESPONSE,
+    ): HttpServer {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/") { exchange ->
             captured.set(
@@ -325,7 +371,7 @@ class GoogleVertexProviderTest {
                         ).jsonObject,
                 ),
             )
-            val bytes = VERTEX_RESPONSE.toByteArray(StandardCharsets.UTF_8)
+            val bytes = response.toByteArray(StandardCharsets.UTF_8)
             exchange.responseHeaders.add("content-type", "text/event-stream")
             exchange.sendResponseHeaders(200, bytes.size.toLong())
             exchange.responseBody.use { it.write(bytes) }

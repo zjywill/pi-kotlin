@@ -60,6 +60,7 @@ through the commit recorded in `sync-state.tsv`.
 - `./migration/oracle/compare-session-jsonl.sh`
 - `./migration/oracle/compare-terminal-image-runtime.sh`
 - `./migration/oracle/compare-theme-runtime.sh`
+- `./migration/oracle/compare-tool-fallback.sh`
 - `./migration/oracle/compare-xai-oauth.sh`
 - Installed CLI smoke tests for process-level changes
 

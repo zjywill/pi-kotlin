@@ -5,7 +5,7 @@ Kotlin/JVM migration of the [Pi Agent Harness](https://github.com/earendil-works
 The first migration pass is pinned to upstream commit
 `9b3a2059171bcc74ad9d2cadeea6d186776cf2db` (July 22, 2026), and the reviewed
 incremental sync currently reaches
-`9d2ec7ffabe927bfad2214c1cee25b6632a78dcf` (August 13, 2026). The target is
+`b1efcf7d7c5d7394fbb12ede0174e04d39ee7004` (August 14, 2026). The target is
 behavioral compatibility at the CLI, session, provider, agent-loop, tool, and
 terminal boundaries. JVM-native implementations replace Node/Bun-specific
 packaging and process internals.
@@ -57,7 +57,7 @@ file is owner-readable and owner-writable on POSIX filesystems. Use
 unchanged.
 
 The `pi-ai` module also exposes the upstream OpenRouter image-generation API,
-including its 40-model catalog and shared OpenRouter API-key/OAuth
+including its 45-model catalog and shared OpenRouter API-key/OAuth
 authentication. This remains a library-level API because the upstream coding
 agent and server do not currently expose a separate image-generation command.
 
