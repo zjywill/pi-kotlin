@@ -257,3 +257,251 @@ b06dc76fd7b17d890403386cc5147ae5ea9f68ac	ported	Git package updates recover depe
 fed6009cc9ccfb15088bc55244120918b5fe23f2	ported	Model refreshes are caller-owned, provider-scoped, generation-safe, cache-first, and synchronized after interactive credential changes
 25a2c8dcfec4e017720c163a6166200a9bef98ae	ported	Generic sampling parameters flow through model configuration and merge last into OpenAI Chat and Responses request bodies
 523b5a4917ea46c20fb7b24a41311b158b7eeb05	already-covered	Kotlin Path.relativize already normalizes find results from a root search; regression coverage preserves the contract
+e8a17822de1076c3048701118a8a5f25c1e98565	ported	fix(tui): correct terminal progress clear sequence (#7581)
+f27aaf66c0a27a26b8bab02b81ab3b7768484725	not-applicable	docs(coding-agent): document streamSimple hook contract (#7576)
+95249a72700d3b18fd1c8257845d95564abdb3cd	not-applicable	fix: repair tests after model refresh cancellation changes
+1d0c97471359a7c1dc6bfc9ac7ce5b4aa9afd705	ported	feat(agent): implement harness v2 for in-memory storage (#7503)
+0524d6897f171d63a79e00946df8ce7f53c605fe	not-applicable	fix(coding-agent): prevent flaky RPC prompt tests
+cd20a8d2e555fb747780c1bb00e36039657fcf35	ported	refactor(agent): split harness experimental changes (#7587)
+221a842c136ab3af23aef9e70034af86061d27c1	not-applicable	fix(coding-agent): update undici to 8.9.0 and brace-expansion to 5.0.9 for npm audit advisories
+18d65de623db390914fa19638c821d8ea24fcda9	ported	fix(coding-agent): preserve Copilot summary endpoint
+ab5f8d88ee1d400c0c8fb5c50ac10b2f4a4851d1	ported	fix(coding-agent): retain heterogeneous auth model types
+382aa641cc4c197dfa95ed684f187b5a39bc30ce	not-applicable	DRAFT: add openai background mode responses (#7339)
+f7ea2ef38c867be5e0ef53fab18de9c426234e1f	not-applicable	docs(agent): resolve open questions, add mechanical test constructions
+acbdc0d25e12522b4f8277c1206d2cead51d9b4e	ported	fix(ai): bound OAuth refresh duration
+b784c80961c29451c4665a6ccca15089cb36e0eb	not-applicable	fix(ai): remove OAuth refresh lock test
+42a06f9477ce6b92f39d9467f64019f08767401e	not-applicable	fix(coding-agent): test composite OAuth cancellation signal
+e741cb05ca7c1c7bc5a9664c99697df32de9fac6	ported	fix(coding-agent): preserve extension auth endpoints
+720f0e8eeb1295a8030c50e165bc283f3d5fa6ff	ported	fix(ai): route Copilot Grok 4.5 through Responses, closes #7560
+f24ab6e14c0be7e623ec9beab0fc792cbb041cc0	ported	fix(tui): honor nested stack minimum sizes
+686f193e51ccdc56fdf3366ce5d092530c1007ac	ported	fix(ai): separate deferred request options
+d3da2e968a19fdd0b06e0bd1e532164b1baecbd1	not-applicable	fix(ai): test composite OAuth refresh cancellation
+97f0ccdd96cc207b6ad3630c56eea4d32dbdcf53	ported	fix(coding-agent): recursively merge nested settings, closes #7572
+b68decede07c06a8a3905ecb8c10b6e966877082	not-applicable	docs(agent): fix coherence defects found by independent review
+4756e7d1220cd5bb4e88cd28690a8597fa50d89c	not-applicable	docs(agent): make harness v2 telemetry self-contained
+04133eb01b082248f7d667c1214e09477a1c3db1	not-applicable	docs(agent): remove superseded design docs
+f119b01cb122ea55e17905caff62d4523f6cce1d	ported	refactor: update sqlite for lanes (#7591)
+44289550aa06750542c0ace8ab4bac0c7e68ce54	ported	feat(agent): promote durable harness API
+4b85cd9786d736e22dc1f3ae91067b4cc5a24b2c	not-applicable	harness-v2 mark task in progress
+05bf9df65155e047e4ba8459eaee9735e29a2e53	not-applicable	feat: remove legacy server implementation (#7614)
+71f6c25c369fcbb03dc52fe631790b9b556f609d	ported	fix(ai): update Groq Qwen reasoning override
+b0d382e25afd7bdf0bbce4300ec8b26ec78f4ca4	ported	fix(tui): add editor viewport key aliases (closes #7574)
+79cc1ef00ae0643a747f399c267dc8c6c39b5d01	ported	fix(agent): own SQLite backend tests in storage package (#7626)
+fc4a3d99bc03b3f2ba01529ef8f0369669b48272	ported	fix(coding-agent): honor output padding for errors
+b08e114f7a5a890edb2d6ddc4eb682440d91f54f	not-applicable	docs(agent): define harness implementation packages
+7830975233e4f94583dff2117a68a0ed289cdf15	not-applicable	feat(tui): add Darwin native build recipe
+6a140371d6fa1069f89724741de912ab2f266ef8	ported	fix(agent): handle Windows resource paths
+cc4aa1a2e0ac1f56a79c2c57435b6d90c06834fb	not-applicable	fix(tui): include Darwin native rebuild sources
+588915ec71714688cee8b7153339e8bdebb3e82e	not-applicable	docs(agent): clarify JSONL fork entry replay
+73dd066ee5384883477d1e9fbebec48976e5a810	ported	fix(tui): detect Windows Shift+Enter
+464804e1561191585f208e730d8373a1b21d4e56	ported	fix(tui): merge upstream main
+0df5a69e5e119f8421f4f572d9a3c2ba4c0f5a39	not-applicable	docs(agent): harness-v2: count forked messages in session stats
+a80008b96c933dd13346f8504e425279c5b6a68f	not-applicable	chore: rename storage package to session-backends
+46b53b995b4c1e4fa2a29318cba4163cc63f86c4	ported	fix: retry transient management HTTP requests (#7632)
+66534fbdc7bb09492b40142471bbbb87b4a4d5bc	ported	feat(coding-agent): render Mermaid diagrams (#7624)
+bb6a1cddc72de48b12257df83fd04495303dbd22	ported	refactor(server): rename backend contract to service (#7643)
+2c233a5c04f12ada58e3908c376c5e28bfdb38ef	ported	fix(tui): add iterm payload size for xterm.js image addon (#7612)
+845bb970f315918f5505e9a51d209b359109f820	ported	fix: build error on request info (#7645)
+7bdeeb8f9358624dc76652cd701acd5ece65e64c	ported	fix(agent): count copied messages in fork stats
+dab70b2cd47c39d6c42365683f9fbf26fa2c8b0b	ported	fix(server): sanitize service failures (#7644)
+f909da2bf0e39ebeca9b2608f511d4167435360e	not-applicable	docs(agent): reserve harness R0 work package
+591f22a618639ae65c5e29fb7cd7fbc4a6260dbc	ported	feat(agent): add indexed harness recovery queries (#7646)
+7cf90c1d183bd6de8b113677f05f5daffcd80fdf	ported	fix(coding-agent): avoid model store read lock contention
+651d5d6a53690b3ec87b72fca0b3f993ac5ec748	ported	partial harness v2/json backend (#7611)
+e77e2b751cbd28313073ed2de43d4b3294c73dcd	ported	fix(agent): correct JSONL fork entry semantics
+afdf73661b980e8ced8d40aaa5cc9c6ae52df4ae	not-applicable	docs(agent): reserve harness R1 work package
+1022a9e8244df5c35e2288196069c7cec3b4dd70	ported	fix(agent): list SQLite sessions without writer claims (#7655)
+a5953d2e1530e44d905b836ebad32dfd8d4145a8	ported	feat(agent): validate harness recovery record logs
+c38319ea10ea98e5caedaad2ea1750f4baedd111	ported	fix(agent): share state between memory and JSONL sessions
+b780d20aa17c4144ace7bff728150993236b88ee	ported	fix(tui): close truncated OSC 8 links (#7657)
+ea7bfdc08bc2859cde8292655f075b37ae1da1a9	not-applicable	docs(agent): unreserve R2 work package
+162b1883bd806e02cf4db2dbfc15f900c23f1494	ported	feat(agent): add JSONL metadata contracts
+ac27947f7bb7df3182f189be8bc4f099986b3191	ported	feat(agent): split JSONL session backend modules
+2901362533b848cfe3a3269070280e8caa033b1f	not-applicable	docs(agent): reserve harness I0 and L1-L3 work packages
+c518004666033ade0de072dbf4ceb6b94dcd0882	not-applicable	docs(agent): clarify lane reduction contract (#7662)
+abac29f671f320f497502628592a6882d2c166f6	not-applicable	docs(agent): reserve harness R2 work package
+14c89ad9992ce19857f59555ec1342594b9fc0fa	not-applicable	chore: UnavailableRegistry
+ed303b9bd61cb2c5d2870590074b044ad9ed98ec	not-applicable	chore: scaffold test
+7a103289d9e45b0f9c9bf08e0046829900af8224	not-applicable	docs: f0 done
+a79b22622a4def33465a7a16b6c7040c394b76f0	ported	fix(agent): match coding-agent JSONL session layout
+2c79ce45321626d76857415c4670442e7be769eb	ported	fix(coding-agent): avoid custom store lock convoys
+4d68d9355131361a831b361b58d89b028bf5d247	ported	fix(coding-agent): shorten file lock retry delays
+ce5d98cc001ee4a7ddea5e287aca7ed7088f6f3b	ported	fix(coding-agent): keep unit model stores in memory
+b3ec7c00688480737146b58114fc05420f5cc09e	ported	fix(agent): stop JSONL repositories from retaining sessions
+2f550d827d468a00d91626ab54118f5802387a46	ported	fix: project open operation id to lanes (#7654)
+c7fc779408f7b36742608f03d047b45f470594a3	ported	feat(agent): complete JSONL codec contract coverage
+48b8b547c8b3ccc53ac819416a92b0e918809e70	ported	fix(agent): require JSONL session cwd at creation
+acb2fd984997448b53a60e1034d045a4bfe56f51	ported	fix(agent): complete JSONL storage round-trip coverage
+e61d8f4f4447cdaf0dd76d79a95c512fec900623	not-applicable	docs(agent): mark JSONL J1 complete
+104364f4c5d48b8136461227e9be0a490c1f72bc	not-applicable	docs(agent): mark JSONL J2 complete
+17f720489fab02413c549c73bb407b8d6ef500c4	ported	fix(agent): validate required JSONL mutation fields
+9524d3a580ec508e7c82788446ab9692799d53be	ported	fix(coding-agent): normalize Windows shell drive paths
+29d9f087cc7b9064998f91e97ab5e89e5b67dff7	ported	fix(tui): avoid throttling keyboard input
+4254e0d93a9fe32d1d9592e747d8ec4b871ab4c7	not-applicable	fix(tui): include Windows native rebuild sources
+459eb5eba8582fcedd713e0c160903ce3e972a51	not-applicable	docs(agent): finalize harness telemetry design
+3852cb2b813243f3c81a873ed97827798aa7dbeb	ported	fix(coding-agent): send prompts queued during compaction
+8ecf8a9883d1cb7c78d07c0fd64d32d6a1fd2c4c	ported	feat(coding-agent): support AGENTS.override.md (#7681)
+229afb825cfc880714a6f38044531e8d4bcc6ef8	ported	fix(tui): skip OSC 8 scan for plain prefixes (#7665)
+16ad96ae89c028f9058c8de2fad0ab45c20ce233	ported	feat(tui): add configurable prompt history actions
+05e89b4188d1b0b4631d470300ce5960baf85a62	ported	feat(tui): render LaTeX math in Markdown
+d4eaf052b25ee6fd28985e0b8a408eab16e3afba	ported	fix(coding-agent): support path globs on Windows
+04d6447f7c492aafac97e2d2450b532650a85556	ported	feat: add typed telemetry contracts
+14cc26e86dfbb68d54e8bab0f955940bcf61b130	ported	fix(ai): restore Copilot models from account policy (#7672)
+2f7f75a20ec0ef3537883e847ff8e44cafb8cf84	ported	fix(ai): replace qwen3.8-max-preview with qwen3.8-max on token plan (#7670)
+2bb7ba49661e88e0c692facb537972287792af69	ported	feat: harness v2 r2 (#7669)
+6ca423447f55719f24815b34f29ffbb4596c80bd	ported	event bus leak fix (#7656)
+d07889da0e818627708e667874a1cdbd7dea47bf	ported	feat(ai): support thinking_token_budget on openai-completions (#7638)
+2c819a41ff1065f81e498d52d40597a7c20ecdc1	not-applicable	docs(agent): align telemetry design with implementation
+5446cd7545a07c9b6be00dcfba516b3d82e5a8d1	ported	feat(coding-agent): rename UI mode to TUI mode
+639a4664a5bf5267e003b847d92a9ea79a6fe6e3	not-applicable	fix(ai): update Anthropic abort test model
+db48124e9d4ae9648eff90599472a00cd9dbac56	not-applicable	docs: audit unreleased changelogs
+6b461b75b39b5a19b378dc42fbfbd1655bc446a6	ported	feat: extract telemetry package
+b0bd0ff9d5d9e2e41d0b23583bc5c1bd880e0ba7	ported	fix(coding-agent): only label known subscriptions in footer
+c0947e6448e2003771faee2fdf2b4de866a8c423	not-applicable	fix(ai): remove stale adaptive thinking model expectation
+69bab864d5d1ec1442887a176b9f3d1a21d017db	not-applicable	docs(agent): reserve harness v2 R3
+6282221b6ab7fe8825b4b25b647f9e8cec253d83	ported	fix(agent): scope JSONL session IDs to working directories
+8ed232548e366b594e2b9db122e98e73422153b9	not-applicable	docs: reserve QA1
+22db569a79fbd739349c0a8ad0d99fdbcb407357	not-applicable	docs: harness v2 test matrix
+95bfbdc910c24da6b5364ec10e93f0dee369d7f4	not-applicable	docs: mark QA1 done
+2920265ea72686faa76f960d10d3fb63c69af749	not-applicable	docs: update harness v2 md on how to use test matrix
+9859eaa2690b4ffb92f32128826d76979a684709	not-applicable	docs: reserve QA2
+77f4840320f28b8796af33bef58f6cb488b67e24	not-applicable	chore: qa2 tests (#7706)
+7f63f3783284a5e08f56cd431446d3aa331d7625	not-applicable	docs: add missed JSONL matrix rows
+b9497c8c1f2bfd922856c09d3f19117fea90ac74	ported	fix(ai): correct Fireworks GLM prompt caching, closes #7676
+35f5c265d3d0af7eea3889dbfde03e77e23b8f11	ported	feat: add telemetry reference adapter and span composition
+fadb74f684aaa7755463593e0564b58f9ed081e2	not-applicable	docs(agent): separate harness design from implementation status
+a838c069e6318edee8317eff759b74c3934745f0	ported	harness-v2 jsonl session atomic writes for forks & torn-tail truncation (#7707)
+29ad292f77400dfde14e30556859a0b1345465b7	ported	fix(agent): simplify jsonl append failure test
+6189e53b3372519bd8dac65b53410676e15940e4	ported	fix: replace session summaries with durable metadata (#7708)
+5cd46ee118e0f51d859843797857674c61cbd213	not-applicable	docs(agent): simplify harness work package workflow
+6d0455ff64ffc7a9b1b35b4207cf795c1899fe8e	not-applicable	docs: audit unreleased changelogs
+a5f43bf8aff3c55752432655f7334e3dafd1e256	not-applicable	Release v0.84.0
+38e8f2811369c78e165a573df65f61d095645d02	not-applicable	Add [Unreleased] section for next cycle
+aa601d7ba0e64e063d2b16d850d7bf32787b49ab	ported	fix(tui): correct LaTeX whitespace and matrix layouts
+d406aa3946ce5c6da4e67afc94693dcf3f6ff084	not-applicable	docs: reserve L1
+1532c99943b894fe1d12e15ac388c7b1887ca403	ported	fix(agent): reject reset during active runs (#7717)
+1eb988cfe88fb0ff740ff62583d2f16359f7b6b0	ported	feat(agent): allow blocked tool calls to terminate (#7715)
+beeca6ab740b166a6bbcf5627a3844985215f1ef	not-applicable	fix(coding-agent): disable bunfig autoload in compiled binaries (#7685)
+9ab91fb93e6bb755051de8d000a347a903dd32ec	ported	feat(coding-agent): expose tool prompt contributions (#7671)
+c03d78bdce7b154672084dcf286f4fbe2de466ac	ported	feat(ai): add Qwen Token Plan Individual provider (#7659)
+9b4f6a9e1f8f1db0d9d324456db108e2adc9253d	not-applicable	doc(changelog): Fix link
+fc3554e16defffcf76553b1bd12f676adf26d0a4	ported	fix(tui): reduce mouse tracking in terminal multiplexers
+58fc0431a7e3bb573b5943aa8e3af7a4ce6109ad	ported	feat(tui): select words and lines with multi-click (closes #7725)
+a261366bde90c24826eb77bfc600f1bb62ad36e2	ported	feat(coding-agent): add auth preflight
+6fb2d766aee340bed96fe81d55603c1670b3af2a	ported	feat(coding-agent): add configurable Harness factory (#7686)
+171c6b520bee23bed76fd34b730332f43067dddd	ported	fix(tui): correct multi-click text selection (#7733)
+a3e93ec85ea90ce94a305ab6c5ca96fba74baf24	ported	feat(tui): add half-page transcript scrolling
+c96bfaccd00d85e946493bc009b9613e5890ca7a	ported	fix(coding-agent): support Windows fullscreen right-click paste
+4e64de6950a16bebf40f067a5e735576fb8a33dd	ported	fix(coding-agent): soften PI environment guideline
+4688e4f92f38c9b82523454d8ba9eba7c8753700	not-applicable	docs(coding-agent): reconcile keybinding behavior (#7729)
+7cb2a51c0512097900bb9bfdd5eec3249eebb843	ported	fix(coding-agent): reduce automatic theme detection delay
+666d8972ff0b6da5067e05973249760964194769	ported	fix(coding-agent): preserve TUI wrapper routing (closes #7731)
+79f72fccecd1465930516fffbb53bfbd5b430da3	not-applicable	docs(tui): Clarify TUI test runner and remove stale Vitest  config (#7732)
+6ba4d23e7c953f601fca4bd3c8488e1e99d96fc8	not-applicable	docs: audit changelogs since v0.84.0
+53fa77ccd8a279eb87e92294ef3687b03ff80112	not-applicable	Release v0.84.1
+310411ba4666e207e1ce840ebadc8a5429f35398	not-applicable	Add [Unreleased] section for next cycle
+102667952585134e99b5d86c9ff07dd28c86962c	not-applicable	docs(agent): unreserve R3
+9d090bc5dcecf8f35354e09fe57413e57dea8e5b	ported	fix(agent): reject conflicting JSONL session creation
+f27941774e2bf0ba94e1651dcbd7115c5172a690	ported	fix(agent): read JSONL headers when listing sessions
+80ef7ff0f493c87e870e1bb73f0fdf0666c6a8a4	ported	fix(agent): populate session types with doc comments from design doc
+f562a1a44f32fa52c345738c0079d12eb2c5cfba	not-applicable	docs(agent): clarify branch query helpers
+87644c7b5749c255ac7ea96103c6531ebd7d0a46	not-applicable	docs(agent): clarify branch query start requirement
+10474bd697b2270defa200998f16baf2166775a8	ported	fix(agent): refactor jsonl codec
+e0900a6eaf6fb56312a868d9c06891129c4a5cbe	not-applicable	docs(agent): clarify record query semantics
+709aa03194301afd008a07d64ff1bf12e4f7ece6	not-applicable	docs(agent): add j6 typebox validation (#7768)
+f0feecd75250827b936b89664b6eab454c63528d	not-applicable	fix(ai): update OpenCode completions fixture
+958c13f25080b59d4b736193f972a8502a7a2f8b	not-applicable	docs(agent): restart checkpoint after auto-compaction
+4bf1bba203c699a0b79da669b084052c72b7a35a	not-applicable	docs(agent): reserve I2
+14ad9801be29948516cf55c65bcd864d5cf8ff9a	ported	feat(agent): add harness events subscription interface
+4a0e2f115ad46d34c19d200c6a71fa79d264092d	ported	fix(agent): complete JSONL crash and corruption handling
+fe10558eb3fa6d8fc3f6211bf1532e1659b9093d	ported	fix(ai): retry upstream request buffer failures
+7aca0d7b3e041a9e2b635e8370b2549f032932d6	ported	fix(agent): make JSONL decode errors explicit
+1dd2354052f7dd9fcdcc3097b87cf4b377853a74	ported	feat(agent): add buffered harness event watches
+d1a305613ea6f9e5d5ddc9e08f27393f9b73b33c	ported	feat(agent): add direct harness event listeners
+e7fb8eb2aca8a1126cc6f91b73ee38fd49ab7c59	ported	fix: no ctes in sqlite, delete indexes
+541ed488d89dbe11395e4c108f448e1e253ae4c1	not-applicable	docs(agent): remove legacy leaf entry requirements
+c3e7bc60a13b0a6fb80f7e8a867112ee4d10c92a	ported	feat(ai): preserve Codex end_turn for debugging (#7766)
+ac4ac9eaf69f2b01ca3af984a5c48f3b99b84278	ported	feat(coding-agent): configure fullscreen exit output
+5cfa30cc2c9efe107e322302f612c7cae56eaec2	not-applicable	docs(agent): add required fromHook to v4 summary entries
+02bd2d1c628d0e01c71b7088443d3cb117495d2d	ported	fix(ai): preserve Responses tool-call namespaces
+e47b8e37a6211ebd0b2942fa87059d64f81eec02	ported	feat(ai): use additional_tools for deferred tools
+9dd90a49711d088b86fdd9b4aea575913a8328a8	ported	fix(ai): replace Mistral SDK with native transport
+18dee5f0a89f41466e876cbbbfe77635cd250882	ported	fix(tui): stop recompositing full-width rows in the alt-screen painter
+6809fabbb4c7e17c256e850b3ea38ebf82613a54	not-applicable	docs(agent): allow clearing session names
+368e013dec766724d892cfa5cc247d2f2bee8795	not-applicable	chore(docs): fix ascii alignment in compaction docs
+c185d412382581860a489b4959737bad1d119492	ported	fix(ai): send max_tokens to DeepSeek APIs
+7bdb16c28d794a5ff8e7485479c8e37eccd9a8d8	ported	feat(agent): support clearing session names
+025957c258fea91653ee73ecffdc4a659ed60945	not-applicable	docs(agent): reconcile durable harness design
+4181f66e6b3ccbef760c2966ecd8b596b926fec6	not-applicable	docs(agent): tighten durable harness design
+45fac5bd517c371993b1781291d3a7971633a651	not-applicable	docs(agent): add explicit-state harness redesign
+157aa19c8cfa3acdddfccc4dcfaff672ddf165c3	not-applicable	docs(agent): clarify explicit operation records
+936aff00918de1187f085f123c2812d8f2d67745	not-applicable	docs(agent): complete explicit-state harness design
+47610217098d9ba8f22d223fa7c1413f9f5fd759	not-applicable	chore(docs): change 'reloads' phrasing in compaction docs
+31b513e316ab2b5ec736268350635511297fa3c1	not-applicable	chore(docs): change a bullet point in compaction docs
+3059b813161b9408144ce394283d95b198e6df44	not-applicable	docs(agent): add durable harness implementation spec
+afae6a1a998dbdfacc1004cbd26c6c6a99395bb2	not-applicable	fix(ai): update stale Gemini test model
+3709bef75e4f89508fe66f0e9d124c639de0695c	not-applicable	docs(agent): clarify durable storage terminology
+3dd4623eee136edb2a7a470aa8d4744519a84246	ported	Fix prompt formatting for current working directory (#7887)
+24c3b5e4c04e892b006a904016e4c92de64a221c	not-applicable	docs(agent): add storage and retention redesign proposal
+98145a6c063f00303405ef91ad4a5314670702e9	ported	fix(ai): sanitize empty Bedrock tool argument keys (#7882)
+7a6a1c2dbb5ef07040bac7a2b1c6a589a4f41e56	not-applicable	docs(agent): add harness-v3 skeleton merging spec and storage redesign
+87142a8d50640e93d43fcb35123439d642bc0304	not-applicable	docs(agent): write harness-v3 parts 0-2
+dea1b248f6e9ab5536ed46420b1755f4db4d4813	not-applicable	docs(agent): write harness-v3 part 3
+28657a2ffa6dbeccba74c166682e7a7ee547f5b4	not-applicable	docs(agent): write harness-v3 parts 4-5
+ec317e4ede466cf98617a4e664a834c5eb5f47e2	not-applicable	docs(agent): write harness-v3 parts 6-7
+cd6852a123f2c0cc646a41a2a52f3711a603b822	not-applicable	docs(agent): complete harness-v3 parts 8-9 and appendices
+2f9e9298a50f0fdec09e00f9b81b9e5b001a3405	not-applicable	docs(agent): remove superseded harness design documents
+8431bfbead9a9a901ecea860e989e27799cb1d0d	not-applicable	docs(agent): fix harness-v3 cold-read audit findings
+cf5f35216bc8e13087f16163f5f868b52872e8a5	not-applicable	docs(agent): record open harness-v3 audit findings
+9cb7f493e7b4a444ed66fbcb681d9e66c454eb3d	not-applicable	docs(coding-agent): document AI_AGENT process marker
+75c7fd6623f19a1331d27d6ac0060d8bce890c84	ported	fix(ai): declare Cloudflare Responses strict tools (#7934)
+a4453b79bb8d66b5f385b28ae0e33843c947504a	ported	fix: sqlite time to number
+b647d187932c76d4003728010daeed9c1b496a6a	ported	fix(ai): detect DeepSeek base URLs case-insensitively (#7933)
+00121ed99939ba614ddda4c5739e49bc027d02d4	ported	feat(tui): add fullscreen transcript search (#7913)
+24047f5dfb222ef7d26b554a0e576e5efa844024	not-applicable	docs(agent): strip partitioning to informative section, finish audit fixes
+1279952de4a22f021bff7ee714e3aa18010a5378	ported	feat(tui): add unbound single-line transcript scrolling actions (#7903)
+230029078d99d647ef7f9935c5ef87039d6aa0a4	not-applicable	feat(ai): AI Gateway transport over the Cloudflare AI binding (#7901)
+06ed871679a39019d924ac8a0b80b7902a2db398	ported	fix(tui): prevent split Alt+Enter from interrupting (#7899)
+e3798ca91f23a69c6833443005ec8a252f292efc	ported	fix(coding-agent): inherit subagent session config (#7897)
+4a879dd759936870ae4f6d424d5be465e7df55c6	ported	fix(tui): avoid repainting idle fullscreen sessions on focus loss (#7892)
+b987ead3583d2d2d796868f062b811abfa9ccb52	ported	feat(agent): expose `expandPromptTemplates` in `sendUserMessage` (#7857)
+2f8b4b42fecf2388f0f3326eab16c72eca3f62b0	ported	fix(ai): expose low reasoning effort for native DeepSeek V4 Flash (#7807)
+9c53c47f8086190d0b433216fcfffae69d3e255f	not-applicable	fix indent
+7915cdac64abdb5fe8674d017e69f8c4f3bf6ff9	ported	feat(ai): add strict tool schema conversion
+452923b54a6c8b2f95b80157a8f6c7963f183101	ported	fix(tui): parse multiline LaTeX arguments
+2a95ef70db83a19cf5500f31dc4ff8247e04043e	ported	fix(tui): apply PI_TUI_ESC_TIMEOUT only to lone ESC
+43b4e057ac816f0c1da7a48f560344ad23a5c1a3	not-applicable	docs(agent): fix implementation-readiness review findings
+9c75cd2f3a4a1f172b0a2f3cd99f40d8854b927c	not-applicable	docs(agent): add transaction traces to orientation examples
+f132845654d07fcd83e51bce7f04a0feb499485e	not-applicable	docs(agent): introduce the three stores before the worked examples
+b75be04d92fa1919eeb92fecc3d6051e745922cf	ported	refactor: search (#7797)
+f98629b3991aa1c7938f21249f9d9f0f320fd432	not-applicable	docs(agent): fix broken code fence in crash example
+638ac112398e4934182138247776809ac81085d9	not-applicable	docs(agent): resolve providers and tools at dispatch, drop lease machinery
+bcd056a8cdbd980a793d271d3ecbc4d05e679695	not-applicable	docs(agent): drop historical placement-payload rationale
+01701fd372f4e73aa1275f93a809f48fb529df94	not-applicable	docs(agent): clarify register references vs immutable snapshots
+b8349db8543242b33d5d0f5051e0aec667afba59	not-applicable	docs(agent): re-mint legacy ids at import, drop redundant register paragraph
+e1b444ba626a46c3fae0a7510e451871a9fbd551	not-applicable	docs(agent): tighten identity section
+2862eb4ed1463421d1d532041b7848d307508da7	not-applicable	docs(agent): reword cancellation triage note
+a348560b1582540ff525926bd1036b1d8ac2f650	not-applicable	docs(agent): drop historical changes appendix
+e33e74450aa34d758c3f5bbac396f628142947bb	not-applicable	docs(agent): replace historical rationale with direct statements
+b3edf017021f802af9b76ab4d95cb555c5427352	ported	fix(ai): bound Copilot policy update concurrency
+2545585395aa02b48b3fb2fb406757893904cb5d	not-applicable	docs(agent): one sqlite file per session, search becomes external
+47b021a6596e7d0b5d3338ff9679d8e90474114e	not-applicable	docs(agent): add seq-ranged usage ledger scan
+8d8c60da709b83f434f529c7b54ed224b2089cc1	not-applicable	docs(agent): specify optional pull-based search service
+b6557f43ec3cc93b5808a073e44a7c2ded75978d	not-applicable	docs(agent): make search a standalone service, open metadata-filter question
+51b45bc5bcecc37a3538af5b0eb3710cc1e2c3f7	not-applicable	docs(agent): restructure build order into parallel storage and runtime tracks
+85a2060811a23f1580c13ab59a210b1409092837	not-applicable	docs(agent): consolidate harness spec into harness.md
+40a3d8556ab7fb4a6b4da20ffe1f5dfc08ec121d	not-applicable	docs(agent): add table of contents
+2a9b4ebc680053c64e31f635b0b22d5e22564001	not-applicable	docs: document terminal-specific fullscreen mouse behavior (#7965)
+534bcbffb7e1e7551d9ee3572dfeb278e203e493	ported	fix(tui): handle LaTeX control spaces across line endings
+2e4d23959485279aa2da1a45103de2ea22d46395	ported	fix(tui): give focused fullscreen overlays wheel and viewport keys
+6d520c58d0b92cf420ab3b95d05ea75c59235cca	not-applicable	chore(docs): fix ascii alignment in compaction docs
+47b5119d09f00cb785409d53d74c4950acc7d803	ported	fix: trigger turn false should not start turn (#8022)
+4d9aa837c2ec6e0ebc7599f7e724c7c19c06441e	ported	feat(coding-agent): add configurable default tools
+541045ae0e30ac0375fde429f8a8baa057c009db	ported	fix(coding-agent): preserve extension tools with defaults
+9795d602306ef68a97585909e8e79f92a389057b	ported	feat(coding-agent): add per-run theme selection (#7722)
+c93ea6ccf0a398c293641e8001db06b8f7997c79	ported	fix(coding-agent): preserve usage in streaming events (#7982)
+581d75a89cea21e50d6a26df840352f94427f633	not-applicable	docs(coding-agent): document model catalog refresh
+7d8c11d37f8d6687cc6688998fcb0d3db45e6151	ported	fix(coding-agent): share concurrent model catalog refreshes
+46bb9a2c3bdb296b0d2179f7309ec6b79a7f3106	not-applicable	docs(coding-agent): clarify Windows paths in settings
+6f707eb36064e82af9c1320a7634f4dfad21049b	ported	fix(coding-agent): show managed-tool startup status in TUI
+9d2ec7ffabe927bfad2214c1cee25b6632a78dcf	ported	fix(ai): use pi user agent for Kimi Coding requests

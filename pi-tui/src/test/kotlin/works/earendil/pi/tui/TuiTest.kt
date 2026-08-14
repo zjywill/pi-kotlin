@@ -181,6 +181,61 @@ class TuiTest {
     }
 
     @Test
+    fun `alternate screen supports configurable single-line transcript scrolling`() {
+        val previous = getKeybindings()
+        setKeybindings(
+            KeybindingsManager(
+                TUI_KEYBINDINGS,
+                mapOf(
+                    "tui.altScreen.lineUp" to listOf("u"),
+                    "tui.altScreen.lineDown" to listOf("d"),
+                ),
+            ),
+        )
+        try {
+            val terminal = TestTerminal(columns = 20, rows = 6)
+            val viewport =
+                ViewportLayout(
+                    document = MutableLinesComponent((0..19).map { "line-$it" }),
+                    dock = LinesComponent(listOf("editor")),
+                    scrollbar = ScrollViewScrollbar.HIDDEN,
+                )
+            val tui = Tui(terminal, screenMode = TuiScreenMode.ALTERNATE)
+            tui.addChild(viewport)
+            tui.start()
+
+            assertEquals(15, viewport.viewportTop)
+            terminal.sendInput("u")
+            assertEquals(14, viewport.viewportTop)
+            terminal.sendInput("d")
+            assertEquals(15, viewport.viewportTop)
+        } finally {
+            setKeybindings(previous)
+        }
+    }
+
+    @Test
+    fun `focused fullscreen overlay receives wheel input instead of transcript viewport`() {
+        val terminal = TestTerminal(columns = 20, rows = 6)
+        val viewport =
+            ViewportLayout(
+                document = MutableLinesComponent((0..19).map { "line-$it" }),
+                dock = LinesComponent(listOf("editor")),
+                scrollbar = ScrollViewScrollbar.HIDDEN,
+            )
+        val tui = Tui(terminal, screenMode = TuiScreenMode.ALTERNATE)
+        tui.addChild(viewport)
+        tui.start()
+        val overlay = FocusableComponent("overlay")
+        tui.showOverlay(overlay)
+
+        terminal.sendInput("\u001B[<64;1;1M")
+
+        assertEquals(15, viewport.viewportTop)
+        assertEquals(listOf("\u001B[<64;1;1M"), overlay.inputs)
+    }
+
+    @Test
     fun `alternate screen copies only an active mouse selection`() {
         val terminal = TestTerminal(columns = 20, rows = 3)
         val tui = Tui(terminal, screenMode = TuiScreenMode.ALTERNATE)

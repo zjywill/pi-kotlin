@@ -260,7 +260,7 @@ class AnthropicOAuthProviderTest {
                 val request = fixture.requests.single()
                 assertEquals("Bearer kimi-oauth-token", request.header("authorization"))
                 assertNull(request.header("x-api-key"))
-                assertEquals("KimiCLI/1.5", request.header("user-agent"))
+                assertTrue(request.header("user-agent").orEmpty().startsWith("pi ("))
                 assertEquals(
                     listOf("Project instructions"),
                     providerJson

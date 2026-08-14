@@ -118,7 +118,7 @@ fun encodeJsonlMutation(mutation: DurableMutation): String =
                 put("kind", "fact")
                 put("seq", mutation.seq)
                 put("fact", "name")
-                put("name", mutation.name)
+                mutation.name?.let { put("name", it) }
             }
 
         is DurableMutation.Label ->
@@ -176,7 +176,7 @@ fun parseJsonlMutation(
                 "name" ->
                     DurableMutation.Name(
                         seq = seq,
-                        name = value.string("name", path, lineNumber),
+                        name = value.optionalString("name", path, lineNumber),
                     )
 
                 "label" ->

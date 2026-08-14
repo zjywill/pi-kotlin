@@ -79,6 +79,7 @@ internal data class SettingsSnapshot(
     val themes: List<String> = emptyList(),
     val theme: String? = null,
     val enabledModels: List<String>? = null,
+    val defaultTools: List<String>? = null,
     val npmCommand: List<String>? = null,
     val quietStartup: Boolean? = null,
     val tuiMode: TuiMode? = null,
@@ -135,6 +136,8 @@ internal class SettingsStore(
         }.packages
 
     fun mergedThemeSetting(): String? = project().theme ?: global().theme
+
+    fun mergedDefaultTools(): List<String>? = project().defaultTools ?: global().defaultTools
 
     fun mergedTuiMode(): TuiMode = project().tuiMode ?: global().tuiMode ?: TuiMode.REGULAR
 
@@ -306,6 +309,7 @@ internal class SettingsStore(
                     ?.takeIf(JsonPrimitive::isString)
                     ?.contentOrNull,
             enabledModels = raw.optionalSettingStringList("enabledModels", path),
+            defaultTools = raw.optionalSettingStringList("defaultTools", path),
             npmCommand =
                 raw["npmCommand"]?.let { value ->
                     runCatching { value.jsonArray.map { it.jsonPrimitive.content } }

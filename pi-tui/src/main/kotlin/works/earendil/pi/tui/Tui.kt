@@ -251,6 +251,11 @@ class Tui(
 
     fun focusedComponent(): Component? = focusedComponent
 
+    internal fun isOverlayFocused(): Boolean =
+        overlayStack.any { entry ->
+            entry.component === focusedComponent && isVisible(entry)
+        }
+
     fun addInputListener(listener: (String) -> InputListenerResult?): () -> Unit {
         inputListeners += listener
         return { inputListeners -= listener }
@@ -571,13 +576,20 @@ class Tui(
 
     private fun dispatchInput(initialData: String) {
         var data = initialData
+        val overlayOwnsViewportInput =
+            screenMode == TuiScreenMode.ALTERNATE && isOverlayFocused()
         if (
             screenMode == TuiScreenMode.ALTERNATE &&
+            !overlayOwnsViewportInput &&
             children.filterIsInstance<ViewportComponent>().any { it.handleViewportInput(data) }
         ) {
             return
         }
-        if (screenMode == TuiScreenMode.ALTERNATE && handleAlternateScreenInput(data)) {
+        if (
+            screenMode == TuiScreenMode.ALTERNATE &&
+            !overlayOwnsViewportInput &&
+            handleAlternateScreenInput(data)
+        ) {
             return
         }
         inputListeners.toList().forEach { listener ->

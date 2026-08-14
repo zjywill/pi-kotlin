@@ -50,6 +50,7 @@ internal fun loadPromptResources(
     promptTemplatePaths: List<String> = emptyList(),
     noPromptTemplates: Boolean = false,
     themePaths: List<String> = emptyList(),
+    initialThemeSetting: String? = null,
     noThemes: Boolean = false,
     projectTrusted: Boolean = false,
     homeDir: Path = defaultHomeDirectory(),
@@ -117,6 +118,7 @@ internal fun loadPromptResources(
             agentDir = normalizedAgentDir,
             projectTrusted = projectTrusted,
             themePaths = themePaths,
+            initialThemeSetting = initialThemeSetting,
             noThemes = noThemes,
             homeDir = homeDir,
             resolvedPackageResources = packageResources,
@@ -308,6 +310,7 @@ internal fun createSelectedCodingTools(
     noBuiltinTools: Boolean,
     allowedTools: List<String>?,
     excludedTools: List<String>?,
+    defaultTools: List<String>? = null,
     extensionTools: List<AgentTool> = emptyList(),
 ): List<AgentTool> {
     if (noTools) {
@@ -318,7 +321,9 @@ internal fun createSelectedCodingTools(
         if (noBuiltinTools) {
             emptyList()
         } else {
-            createCodingTools(cwd).filterNot { it.name in extensionNames }
+            createCodingTools(cwd)
+                .filterNot { it.name in extensionNames }
+                .filter { defaultTools == null || it.name in defaultTools }
         }
     return (builtInTools + extensionTools).filter { tool ->
         (allowedTools == null || tool.name in allowedTools) &&

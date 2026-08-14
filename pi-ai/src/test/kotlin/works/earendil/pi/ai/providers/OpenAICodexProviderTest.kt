@@ -18,6 +18,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import works.earendil.pi.ai.AssistantDone
+import works.earendil.pi.ai.AssistantMessage
 import works.earendil.pi.ai.CacheRetention
 import works.earendil.pi.ai.Context
 import works.earendil.pi.ai.InMemoryCredentialStore
@@ -33,7 +34,9 @@ import works.earendil.pi.ai.StopReason
 import works.earendil.pi.ai.StreamOptions
 import works.earendil.pi.ai.TextContent
 import works.earendil.pi.ai.ThinkingLevel
+import works.earendil.pi.ai.ToolCall
 import works.earendil.pi.ai.ToolDefinition
+import works.earendil.pi.ai.ToolResultMessage
 import works.earendil.pi.ai.Transport
 import works.earendil.pi.ai.UserMessage
 import kotlin.test.Test
@@ -364,6 +367,53 @@ class OpenAICodexProviderTest {
                 server.stop(0)
             }
         }
+
+    @Test
+    fun `loads added tools through additional_tools after their tool result`() {
+        val model =
+            codexModel().copy(
+                compat = buildJsonObject { put("supportsAdditionalTools", true) },
+            )
+        val context =
+            Context(
+                messages =
+                    mutableListOf(
+                        UserMessage("hello", timestamp = 1),
+                        AssistantMessage(
+                            content = listOf(ToolCall("call-1|fc-1", "base", JsonObject(emptyMap()))),
+                            api = model.api,
+                            provider = model.provider,
+                            model = model.id,
+                            stopReason = StopReason.TOOL_USE,
+                            timestamp = 2,
+                        ),
+                        ToolResultMessage(
+                            toolCallId = "call-1|fc-1",
+                            toolName = "base",
+                            content = listOf(TextContent("done")),
+                            addedToolNames = listOf("late"),
+                            isError = false,
+                            timestamp = 3,
+                        ),
+                    ),
+                tools =
+                    listOf(
+                        ToolDefinition("base", "Base", buildJsonObject { put("type", "object") }),
+                        ToolDefinition("late", "Late", buildJsonObject { put("type", "object") }),
+                    ),
+            )
+
+        val body = buildOpenAICodexRequestBody(model, context, StreamOptions())
+        val topLevelTools = body.getValue("tools").jsonArray
+        assertEquals(listOf("base"), topLevelTools.map { it.jsonObject.getValue("name").jsonPrimitive.content })
+        val additional =
+            body.getValue("input").jsonArray.first { it.jsonObject["type"]?.jsonPrimitive?.content == "additional_tools" }
+                .jsonObject
+        assertEquals(
+            listOf("late"),
+            additional.getValue("tools").jsonArray.map { it.jsonObject.getValue("name").jsonPrimitive.content },
+        )
+    }
 
     @Test
     fun `rejects invalid tokens`() =

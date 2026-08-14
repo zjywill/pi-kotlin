@@ -38,6 +38,7 @@ import works.earendil.pi.ai.ToolResultMessage
 import works.earendil.pi.ai.Usage
 import works.earendil.pi.ai.contentText
 import works.earendil.pi.ai.getGrammarToolInput
+import works.earendil.pi.ai.getJsonSchemaToolParameters
 import works.earendil.pi.ai.resolveGrammarConstrainedSampling
 import works.earendil.pi.ai.resolveJsonSchemaStrictSampling
 
@@ -90,6 +91,66 @@ internal fun mergedHeaders(
     }
     return result
 }
+
+internal fun withPiUserAgentForKimi(
+    model: Model,
+    headers: Map<String, String>,
+): Map<String, String> {
+    if (model.provider != "kimi-coding") return headers
+    val result =
+        headers
+            .filterKeys { !it.equals("user-agent", ignoreCase = true) }
+            .toMutableMap()
+    result["User-Agent"] = getPiUserAgent()
+    return result
+}
+
+internal fun getPiUserAgent(): String {
+    val osName = System.getProperty("os.name").orEmpty()
+    val isDarwin = osName.equals("Mac OS X", ignoreCase = true) || osName.equals("macOS", ignoreCase = true)
+    val platform =
+        when {
+            isDarwin -> "darwin"
+            osName.startsWith("Windows", ignoreCase = true) -> "win32"
+            else -> osName.lowercase().replace(' ', '_')
+        }
+    val systemDetails =
+        if (isDarwin) {
+            readUnameDetails()
+        } else {
+            null
+        }
+    val release = systemDetails?.release ?: System.getProperty("os.version").orEmpty()
+    val arch = systemDetails?.architecture ?: System.getProperty("os.arch").orEmpty()
+    return "pi ($platform $release; $arch)"
+}
+
+private data class UnameDetails(
+    val release: String,
+    val architecture: String,
+)
+
+private fun readUnameDetails(): UnameDetails? =
+    runCatching {
+        val release =
+            ProcessBuilder("uname", "-r")
+                .redirectErrorStream(true)
+                .start()
+                .inputStream
+                .bufferedReader()
+                .use { it.readText().trim() }
+        val architecture =
+            ProcessBuilder("uname", "-m")
+                .redirectErrorStream(true)
+                .start()
+                .inputStream
+                .bufferedReader()
+                .use { it.readText().trim() }
+        UnameDetails(
+            release = release.takeIf(String::isNotEmpty) ?: error("uname returned no release"),
+            architecture = architecture.takeIf(String::isNotEmpty) ?: error("uname returned no architecture"),
+        )
+    }.getOrNull()
 
 internal fun openAIMessage(
     message: Message,
@@ -228,6 +289,7 @@ internal fun openAITool(
         }
     }
     val strict = resolveJsonSchemaStrictSampling(tool, supportsStrictMode)
+    val parameters = getJsonSchemaToolParameters(tool, strict)
     return buildJsonObject {
         put("type", "function")
         put(
@@ -235,7 +297,7 @@ internal fun openAITool(
             buildJsonObject {
                 put("name", tool.name)
                 put("description", tool.description)
-                put("parameters", tool.parameters)
+                put("parameters", parameters)
                 if (supportsStrictMode) {
                     put("strict", strict ?: false)
                 }

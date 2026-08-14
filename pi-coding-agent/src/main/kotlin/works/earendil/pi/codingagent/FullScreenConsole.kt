@@ -37,6 +37,7 @@ import works.earendil.pi.tui.SizeValue
 import works.earendil.pi.tui.Terminal
 import works.earendil.pi.tui.Tui
 import works.earendil.pi.tui.TUI_KEYBINDINGS
+import works.earendil.pi.tui.TranscriptSearchBar
 import works.earendil.pi.tui.TuiScreenMode
 import works.earendil.pi.tui.ViewportLayout
 import works.earendil.pi.tui.matchesKey
@@ -58,6 +59,11 @@ internal interface FullScreenConsoleControl {
     fun flash(message: String) = Unit
 
     fun setScrollbarStyle(style: (String) -> String) = Unit
+
+    fun setSearchStyles(
+        match: (String) -> String,
+        current: (String) -> String,
+    ) = Unit
 
     fun setHeader(lines: List<String>?) = Unit
 
@@ -119,6 +125,7 @@ internal class FullScreenConsole(
     private val header = MutableLinesComponent()
     private val transcript = TranscriptComponent()
     private val widgetsAbove = SurfaceCollectionComponent()
+    private val searchBar = TranscriptSearchBar()
     private val prompt = PromptComponent()
     private val document = works.earendil.pi.tui.Container()
     private val dock = works.earendil.pi.tui.Container()
@@ -127,6 +134,7 @@ internal class FullScreenConsole(
             document = document,
             dock = dock,
             scrollbar = fullscreenScrollbar,
+            searchBar = searchBar,
         )
     @Volatile
     private var tuiMode = tuiMode
@@ -169,6 +177,7 @@ internal class FullScreenConsole(
         document.addChild(header)
         document.addChild(transcript)
         dock.addChild(widgetsAbove)
+        dock.addChild(searchBar)
         dock.addChild(prompt)
         dock.addChild(editorSlot)
         dock.addChild(widgetsBelow)
@@ -390,6 +399,13 @@ internal class FullScreenConsole(
 
     override fun setScrollbarStyle(style: (String) -> String) {
         viewport.setScrollbarStyle(style)
+    }
+
+    override fun setSearchStyles(
+        match: (String) -> String,
+        current: (String) -> String,
+    ) {
+        viewport.setSearchStyles(match, current)
     }
 
     override fun setHeader(lines: List<String>?) {

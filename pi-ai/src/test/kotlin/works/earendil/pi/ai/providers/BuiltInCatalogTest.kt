@@ -39,11 +39,11 @@ class BuiltInCatalogTest {
         assertEquals(3, catalog.schemaVersion)
         Instant.parse(assertNotNull(catalog.generatedAt))
         assertEquals(
-            "64517866e53821714ea5653d84bc08e6154b438fa3a65760859f1e97218e28fd",
+            "aba2d7fae935146aed631847a2de2a179f63eed57c2fed368db5eaeb04b7be8c",
             catalog.structureHash,
         )
-        assertEquals(38, catalog.modelsByProvider.size)
-        assertEquals(1_150, catalog.modelsByProvider.values.sumOf(List<works.earendil.pi.ai.Model>::size))
+        assertEquals(39, catalog.modelsByProvider.size)
+        assertEquals(1_243, catalog.modelsByProvider.values.sumOf(List<works.earendil.pi.ai.Model>::size))
         assertEquals("openai-responses", sol.api)
         assertEquals(272_000, sol.contextWindow)
         assertEquals(128_000, sol.maxTokens)
@@ -121,8 +121,8 @@ class BuiltInCatalogTest {
         val providers = builtInProviders()
         val ids = providers.map { it.id }.toSet()
 
-        assertEquals(39, providers.size)
-        assertEquals(1_150, providers.sumOf { it.getModels().size })
+        assertEquals(40, providers.size)
+        assertEquals(1_243, providers.sumOf { it.getModels().size })
         assertTrue(
             ids.containsAll(
                 setOf(
@@ -147,12 +147,12 @@ class BuiltInCatalogTest {
         )
         val copilot = providers.single { it.id == "github-copilot" }
         assertEquals("GitHub Copilot", copilot.name)
-        assertEquals(29, copilot.getModels().size)
+        assertEquals(31, copilot.getModels().size)
         assertEquals(
             mapOf(
                 "anthropic-messages" to 10,
-                "openai-completions" to 6,
-                "openai-responses" to 13,
+                "openai-completions" to 7,
+                "openai-responses" to 14,
             ),
             copilot.getModels().groupingBy { it.api }.eachCount(),
         )
@@ -171,7 +171,7 @@ class BuiltInCatalogTest {
         assertEquals(13, cloudflareWorkers.getModels().size)
         val vertex = providers.single { it.id == "google-vertex" }
         assertEquals("Google Vertex AI", vertex.name)
-        assertEquals(12, vertex.getModels().size)
+        assertEquals(13, vertex.getModels().size)
         val bedrock = providers.single { it.id == "amazon-bedrock" }
         assertEquals("Amazon Bedrock", bedrock.name)
         assertEquals(114, bedrock.getModels().size)

@@ -155,6 +155,7 @@ data class ToolCall(
     val name: String,
     val arguments: JsonObject,
     val thoughtSignature: String? = null,
+    val namespace: String? = null,
 ) : ContentBlock
 
 @Serializable(with = MessageContentSerializer::class)
@@ -296,6 +297,7 @@ data class AssistantMessage(
     val errorMessage: String? = null,
     override val timestamp: Long = System.currentTimeMillis(),
     val rawStopReason: String? = null,
+    val endTurn: Boolean? = null,
 ) : Message
 
 @Serializable

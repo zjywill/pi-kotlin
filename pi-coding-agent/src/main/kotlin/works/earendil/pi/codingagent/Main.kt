@@ -154,7 +154,7 @@ fun printHelp() {
           pi update [source|self|pi]   Update pi, extensions, or model catalogs
           pi list                      List installed extensions from settings
           pi config [-l]               Open TUI to enable/disable package resources (Tab switches scope)
-          pi auth <command>            Print credentials for external clients
+          pi auth <command>            Print credentials or check provider readiness
           pi <command> --help          Show help for install/remove/uninstall/update/list/config/auth
 
         Options:
@@ -189,6 +189,7 @@ fun printHelp() {
           --prompt-template <path>       Load a prompt template file or directory (can be used multiple times)
           --no-prompt-templates, -np     Disable prompt template discovery and loading
           --theme <path>                 Load a theme file or directory (can be used multiple times)
+          --use-theme <name[/name]>      Set the initial interactive theme for this run
           --no-themes                    Disable theme discovery and loading
           --no-context-files, -nc        Disable AGENTS.md and CLAUDE.md discovery and loading
           --export <file>                Export session file to HTML and exit
@@ -205,10 +206,10 @@ fun printHelp() {
 
         Examples:
           # Print a provider API key for an external client
-          pi auth print-api-key --provider openai --model gpt-5.5
+          pi auth print-api-key --provider openai
 
           # Print an OAuth bearer token for an external client (refreshes if expired)
-          pi auth print-bearer-token --provider openai-codex --model gpt-5.5
+          pi auth print-bearer-token --provider openai-codex
 
           # Interactive mode
           pi

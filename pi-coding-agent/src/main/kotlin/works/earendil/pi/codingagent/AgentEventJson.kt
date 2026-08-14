@@ -85,6 +85,15 @@ internal fun encodeAgentEvent(
 
             is AgentEvent.MessageUpdate -> {
                 put("type", "message_update")
+                if (linearStreaming) {
+                    put(
+                        "usage",
+                        rpcPayloadJson.encodeToJsonElement(
+                            works.earendil.pi.ai.Usage.serializer(),
+                            event.message.usage,
+                        ),
+                    )
+                }
                 if (!linearStreaming) {
                     put("message", encodeRpcMessage(event.message))
                 }

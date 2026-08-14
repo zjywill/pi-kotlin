@@ -104,6 +104,36 @@ class ModelsRefreshGenerationTest {
             assertEquals(listOf("cached"), models.getAvailable(provider.id).map(Model::id))
         }
 
+    @Test
+    fun `concurrent all-catalog refreshes share one in-flight operation`() =
+        runTest {
+            val started = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            var networkCalls = 0
+            val provider =
+                refreshProvider("shared") { context ->
+                    if (!context.allowNetwork) {
+                        return@refreshProvider
+                    }
+                    networkCalls++
+                    started.complete(Unit)
+                    release.await()
+                    context.publish(ModelsPublication())
+                }
+            val models = Models(listOf(provider))
+            val options = ModelsRefreshOptions(allowNetwork = true)
+
+            val first = async { models.refresh(options) }
+            started.await()
+            val second = async { models.refresh(options) }
+            kotlinx.coroutines.yield()
+
+            assertEquals(1, networkCalls)
+            release.complete(Unit)
+            assertTrue(first.await().errors.isEmpty())
+            assertTrue(second.await().errors.isEmpty())
+        }
+
     private class MutableRefreshProvider(
         override val id: String,
         private val refresh: suspend (RefreshModelsContext) -> Unit,

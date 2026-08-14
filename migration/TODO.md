@@ -1,11 +1,11 @@
 # Migration TODO
 
-Last reviewed: August 3, 2026
+Last reviewed: August 14, 2026
 
 ## Completion gate
 
 - Source repository: `/Users/junyizhang/Git/pi`
-- Reviewed source commit: `a96fb984d8c8b065fc5d193309fc812a882adee0`
+- Reviewed source commit: `9d2ec7ffabe927bfad2214c1cee25b6632a78dcf`
 - Target repository: `/Users/junyizhang/Git/pi-kotlin`
 - The migration is complete only when:
 
@@ -142,6 +142,19 @@ Last reviewed: August 3, 2026
   - [x] Classify contributor-approval metadata outside migrated package paths
   - [x] Serialize editor state across input, autocomplete, and masked rendering
 
+- [x] Upstream synchronization through `9d2ec7ff`
+  - [x] Port harness v2 durable metadata, JSONL crash/corruption handling, and
+        buffered/direct event subscriptions
+  - [x] Port deferred tool-search payloads, strict tool schemas, Codex
+        `additional_tools`, and provider request/stream compatibility fixes
+  - [x] Port fullscreen transcript scrolling/search, focused-overlay viewport
+        routing, configurable default tools, per-run themes, and TUI rendering
+        fixes
+  - [x] Port shared concurrent model refreshes, Qwen Token Plan Individual,
+        telemetry contracts, and Kimi Coding request identity
+  - [x] Classify documentation, packaging, test-only, and unrelated upstream
+        changes in the complete 248-commit synchronization range
+
 The July 30 synchronization passes advance the completed migration through
 `05558a79`. They port the OpenAI Chat malformed-delta fix and the `OpenCode Go`
 provider display name while classifying release and repository-metadata changes
@@ -170,6 +183,15 @@ retained with a regression test. The final serialized gate passes 529 tests and
 all 32 migration oracles. The pinned TypeScript login dialog currently renders
 generic `secret` prompts in clear text, while Kotlin preserves masked input and
 serializes editor state across concurrent rendering.
+
+The August 14 synchronization pass advances the reviewed source through
+`9d2ec7ff`. It ports the harness v2 durable/JSONL contracts and event watches,
+deferred tool-search payloads and strict schemas, fullscreen transcript
+navigation and focused-overlay routing, shared model refreshes, provider
+request fixes, and the latest telemetry/model catalog changes. The complete
+248-commit source range is classified in `migration/upstream-sync.tsv`; the
+remaining upstream commits are documentation, packaging, test-only, or other
+non-runtime changes.
 
 ## Completion checklist
 
@@ -300,29 +322,29 @@ serializes editor state across concurrent rendering.
 
 ## Follow-up
 
-No migration gaps remain against source commit `a96fb984`. Future work starts
+No migration gaps remain against source commit `9d2ec7ff`. Future work starts
 only when the TypeScript source advances and a new synchronization range is
 recorded.
 
-Evidence for the latest August 3 upstream synchronization:
+Evidence for the latest August 14 upstream synchronization:
 
-- [x] Source fast-forwarded from `01eeafd1` through `a96fb984`; model-data
-      hydration and `npm run build:offline` passed with a clean tracked
-      TypeScript worktree
+- [x] Source fast-forwarded from `a96fb984` through `9d2ec7ff` with a clean
+      tracked TypeScript worktree; `git pull --ff-only` reported it was already
+      up to date
 - [x] Every commit in the synchronization range is classified in
       `migration/upstream-sync.tsv`
 - [x] Hydrated schema-v3 catalog contains 38 provider files and 1,151 model
       records with manifest structure hash
       `8f42becde9d67b0f50730e36639d319dd0da3f4c26c0ca8d2c6e8c93a5a566a0`
-- [x] `./gradlew clean test installDist --max-workers=1 --no-daemon` with 529
+- [x] `./gradlew clean test installDist --max-workers=1 --no-daemon` with 573
       tests and no failures, errors, or skips
-- [x] All 32 deterministic migration oracles against `a96fb984`
+- [x] All 32 deterministic migration oracles against `9d2ec7ff`
 - [x] Installed TypeScript/Kotlin TUI matrix at 40, 80, and 120 columns in
       regular and fullscreen modes
-- [x] Installed `pi` version/help and `pi-server` spawn, status, direct
-      `get_state`, streamed `get_state`, stop, and empty-list smoke
+- [x] Installed `pi` version/help; `pi-server` Unix socket integration tests and
+      installed `pi --mode rpc` spawn/status/state/stop/empty-list smoke passed
 - [x] `./migration/audit-migration.sh sync` and
-      `./migration/audit-migration.sh full` through `a96fb984`
+      `./migration/audit-migration.sh full` through `9d2ec7ff`
 - [x] Kotlin API-key input remains masked and stable during concurrent renders;
       the pinned TypeScript clear-text secret-prompt regression is documented
 - [x] Zero unchecked migration TODOs, incomplete inventory rows, port markers,

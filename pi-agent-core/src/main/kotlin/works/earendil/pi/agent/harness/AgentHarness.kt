@@ -134,7 +134,8 @@ class AgentHarness private constructor(
     val name: String = "main"
     val session: DurableSessionTree = options.session
     val hooks = UnavailableRegistry("hooks.on", ::isClosed)
-    val events = UnavailableRegistry("events.on", ::isClosed)
+    private val eventBus = HarnessEventBus(isClosed = ::isClosed)
+    val events: HarnessEvents = eventBus
 
     private var closed = false
     private var model = options.model
@@ -323,6 +324,7 @@ class AgentHarness private constructor(
 
     suspend fun close() {
         closed = true
+        eventBus.close()
     }
 
     private fun isClosed(): Boolean = closed

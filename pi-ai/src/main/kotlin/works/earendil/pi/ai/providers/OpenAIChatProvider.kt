@@ -525,6 +525,7 @@ private data class OpenAIChatCompat(
 private fun openAIChatCompat(model: Model): OpenAIChatCompat {
     val provider = model.provider
     val baseUrl = model.baseUrl
+    val normalizedBaseUrl = baseUrl.lowercase()
     val isZai =
         provider == "zai" ||
             provider == "zai-coding-cn" ||
@@ -538,7 +539,7 @@ private fun openAIChatCompat(model: Model): OpenAIChatCompat {
     val isNvidia = provider == "nvidia" || "integrate.api.nvidia.com" in baseUrl
     val isAntLing = provider == "ant-ling" || "api.ant-ling.com" in baseUrl
     val isGrok = provider == "xai" || "api.x.ai" in baseUrl
-    val isDeepSeek = provider == "deepseek" || "deepseek.com" in baseUrl
+    val isDeepSeek = provider == "deepseek" || "deepseek.com" in normalizedBaseUrl
     val isNonStandard =
         isNvidia ||
             provider == "cerebras" ||
@@ -547,7 +548,7 @@ private fun openAIChatCompat(model: Model): OpenAIChatCompat {
             "api.x.ai" in baseUrl ||
             isTogether ||
             "chutes.ai" in baseUrl ||
-            "deepseek.com" in baseUrl ||
+            isDeepSeek ||
             isZai ||
             isMoonshot ||
             provider == "opencode" ||
@@ -557,6 +558,7 @@ private fun openAIChatCompat(model: Model): OpenAIChatCompat {
             isAntLing
     val useMaxTokens =
         "chutes.ai" in baseUrl ||
+            isDeepSeek ||
             isMoonshot ||
             isCloudflareGateway ||
             isTogether ||

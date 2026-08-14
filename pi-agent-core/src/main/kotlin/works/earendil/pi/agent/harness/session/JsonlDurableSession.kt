@@ -163,7 +163,7 @@ class JsonlDurableSessionStorage private constructor(
 
     override suspend fun getName(): String? = mutex.withLock { state.getName() }
 
-    override suspend fun setName(name: String) {
+    override suspend fun setName(name: String?) {
         mutex.withLock {
             appendAndApply(DurableMutation.Name(state.nextSequence, name))
         }

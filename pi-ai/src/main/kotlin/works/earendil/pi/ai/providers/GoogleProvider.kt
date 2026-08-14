@@ -43,7 +43,9 @@ import works.earendil.pi.ai.ToolCallStart
 import works.earendil.pi.ai.Usage
 import works.earendil.pi.ai.contentText
 import works.earendil.pi.ai.createAssistantMessageEventStream
+import works.earendil.pi.ai.getJsonSchemaToolParameters
 import works.earendil.pi.ai.http.postSse
+import works.earendil.pi.ai.resolveJsonSchemaStrictSampling
 
 class GoogleProvider(
     override val id: String,
@@ -568,11 +570,19 @@ private fun buildGoogleRequestBodyFromContents(
                                 "functionDeclarations",
                                 buildJsonArray {
                                     context.tools.forEach { tool ->
+                                        val strict =
+                                            resolveJsonSchemaStrictSampling(
+                                                tool,
+                                                supportsGoogleStrictToolSampling(model.id),
+                                            )
                                         add(
                                             buildJsonObject {
                                                 put("name", tool.name)
                                                 put("description", tool.description)
-                                                put("parametersJsonSchema", tool.parameters)
+                                                put(
+                                                    "parametersJsonSchema",
+                                                    getJsonSchemaToolParameters(tool, strict),
+                                                )
                                             },
                                         )
                                     }

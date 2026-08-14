@@ -123,7 +123,7 @@ class InMemoryDurableSessionStorage(
 
     override suspend fun getName(): String? = mutex.withLock { state.getName() }
 
-    override suspend fun setName(name: String) {
+    override suspend fun setName(name: String?) {
         mutex.withLock {
             state.applyMutation(DurableMutation.Name(state.nextSequence, name))
         }

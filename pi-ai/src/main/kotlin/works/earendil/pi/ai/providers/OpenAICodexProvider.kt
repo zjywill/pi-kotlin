@@ -25,8 +25,10 @@ import works.earendil.pi.ai.SimpleStreamOptions
 import works.earendil.pi.ai.StreamOptions
 import works.earendil.pi.ai.Transport
 import works.earendil.pi.ai.createGrammarToolInputProperties
+import works.earendil.pi.ai.getJsonSchemaToolParameters
 import works.earendil.pi.ai.http.postSse
 import works.earendil.pi.ai.resolveGrammarConstrainedSampling
+import works.earendil.pi.ai.resolveJsonSchemaStrictSampling
 
 class OpenAICodexProvider private constructor(
     override val id: String,
@@ -235,14 +237,33 @@ private fun buildOpenAICodexRequestBody(
     val supportsOpenAIGrammarTools =
         model.compat?.codexBooleanValue("supportsOpenAIGrammarTools") ?: false
     val supportsStrictMode = model.compat?.codexBooleanValue("supportsStrictMode") ?: true
+    val deferredMode =
+        when {
+            model.compat?.codexBooleanValue("supportsAdditionalTools") == true -> "additional-tools"
+            model.compat?.codexBooleanValue("supportsToolSearch") == true -> "tool-search"
+            else -> null
+        }
+    val toolPlacement =
+        splitDeferredResponsesTools(
+            context,
+            deferredMode != null,
+        )
     val grammarToolInputProperties =
-        createGrammarToolInputProperties(context.tools, supportsOpenAIGrammarTools)
+        createGrammarToolInputProperties(toolPlacement.first, supportsOpenAIGrammarTools)
     val input =
         responses.responseInput(
             model = model,
             context = context,
             grammarToolInputProperties = grammarToolInputProperties,
             includeSystemPrompt = false,
+            deferredTools = toolPlacement.second,
+            deferredToolsMode = deferredMode,
+            toolOptions =
+                ResponsesToolOptions(
+                    strict = null,
+                    supportsStrictMode = supportsStrictMode,
+                    supportsOpenAIGrammarTools = supportsOpenAIGrammarTools,
+                ),
         )
     val sessionId = openAICodexSessionId(options)
     return buildJsonObject {
@@ -263,42 +284,17 @@ private fun buildOpenAICodexRequestBody(
         put("parallel_tool_calls", true)
         options.temperature?.let { put("temperature", it) }
         options.serviceTier?.let { put("service_tier", it) }
-        if (context.tools.isNotEmpty()) {
+        if (toolPlacement.first.isNotEmpty()) {
             put(
                 "tools",
-                buildJsonArray {
-                    context.tools.forEach { tool ->
-                        val grammar =
-                            resolveGrammarConstrainedSampling(tool, supportsOpenAIGrammarTools)
-                        add(
-                            if (grammar != null) {
-                                buildJsonObject {
-                                    put("type", "custom")
-                                    put("name", tool.name)
-                                    put("description", tool.description)
-                                    put(
-                                        "format",
-                                        buildJsonObject {
-                                            put("type", "grammar")
-                                            put("syntax", grammar.format)
-                                            put("definition", grammar.definition)
-                                        },
-                                    )
-                                }
-                            } else {
-                                buildJsonObject {
-                                    put("type", "function")
-                                    put("name", tool.name)
-                                    put("description", tool.description)
-                                    put("parameters", tool.parameters)
-                                    if (supportsStrictMode) {
-                                        put("strict", JsonNull)
-                                    }
-                                }
-                            },
-                        )
-                    }
-                },
+                buildResponsesTools(
+                    toolPlacement.first,
+                    ResponsesToolOptions(
+                        strict = null,
+                        supportsStrictMode = supportsStrictMode,
+                        supportsOpenAIGrammarTools = supportsOpenAIGrammarTools,
+                    ),
+                ),
             )
         }
         openAICodexReasoning(model, options)?.let { put("reasoning", it) }
@@ -493,10 +489,7 @@ private fun resolveOpenAICodexServiceTier(
     }
 
 private fun defaultOpenAICodexUserAgent(): String {
-    val os = System.getProperty("os.name").orEmpty()
-    val release = System.getProperty("os.version").orEmpty()
-    val arch = System.getProperty("os.arch").orEmpty()
-    return "pi ($os $release; $arch)"
+    return getPiUserAgent()
 }
 
 private fun String.withBase64Padding(): String =

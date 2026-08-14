@@ -46,7 +46,7 @@ interface DurableSessionStorage<M : DurableSessionMetadata> {
 
     suspend fun getName(): String?
 
-    suspend fun setName(name: String)
+    suspend fun setName(name: String?)
 
     suspend fun getLabel(id: String): String?
 
@@ -69,7 +69,7 @@ interface DurableSessionTree {
 
     suspend fun getName(): String?
 
-    suspend fun setName(name: String)
+    suspend fun setName(name: String?)
 
     suspend fun getLabel(targetId: String): String?
 
@@ -118,7 +118,7 @@ class DurableSession<M : DurableSessionMetadata>(
 
     override suspend fun getName(): String? = storage.getName()
 
-    override suspend fun setName(name: String) = storage.setName(name)
+    override suspend fun setName(name: String?) = storage.setName(name)
 
     override suspend fun getLabel(targetId: String): String? = storage.getLabel(targetId)
 
@@ -234,7 +234,7 @@ class DurableSession<M : DurableSessionMetadata>(
 
         override suspend fun getName(): String? = storage.getName()
 
-        override suspend fun setName(name: String) = storage.setName(name)
+        override suspend fun setName(name: String?) = storage.setName(name)
 
         override suspend fun getLabel(targetId: String): String? = storage.getLabel(targetId)
 

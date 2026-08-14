@@ -58,6 +58,7 @@ data class Args(
     val promptTemplates: MutableList<String> = mutableListOf(),
     var noPromptTemplates: Boolean = false,
     val themes: MutableList<String> = mutableListOf(),
+    var useTheme: String? = null,
     var noThemes: Boolean = false,
     var noContextFiles: Boolean = false,
     var listModels: String? = null,
@@ -151,6 +152,19 @@ fun parseArgs(arguments: List<String>): Args {
             argument == "--skill" -> nextValue()?.let(result.skills::add)
             argument == "--prompt-template" -> nextValue()?.let(result.promptTemplates::add)
             argument == "--theme" -> nextValue()?.let(result.themes::add)
+            argument == "--use-theme" -> {
+                val value = arguments.getOrNull(index + 1)
+                if (value == null || value.startsWith("-")) {
+                    result.diagnostics +=
+                        Diagnostic(
+                            Diagnostic.Type.ERROR,
+                            "--use-theme requires a theme name",
+                        )
+                } else {
+                    result.useTheme = value
+                    index++
+                }
+            }
             argument == "--no-skills" || argument == "-ns" -> result.noSkills = true
             argument == "--no-prompt-templates" || argument == "-np" -> result.noPromptTemplates = true
             argument == "--no-themes" -> result.noThemes = true

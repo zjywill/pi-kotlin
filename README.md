@@ -5,7 +5,7 @@ Kotlin/JVM migration of the [Pi Agent Harness](https://github.com/earendil-works
 The first migration pass is pinned to upstream commit
 `9b3a2059171bcc74ad9d2cadeea6d186776cf2db` (July 22, 2026), and the reviewed
 incremental sync currently reaches
-`cee5ff7520d8828bed9955ef00419e995d1f91e0` (July 26, 2026). The target is
+`9d2ec7ffabe927bfad2214c1cee25b6632a78dcf` (August 13, 2026). The target is
 behavioral compatibility at the CLI, session, provider, agent-loop, tool, and
 terminal boundaries. JVM-native implementations replace Node/Bun-specific
 packaging and process internals.
@@ -20,6 +20,10 @@ packaging and process internals.
 | `pi-storage-sqlite` | `@earendil-works/pi-storage-sqlite-node` |
 | `pi-coding-agent` | `@earendil-works/pi-coding-agent` |
 | `pi-server` | `@earendil-works/pi-server` |
+
+`pi-server` is a library module. Server lifecycle and RPC behavior are exposed
+through the installed `pi --mode rpc` runtime; Gradle does not produce a
+separate `pi-server` executable distribution.
 
 ## Build
 

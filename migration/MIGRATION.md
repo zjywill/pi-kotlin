@@ -14,7 +14,7 @@ The source commit is immutable for the first migration pass. Upstream changes
 land in a later synchronization pass so that parity failures have one cause.
 
 The latest reviewed synchronization pass reaches
-`a96fb984d8c8b065fc5d193309fc812a882adee0` (August 3, 2026). The original
+`9d2ec7ffabe927bfad2214c1cee25b6632a78dcf` (August 13, 2026). The original
 baseline remains recorded so regressions can be attributed either to the first
 translation or to a later upstream sync.
 
@@ -93,13 +93,14 @@ features outside that slice remain migration work.
 
 ## Verification snapshot
 
-Verified on August 3, 2026 against source commit
-`a96fb984d8c8b065fc5d193309fc812a882adee0`:
+Verified on August 14, 2026 against source commit
+`9d2ec7ffabe927bfad2214c1cee25b6632a78dcf`:
 
-- `./gradlew clean test installDist --max-workers=1 --no-daemon`: passed, 529
+- `./gradlew clean test installDist --max-workers=1 --no-daemon`: passed, 573
   tests, 0 failures, 0 errors, and 0 skipped.
-- The source checkout passed `npm run hydrate:model-data` and
-  `npm run build:offline` while remaining clean.
+- The source checkout passed `npm ci --ignore-scripts` and
+  `npm run build:offline` after refreshing the lockfile's `openai@6.40.0`
+  dependency; the tracked source worktree remained clean.
 - The hydrated schema-v3 catalog contains 38 provider files and 1,151 model
   records. Its manifest structure hash is
   `8f42becde9d67b0f50730e36639d319dd0da3f4c26c0ca8d2c6e8c93a5a566a0`.
@@ -181,6 +182,9 @@ Verified on August 3, 2026 against source commit
 - Provider payload/stream parity passed with Qwen Token Plan reasoning controls,
   provider-native `rawStopReason` terminal fields, and OpenAI function arguments
   preserved when a malformed delta also includes an empty `custom` object.
+- Azure OpenAI Responses parity preserved proxy query parameters when appending
+  the `/responses` path, including the source-compatible encoded
+  `tenant=one%2Fresponses` request shape.
 - Current synchronization coverage also passed for compaction recovery, linear
   JSON/RPC events, authenticated model disambiguation, Baseten reasoning
   requests, normalized tool-result images, protocol-v1 transport-owned
@@ -192,7 +196,7 @@ Verified on August 3, 2026 against source commit
 - All 32 deterministic migration oracles passed against the same source
   baseline.
 - `./migration/audit-migration.sh sync` and
-  `./migration/audit-migration.sh full` both passed through `a96fb984`.
+  `./migration/audit-migration.sh full` both passed through `9d2ec7ff`.
 - Installed `pi --export` output was byte-identical to upstream with SHA-256
   `3613ceef433cc31040a5413427db35c4fd5b1d480aab0988b1613f634809bcb6`.
 - A Playwright browser smoke rendered the Markdown heading, two highlighted
@@ -204,16 +208,12 @@ Verified on August 3, 2026 against source commit
   `AGENTS.md` in startup Context order.
 - The installed `pi` distribution returned its version and complete help,
   including Baseten credentials and runtime UI mode.
-- The installed `pi-server` completed `serve`, `spawn`, `status`, direct
-  `get_state`, streamed `get_state`, `stop`, and empty-list read-back in an
-  isolated directory.
-- The final RPC parity smoke completed isolated `spawn`, `status`, direct
-  `get_state`, streamed `get_state`, `stop`, and empty-list read-back through
-  the installed `pi-server`.
-- The installed server launched a separate Kotlin RPC child for each instance.
-  Killing that child persisted `error` while `status` and `list` remained
-  available; killing and restarting the server converted the previously
-  persisted `online` instance to `stopped`.
+- The `pi-server` Unix socket integration tests completed session lifecycle,
+  shared runtime, durable ID, and backend substitution checks.
+- The installed `pi --mode rpc` parity smoke completed isolated spawn/status,
+  direct and streamed state reads, stop, empty-list read-back, process recovery,
+  and extension UI/event routing. No standalone `pi-server` executable is
+  produced because the Gradle module is library-only.
 - The installed JLine PTY passed 72 columns to live message and entry
   renderers, hid a `display=false` message, and exited normally. The
   no-terminal-size path independently fell back to 80 columns.
@@ -658,12 +658,12 @@ Verified on August 3, 2026 against source commit
 
 ## Remaining major gaps
 
-None against the pinned source commit `a96fb984`. A future source update must
+None against the pinned source commit `9d2ec7ff`. A future source update must
 start a new synchronization range and rerun the complete rulebook.
 
 ## Completeness audit
 
-The migration inventory is complete through `a96fb984`; no row in
+The migration inventory is complete through `9d2ec7ff`; no row in
 `migration/inventory.tsv` remains `partial` or `missing`.
 
 ```bash

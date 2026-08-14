@@ -2,11 +2,19 @@ package works.earendil.pi.codingagent
 
 import java.io.PrintStream
 import kotlinx.coroutines.CancellationException
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import works.earendil.pi.ai.ApiKeyCredential
+import works.earendil.pi.ai.AuthType
 import works.earendil.pi.ai.AuthResolutionOverrides
+import works.earendil.pi.ai.Credential
 import works.earendil.pi.ai.Model
 import works.earendil.pi.ai.Models
+import works.earendil.pi.ai.OAuthCredential
 
 internal enum class CredentialPrintKind {
+    CHECK,
     API_KEY,
     BEARER_TOKEN,
 }
@@ -15,6 +23,9 @@ internal data class CredentialPrintCommand(
     val kind: CredentialPrintKind,
     val arguments: List<String>,
     val minExpiryMs: Long? = null,
+    val json: Boolean = false,
+    val credentials: Boolean = false,
+    val noRefresh: Boolean = false,
 )
 
 internal class CredentialPrintException(
@@ -23,16 +34,20 @@ internal class CredentialPrintException(
 
 internal fun isCredentialPrintHelp(arguments: List<String>): Boolean =
     arguments.firstOrNull() == "auth" &&
-        arguments.getOrNull(1) in setOf(null, "help", "--help", "-h")
+        (
+            arguments.getOrNull(1) in setOf(null, "help", "--help", "-h") ||
+                arguments.drop(1).any { it == "--help" || it == "-h" }
+        )
 
 internal fun printCredentialPrintHelp(output: PrintStream = System.out) {
     output.println(
         """
         Usage:
-          pi auth print-api-key --model <model> [--provider <provider>]
-          pi auth print-bearer-token --model <model> [--provider <provider>] [--min-expiry <duration>]
+          pi auth print-api-key [--provider <provider>] [--model <model>]
+          pi auth print-bearer-token [--provider <provider>] [--model <model>] [--min-expiry <duration>]
+          pi auth check [--provider <provider>] [--model <model>] [--json] [--credentials] [--no-refresh]
 
-        Prints the configured credential alone on stdout. Provider inference uses configured credentials; specify --provider to select explicitly. Bearer tokens have a 30-minute minimum expiry by default. --min-expiry accepts ms, s, m, or h (for example, 30m).
+        Auth commands require at least one of --provider or --model. Checks refresh expired OAuth credentials by default; --no-refresh prevents this. --credentials emits the credential, or includes it in JSON output.
         """.trimIndent(),
     )
 }
@@ -43,21 +58,38 @@ internal fun parseCredentialPrintCommand(arguments: List<String>): CredentialPri
     }
     val kind =
         when (arguments.getOrNull(1)) {
+            "check" -> CredentialPrintKind.CHECK
             "print-api-key" -> CredentialPrintKind.API_KEY
             "print-bearer-token" -> CredentialPrintKind.BEARER_TOKEN
             else ->
                 throw CredentialPrintException(
                     "Unknown auth command \"${arguments.getOrNull(1).orEmpty()}\". " +
-                        "Use \"pi auth print-api-key\" or \"pi auth print-bearer-token\".",
+                        "Use \"pi auth print-api-key\", \"pi auth print-bearer-token\", or \"pi auth check\".",
                 )
         }
 
     val commandArguments = mutableListOf<String>()
     var minExpiryMs: Long? = null
+    var json = false
+    var credentials = false
+    var noRefresh = false
     var index = 2
     while (index < arguments.size) {
-        if (arguments[index] != "--min-expiry") {
-            commandArguments += arguments[index]
+        val argument = arguments[index]
+        if (argument == "--json" || argument == "--credentials" || argument == "--no-refresh") {
+            if (kind != CredentialPrintKind.CHECK) {
+                throw CredentialPrintException("$argument is only supported by auth check")
+            }
+            when (argument) {
+                "--json" -> json = true
+                "--credentials" -> credentials = true
+                "--no-refresh" -> noRefresh = true
+            }
+            index++
+            continue
+        }
+        if (argument != "--min-expiry") {
+            commandArguments += argument
             index++
             continue
         }
@@ -68,12 +100,28 @@ internal fun parseCredentialPrintCommand(arguments: List<String>): CredentialPri
         minExpiryMs = parseCredentialDuration(value)
         index += 2
     }
-    return CredentialPrintCommand(kind, commandArguments, minExpiryMs)
+    return CredentialPrintCommand(
+        kind = kind,
+        arguments = commandArguments,
+        minExpiryMs = minExpiryMs,
+        json = json,
+        credentials = credentials,
+        noRefresh = noRefresh,
+    )
 }
 
-internal fun validateCredentialPrintArgs(arguments: Args) {
-    if (arguments.model.isNullOrBlank()) {
-        throw CredentialPrintException("Credential printing requires --model <model>")
+internal fun validateCredentialPrintArgs(
+    arguments: Args,
+    kind: CredentialPrintKind = CredentialPrintKind.API_KEY,
+) {
+    if (arguments.provider.isNullOrBlank() && arguments.model.isNullOrBlank()) {
+        throw CredentialPrintException(
+            if (kind == CredentialPrintKind.CHECK) {
+                "Auth checks require --provider <provider> or --model <model>"
+            } else {
+                "Credential printing requires --provider <provider> or --model <model>"
+            },
+        )
     }
     if (arguments.apiKey != null) {
         throw CredentialPrintException(
@@ -85,7 +133,7 @@ internal fun validateCredentialPrintArgs(arguments: Args) {
         arguments.fileArgs.isNotEmpty() ||
         arguments.unknownFlags.isNotEmpty()
     ) {
-        throw CredentialPrintException("Credential printing only accepts --provider and --model")
+        throw CredentialPrintException("Auth commands only accept --provider and --model")
     }
 }
 
@@ -95,12 +143,61 @@ internal suspend fun resolveCredentialForPrint(
     kind: CredentialPrintKind,
     minExpiryMs: Long? = null,
 ): String {
-    validateCredentialPrintArgs(arguments)
-    val modelPattern = requireNotNull(arguments.model).trim()
+    validateCredentialPrintArgs(arguments, kind)
+    val modelPattern = arguments.model?.trim()?.takeIf(String::isNotEmpty)
     val credentialTypes =
         models
             .listCredentials()
             .associate { it.providerId to it.type }
+    if (modelPattern == null) {
+        val provider =
+            models
+                .getProviders()
+                .firstOrNull { it.id.equals(arguments.provider, ignoreCase = true) }
+                ?: throw CredentialPrintException(
+                    "Unknown provider \"${arguments.provider}\". Use --list-models to see available providers/models.",
+                )
+        val type = credentialTypes[provider.id]
+        if (kind == CredentialPrintKind.API_KEY && type == "oauth") {
+            throw CredentialPrintException(
+                "Provider \"${provider.id}\" is configured with OAuth, not an API key",
+            )
+        }
+        if (kind == CredentialPrintKind.BEARER_TOKEN && type != "oauth") {
+            throw CredentialPrintException(
+                "Provider \"${provider.id}\" is not configured with an OAuth bearer token",
+            )
+        }
+        val resolution =
+            models.getAuth(
+                provider.id,
+                if (kind == CredentialPrintKind.BEARER_TOKEN) {
+                    AuthResolutionOverrides(
+                        minOAuthValidityMs = minExpiryMs ?: DEFAULT_BEARER_TOKEN_MIN_EXPIRY_MS,
+                    )
+                } else {
+                    AuthResolutionOverrides()
+                },
+            )
+        val authorization =
+            resolution
+                ?.auth
+                ?.headers
+                ?.entries
+                ?.firstOrNull { (name) -> name.equals("authorization", ignoreCase = true) }
+                ?.value
+        val value =
+            if (kind == CredentialPrintKind.BEARER_TOKEN) {
+                resolution?.auth?.apiKey
+                    ?: authorization?.let { BEARER_TOKEN_REGEX.matchEntire(it)?.groupValues?.get(1) }
+            } else {
+                resolution?.auth?.apiKey
+            }
+        return value
+            ?: throw CredentialPrintException(
+                "No usable ${if (kind == CredentialPrintKind.API_KEY) "API key" else "OAuth bearer token"} is configured",
+            )
+    }
     val candidates =
         if (arguments.provider != null) {
             listOf(resolveExplicitCredentialModel(arguments.provider.orEmpty(), modelPattern, models))
@@ -210,16 +307,22 @@ internal suspend fun runCredentialPrintCommand(
         return 1
     }
     return try {
-        validateCredentialPrintArgs(parsed)
-        val credential =
-            resolveCredentialForPrint(
-                arguments = parsed,
-                models = loadModels(),
-                kind = command.kind,
-                minExpiryMs = command.minExpiryMs,
-            )
-        output.println(credential)
-        0
+        val models = loadModels()
+        if (command.kind == CredentialPrintKind.CHECK) {
+            validateCredentialPrintArgs(parsed, CredentialPrintKind.CHECK)
+            runAuthCheckCommand(parsed, models, command, output)
+        } else {
+            validateCredentialPrintArgs(parsed, command.kind)
+            val credential =
+                resolveCredentialForPrint(
+                    arguments = parsed,
+                    models = models,
+                    kind = command.kind,
+                    minExpiryMs = command.minExpiryMs,
+                )
+            output.println(credential)
+            0
+        }
     } catch (error: CancellationException) {
         throw error
     } catch (error: Throwable) {
@@ -233,6 +336,151 @@ internal suspend fun runCredentialPrintCommand(
         1
     }
 }
+
+private suspend fun runAuthCheckCommand(
+    arguments: Args,
+    models: Models,
+    command: CredentialPrintCommand,
+    output: PrintStream,
+): Int {
+    val providerId = resolveAuthProvider(arguments, models)
+    var result =
+        try {
+            val check = models.checkAuth(providerId)
+            if (check == null) {
+                AuthCheckOutput(
+                    status = "not_ready",
+                    provider = providerId,
+                    reason = "credentials_not_configured",
+                    authType = null,
+                )
+            } else if (!command.noRefresh && models.getAuth(providerId) == null) {
+                AuthCheckOutput(
+                    status = "not_ready",
+                    provider = providerId,
+                    reason = "credentials_not_configured",
+                    authType = null,
+                )
+            } else {
+                AuthCheckOutput(
+                    status = "ready",
+                    provider = providerId,
+                    reason = null,
+                    authType = check.type.wireName,
+                )
+            }
+        } catch (_: Throwable) {
+            AuthCheckOutput(
+                status = "invalid",
+                provider = providerId,
+                reason = "invalid_state",
+                authType = null,
+            )
+        }
+
+    val credential =
+        if (command.credentials && result.status == "ready") {
+            val value =
+                if (command.noRefresh) {
+                    models.getStoredCredential(providerId).credentialValue()
+                } else {
+                    models.getAuth(providerId)?.authCredentialValue()
+                }
+            if (value == null) {
+                result = result.copy(status = "not_ready", reason = "credential_not_available")
+            }
+            value
+        } else {
+            null
+        }
+
+    if (command.json) {
+        val json =
+            buildJsonObject {
+                put("status", result.status)
+                put("provider", result.provider)
+                result.reason?.let { put("reason", it) }
+                result.authType?.let { put("authType", it) }
+                credential?.let { put("credentials", it) }
+            }
+        output.println(protocolJson.encodeToString(JsonObject.serializer(), json))
+    } else {
+        output.println(credential ?: result.status)
+    }
+    return when (result.status) {
+        "ready" -> 0
+        "not_ready" -> 1
+        else -> 2
+    }
+}
+
+private data class AuthCheckOutput(
+    val status: String,
+    val provider: String,
+    val reason: String?,
+    val authType: String?,
+)
+
+private suspend fun resolveAuthProvider(
+    arguments: Args,
+    models: Models,
+): String {
+    arguments.provider
+        ?.trim()
+        ?.takeIf(String::isNotEmpty)
+        ?.let { requested ->
+            return models
+                .getProviders()
+                .firstOrNull { it.id.equals(requested, ignoreCase = true) }
+                ?.id
+                ?: throw CredentialPrintException(
+                    "Unknown provider \"$requested\". Use --list-models to see available providers/models.",
+                )
+        }
+    val requestedModel =
+        arguments.model
+            ?.trim()
+            ?.takeIf(String::isNotEmpty)
+            ?: throw CredentialPrintException("Auth checks require --provider <provider> or --model <model>")
+    val exactProviders =
+        models
+            .getModels()
+            .filter { model ->
+                model.id.equals(requestedModel, ignoreCase = true) ||
+                    "${model.provider}/${model.id}".equals(requestedModel, ignoreCase = true)
+            }.map(Model::provider)
+            .distinct()
+    if (exactProviders.size == 1) {
+        return exactProviders.single()
+    }
+    parseModelReference(null, requestedModel).provider?.let { provider ->
+        models.getProviders().firstOrNull { it.id.equals(provider, ignoreCase = true) }?.let { return it.id }
+    }
+    throw CredentialPrintException(
+        "Unable to resolve model \"$requestedModel\". Use --list-models to see available models.",
+    )
+}
+
+private fun Credential?.credentialValue(): String? =
+    when (this) {
+        is ApiKeyCredential -> key
+        is OAuthCredential -> access
+        null -> null
+    }
+
+private fun works.earendil.pi.ai.AuthResult.authCredentialValue(): String? =
+    auth.apiKey
+        ?: auth.headers.entries
+            .firstOrNull { (name) -> name.equals("authorization", ignoreCase = true) }
+            ?.value
+            ?.let { BEARER_TOKEN_REGEX.matchEntire(it)?.groupValues?.get(1) }
+
+private val AuthType.wireName: String
+    get() =
+        when (this) {
+            AuthType.API_KEY -> "api_key"
+            AuthType.OAUTH -> "oauth"
+        }
 
 private fun parseCredentialDuration(value: String?): Long {
     val match =

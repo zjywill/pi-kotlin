@@ -1,8 +1,12 @@
 package works.earendil.pi.codingagent
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import works.earendil.pi.agent.AgentEvent
 import works.earendil.pi.ai.TextDelta
 import works.earendil.pi.ai.fauxAssistantMessage
@@ -24,5 +28,6 @@ class AgentEventJsonTest {
         val internal = encodeAgentEvent(event)
         assertTrue("message" in internal)
         assertTrue("partial" in internal.getValue("assistantMessageEvent").let { it as kotlinx.serialization.json.JsonObject })
+        assertEquals(message.usage.totalTokens, linear["usage"]!!.jsonObject["totalTokens"]!!.jsonPrimitive.int)
     }
 }

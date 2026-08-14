@@ -8,6 +8,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
 import works.earendil.pi.agent.AgentThinkingLevel
 import works.earendil.pi.agent.AgentToolResult
 import works.earendil.pi.agent.QueueMode
@@ -178,8 +179,8 @@ class AgentHarnessTest {
             assertFailsWith<HarnessNotImplemented> {
                 harness.hooks.on("before_run", { Unit })
             }
-            assertFailsWith<HarnessNotImplemented> {
-                harness.events.on("event", { Unit })
+            assertFailsWith<IllegalArgumentException> {
+                harness.events.on("event", HarnessEventListener { })
             }
         }
 
@@ -193,6 +194,9 @@ class AgentHarnessTest {
             assertFailsWith<HarnessClosed> { harness.waitForIdle() }
             assertFailsWith<HarnessClosed> {
                 harness.hooks.on("before_run", { Unit })
+            }
+            assertFailsWith<HarnessClosed> {
+                harness.events.on("run_start", HarnessEventListener { })
             }
         }
 

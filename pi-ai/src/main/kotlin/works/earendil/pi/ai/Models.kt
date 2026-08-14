@@ -6,6 +6,11 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.TimeoutException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.currentCoroutineContext
@@ -155,6 +160,9 @@ class Models(
     private val providersById = ConcurrentHashMap<String, Provider>()
     private val refreshGenerations = ConcurrentHashMap<String, AtomicLong>()
     private val publicationMutexes = ConcurrentHashMap<String, Mutex>()
+    private val allRefreshScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val allRefreshLock = Any()
+    private val activeAllRefreshes = mutableMapOf<AllRefreshKey, ActiveAllRefresh>()
     private val authContext =
         authContext
             ?: object : AuthContext {
@@ -298,6 +306,8 @@ class Models(
             )
         }
 
+    suspend fun getStoredCredential(providerId: String): Credential? = readStoredCredential(providerId)
+
     suspend fun login(
         providerId: String,
         type: AuthType,
@@ -353,6 +363,52 @@ class Models(
     }
 
     suspend fun refresh(options: ModelsRefreshOptions = ModelsRefreshOptions()): ModelsRefreshResult {
+        if (options.providers == null) {
+            return refreshAllCatalogs(options)
+        }
+        return refreshInternal(options)
+    }
+
+    private suspend fun refreshAllCatalogs(options: ModelsRefreshOptions): ModelsRefreshResult {
+        val key = AllRefreshKey(options.allowNetwork, options.force)
+        val active =
+            synchronized(allRefreshLock) {
+                activeAllRefreshes[key]?.also { it.waiters++ }
+                    ?: run {
+                        val deferred =
+                            allRefreshScope.async(start = CoroutineStart.LAZY) {
+                                refreshInternal(options)
+                            }
+                        val created = ActiveAllRefresh(deferred)
+                        activeAllRefreshes[key] = created
+                        deferred.invokeOnCompletion {
+                            synchronized(allRefreshLock) {
+                                if (activeAllRefreshes[key] === created) {
+                                    activeAllRefreshes.remove(key)
+                                }
+                            }
+                        }
+                        deferred.start()
+                        created
+                    }
+            }
+        return try {
+            active.deferred.await()
+        } finally {
+            synchronized(allRefreshLock) {
+                active.waiters--
+                if (
+                    active.waiters == 0 &&
+                    activeAllRefreshes[key] === active &&
+                    !active.deferred.isCompleted
+                ) {
+                    active.deferred.cancel()
+                }
+            }
+        }
+    }
+
+    private suspend fun refreshInternal(options: ModelsRefreshOptions): ModelsRefreshResult {
         val errors = ConcurrentHashMap<String, Throwable>()
         val selectedProviders = options.providers
         val refreshableProviders =
@@ -376,6 +432,16 @@ class Models(
             errors = errors.toSortedMap(),
         )
     }
+
+    private data class AllRefreshKey(
+        val allowNetwork: Boolean,
+        val force: Boolean,
+    )
+
+    private class ActiveAllRefresh(
+        val deferred: Deferred<ModelsRefreshResult>,
+        var waiters: Int = 1,
+    )
 
     private suspend fun refreshProvider(
         provider: Provider,

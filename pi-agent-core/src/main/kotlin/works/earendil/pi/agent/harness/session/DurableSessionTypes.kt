@@ -384,7 +384,7 @@ sealed interface DurableLogItem {
 
     data class Name(
         override val seq: Long,
-        val name: String,
+        val name: String?,
     ) : DurableLogItem
 
     data class Label(
@@ -418,7 +418,7 @@ sealed interface DurableMutation {
 
     data class Name(
         override val seq: Long,
-        val name: String,
+        val name: String?,
     ) : DurableMutation
 
     data class Label(

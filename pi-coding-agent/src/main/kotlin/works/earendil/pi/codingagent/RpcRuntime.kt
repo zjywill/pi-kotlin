@@ -180,6 +180,7 @@ data class RpcRuntimeOptions(
     val promptTemplatePaths: List<String> = emptyList(),
     val noPromptTemplates: Boolean = false,
     val themePaths: List<String> = emptyList(),
+    val initialThemeSetting: String? = null,
     val noThemes: Boolean = false,
     val projectTrusted: Boolean? = null,
     val extensionPaths: List<String> = emptyList(),
@@ -776,7 +777,7 @@ class RpcRuntime(
                 else -> errorResponse(id, "prompt", "Agent is already processing a prompt")
             }
         }
-        val prompt = userMessage(command)
+        val prompt = userMessage(command, expandPromptTemplates = true)
         startPrompt(prompt)
         return successResponse(id, "prompt")
     }
@@ -1060,14 +1061,14 @@ class RpcRuntime(
     }
 
     private fun queueSteering(command: JsonObject) {
-        val message = userMessage(command)
+        val message = userMessage(command, expandPromptTemplates = true)
         steeringMessages += contentText(message.content)
         emitQueueUpdate()
         agent.steer(message)
     }
 
     private fun queueFollowUp(command: JsonObject) {
-        val message = userMessage(command)
+        val message = userMessage(command, expandPromptTemplates = true)
         followUpMessages += contentText(message.content)
         emitQueueUpdate()
         agent.followUp(message)
@@ -1829,6 +1830,12 @@ class RpcRuntime(
                 noBuiltinTools = options.noBuiltinTools,
                 allowedTools = options.tools,
                 excludedTools = options.excludeTools,
+                defaultTools =
+                    SettingsStore(
+                        cwd = sessionManager.getCwd(),
+                        agentDir = options.agentDir,
+                        projectTrusted = false,
+                    ).mergedDefaultTools(),
             )
         var createdRef: Agent? = null
         var selectedTools: List<AgentTool> = initialBuiltInTools
@@ -1847,6 +1854,7 @@ class RpcRuntime(
                         agentDir = options.agentDir,
                         projectTrusted = trusted,
                         themePaths = options.themePaths,
+                        initialThemeSetting = options.initialThemeSetting,
                         noThemes = options.noThemes,
                         offline = options.offline,
                     )
@@ -2049,6 +2057,7 @@ class RpcRuntime(
                 promptTemplatePaths = options.promptTemplatePaths,
                 noPromptTemplates = options.noPromptTemplates,
                 themePaths = options.themePaths,
+                initialThemeSetting = options.initialThemeSetting,
                 noThemes = options.noThemes,
                 projectTrusted = projectTrusted,
                 resolvedPackageResources = bootstrap.packageResources,
@@ -2074,6 +2083,7 @@ class RpcRuntime(
                 noBuiltinTools = options.noBuiltinTools,
                 allowedTools = options.tools,
                 excludedTools = options.excludeTools,
+                defaultTools = settingsStore.mergedDefaultTools(),
                 extensionTools = extensionTools,
             )
         availableTools = selectedTools
@@ -2228,6 +2238,7 @@ class RpcRuntime(
                         promptTemplatePaths = options.promptTemplatePaths,
                         noPromptTemplates = options.noPromptTemplates,
                         themePaths = options.themePaths,
+                        initialThemeSetting = options.initialThemeSetting,
                         noThemes = options.noThemes,
                         projectTrusted = extensionContextProvider()["projectTrusted"]
                             ?.jsonPrimitive
@@ -2395,7 +2406,8 @@ class RpcRuntime(
                             deliverAs == "nextTurn" ->
                                 queueExtensionMessage(message, followUp = true)
 
-                            agent.state.isStreaming || promptJob?.isActive == true ->
+                            (agent.state.isStreaming || promptJob?.isActive == true) &&
+                                options?.get("triggerTurn")?.jsonPrimitive?.booleanOrNull != false ->
                                 queueExtensionMessage(message, followUp = deliverAs == "followUp")
 
                             options?.get("triggerTurn")?.jsonPrimitive?.booleanOrNull == true ->
@@ -2410,10 +2422,14 @@ class RpcRuntime(
                 }
 
                 "send_user_message" -> {
-                    val message = extensionUserMessage(action.data)
-                    val deliverAs =
-                        (action.data["options"] as? JsonObject)
-                            ?.stringValue("deliverAs")
+                    val actionOptions = action.data["options"] as? JsonObject
+                    val message =
+                        expandUserMessage(
+                            extensionUserMessage(action.data),
+                            expandPromptTemplates =
+                                actionOptions?.get("expandPromptTemplates")?.jsonPrimitive?.booleanOrNull == true,
+                        )
+                    val deliverAs = actionOptions?.stringValue("deliverAs")
                     if (agent.state.isStreaming || promptJob?.isActive == true) {
                         queueExtensionMessage(message, followUp = deliverAs == "followUp")
                     } else if (!startPrompt(message)) {
@@ -2499,12 +2515,13 @@ class RpcRuntime(
         val refreshed =
             createSelectedCodingTools(
                 cwd = sessionManager.getCwd(),
-                noTools = options.noTools,
-                noBuiltinTools = options.noBuiltinTools,
-                allowedTools = options.tools,
-                excludedTools = options.excludeTools,
-                extensionTools = extensionTools,
-            )
+            noTools = options.noTools,
+            noBuiltinTools = options.noBuiltinTools,
+            allowedTools = options.tools,
+            excludedTools = options.excludeTools,
+            defaultTools = runtimeSettingsStore?.mergedDefaultTools(),
+            extensionTools = extensionTools,
+        )
         val newlyRegisteredNames =
             refreshed
                 .mapTo(mutableSetOf(), AgentTool::name)
@@ -3060,11 +3077,14 @@ class RpcRuntime(
         agent.state.messages = agent.state.messages + message
     }
 
-    private fun userMessage(command: JsonObject): UserMessage {
+    private fun userMessage(
+        command: JsonObject,
+        expandPromptTemplates: Boolean,
+    ): UserMessage {
         val rawText = command.string("message").orEmpty()
         val resources = promptResources
         val text =
-            if (resources == null) {
+            if (!expandPromptTemplates || resources == null) {
                 rawText
             } else {
                 expandResourceCommand(
@@ -3079,6 +3099,46 @@ class RpcRuntime(
                 ?.map { protocolJson.decodeFromJsonElement(ImageContent.serializer(), it) }
                 .orEmpty()
         return UserMessage(listOf(TextContent(text)) + images)
+    }
+
+    private fun expandUserMessage(
+        message: UserMessage,
+        expandPromptTemplates: Boolean,
+    ): UserMessage {
+        if (!expandPromptTemplates) {
+            return message
+        }
+        val resources = promptResources ?: return message
+        val content =
+            when (val raw = message.content) {
+                is works.earendil.pi.ai.MessageContent.Text ->
+                    works.earendil.pi.ai.MessageContent.Text(
+                        expandResourceCommand(
+                            text = raw.text,
+                            skills = resources.skills,
+                            templates = resources.promptTemplates,
+                        ),
+                    )
+
+                is works.earendil.pi.ai.MessageContent.Blocks ->
+                    works.earendil.pi.ai.MessageContent.Blocks(
+                        raw.blocks.map { block ->
+                            if (block is TextContent) {
+                                block.copy(
+                                    text =
+                                        expandResourceCommand(
+                                            text = block.text,
+                                            skills = resources.skills,
+                                            templates = resources.promptTemplates,
+                                        ),
+                                )
+                            } else {
+                                block
+                            }
+                        },
+                    )
+            }
+        return message.copy(content = content)
     }
 
     private fun resolvePath(value: String): Path {

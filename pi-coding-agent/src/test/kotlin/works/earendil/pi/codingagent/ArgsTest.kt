@@ -79,6 +79,16 @@ class ArgsTest {
     }
 
     @Test
+    fun `parses per-run theme and reports a missing theme name`() {
+        assertEquals("light/dark", parseArgs(listOf("--use-theme", "light/dark")).useTheme)
+
+        val missing = parseArgs(listOf("--use-theme", "--print"))
+        assertEquals(null, missing.useTheme)
+        assertEquals("--use-theme requires a theme name", missing.diagnostics.single().message)
+        assertTrue(missing.print)
+    }
+
+    @Test
     fun `model references preserve slash ids and parse thinking suffixes`() {
         assertEquals(
             ModelReference("openrouter", "moonshotai/kimi-k2.6", AgentThinkingLevel.HIGH),

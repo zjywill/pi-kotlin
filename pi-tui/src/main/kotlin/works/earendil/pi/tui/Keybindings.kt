@@ -51,8 +51,15 @@ val TUI_KEYBINDINGS: Map<String, KeybindingDefinition> =
         "tui.select.cancel" to KeybindingDefinition(listOf("escape", "ctrl+c"), "Cancel selection"),
         "tui.altScreen.pageUp" to KeybindingDefinition("pageUp", "Scroll viewport up one page"),
         "tui.altScreen.pageDown" to KeybindingDefinition("pageDown", "Scroll viewport down one page"),
+        "tui.altScreen.lineUp" to KeybindingDefinition(emptyList(), "Scroll viewport up one line"),
+        "tui.altScreen.lineDown" to KeybindingDefinition(emptyList(), "Scroll viewport down one line"),
         "tui.altScreen.previousPrompt" to KeybindingDefinition("ctrl+shift+up", "Jump to previous prompt"),
         "tui.altScreen.nextPrompt" to KeybindingDefinition("ctrl+shift+down", "Jump to next prompt"),
+        "tui.altScreen.search" to KeybindingDefinition("ctrl+shift+f", "Search transcript"),
+        "tui.altScreen.searchNext" to KeybindingDefinition(listOf("enter", "ctrl+g"), "Next search match"),
+        "tui.altScreen.searchPrevious" to
+            KeybindingDefinition(listOf("shift+enter", "ctrl+shift+g"), "Previous search match"),
+        "tui.altScreen.searchClose" to KeybindingDefinition("escape", "Close transcript search"),
         "tui.altScreen.top" to KeybindingDefinition("home", "Scroll viewport to top"),
         "tui.altScreen.bottom" to KeybindingDefinition("end", "Scroll viewport to bottom"),
     )

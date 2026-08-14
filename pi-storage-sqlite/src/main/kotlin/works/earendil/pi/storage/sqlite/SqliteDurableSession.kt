@@ -581,7 +581,7 @@ private class SqliteDurableSessionStorage(
 
     override suspend fun getName(): String? = mutex.withLock { state.getName() }
 
-    override suspend fun setName(name: String) {
+    override suspend fun setName(name: String?) {
         mutex.withLock {
             persist(DurableMutation.Name(state.nextSequence, name))
         }
@@ -682,7 +682,9 @@ private class SqliteDurableSessionStorage(
                             mutation.seq,
                             "name",
                             null,
-                            Json.encodeToString(kotlinx.serialization.serializer<String>(), mutation.name),
+                            mutation.name?.let {
+                                Json.encodeToString(kotlinx.serialization.serializer<String>(), it)
+                            },
                         )
 
                     is DurableMutation.Label ->
@@ -907,12 +909,7 @@ private fun readSessionName(
             if (!rows.next()) {
                 null
             } else {
-                val raw =
-                    rows.getString("value")
-                        ?: throw DurableSessionException(
-                            DurableSessionErrorCode.STORAGE,
-                            "Invalid SQLite session $sessionId: name must be a string",
-                        )
+                val raw = rows.getString("value") ?: return@use null
                 try {
                     Json.decodeFromString(kotlinx.serialization.serializer<String>(), raw)
                 } catch (error: Throwable) {

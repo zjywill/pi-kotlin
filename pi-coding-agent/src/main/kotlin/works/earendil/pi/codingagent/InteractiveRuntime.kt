@@ -181,6 +181,7 @@ class InteractiveRuntime(
                         promptTemplatePaths = args.promptTemplates,
                         noPromptTemplates = args.noPromptTemplates,
                         themePaths = args.themes,
+                        initialThemeSetting = args.useTheme,
                         noThemes = args.noThemes,
                         projectTrusted = args.projectTrustOverride,
                         extensionPaths = args.extensions,
@@ -1479,6 +1480,26 @@ class InteractiveRuntime(
         val fullScreen = console as? FullScreenConsoleControl ?: return
         fullScreen.setTitle(defaultInteractiveHeaderText)
         fullScreen.setScrollbarStyle { text -> runtime.currentTheme().bg("scrollbarThumb", text) }
+        fullScreen.setSearchStyles(
+            match = { text ->
+                runtime.currentTheme().underline(
+                    runtime.currentTheme().bg(
+                        "searchMatchBg",
+                        runtime.currentTheme().fg("searchMatchText", text),
+                    ),
+                )
+            },
+            current = { text ->
+                runtime.currentTheme().bold(
+                    runtime.currentTheme().inverse(
+                        runtime.currentTheme().bg(
+                            "searchMatchBg",
+                            runtime.currentTheme().fg("searchMatchText", text),
+                        ),
+                    ),
+                )
+            },
+        )
         fullScreen.setAutocompleteProvider(createAutocompleteProvider(runtime))
     }
 

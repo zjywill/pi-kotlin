@@ -52,7 +52,9 @@ import works.earendil.pi.ai.ToolResultMessage
 import works.earendil.pi.ai.Usage
 import works.earendil.pi.ai.contentText
 import works.earendil.pi.ai.createAssistantMessageEventStream
+import works.earendil.pi.ai.getJsonSchemaToolParameters
 import works.earendil.pi.ai.http.postSse
+import works.earendil.pi.ai.resolveJsonSchemaStrictSampling
 
 internal data class GoogleVertexRequest(
     val url: String,
@@ -329,7 +331,7 @@ internal fun buildGoogleVertexParams(
                 options.maxTokens?.let { put("maxOutputTokens", it) }
                 context.systemPrompt?.let { put("systemInstruction", sanitizeSurrogates(it)) }
                 if (context.tools.isNotEmpty()) {
-                    put("tools", googleVertexTools(context))
+                    put("tools", googleVertexTools(model, context))
                 }
                 resolveGoogleFunctionCallingMode(model.id, context.tools, options.toolChoice)?.let { mode ->
                     put(
@@ -589,7 +591,10 @@ private fun googleVertexUserParts(content: MessageContent): List<JsonObject> =
             }
     }
 
-private fun googleVertexTools(context: Context): JsonArray =
+private fun googleVertexTools(
+    model: Model,
+    context: Context,
+): JsonArray =
     buildJsonArray {
         add(
             buildJsonObject {
@@ -597,11 +602,19 @@ private fun googleVertexTools(context: Context): JsonArray =
                     "functionDeclarations",
                     buildJsonArray {
                         context.tools.forEach { tool ->
+                            val strict =
+                                resolveJsonSchemaStrictSampling(
+                                    tool,
+                                    supportsGoogleStrictToolSampling(model.id),
+                                )
                             add(
                                 buildJsonObject {
                                     put("name", tool.name)
                                     put("description", tool.description)
-                                    put("parametersJsonSchema", tool.parameters)
+                                    put(
+                                        "parametersJsonSchema",
+                                        getJsonSchemaToolParameters(tool, strict),
+                                    )
                                 },
                             )
                         }

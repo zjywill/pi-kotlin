@@ -158,6 +158,12 @@ internal class Theme internal constructor(
                     ?.jsonObject
                     ?.mapValues { (_, ansi) -> ansi.jsonPrimitive.content }
                     .orEmpty()
+                    .toMutableMap()
+                    .also { colors ->
+                        colors["text"]?.let { text ->
+                            colors.putIfAbsent("searchMatchText", text)
+                        }
+                    }
             val background =
                 value["bgAnsi"]
                     ?.jsonObject
@@ -167,6 +173,7 @@ internal class Theme internal constructor(
                     .also { colors ->
                         colors["selectedBg"]?.let { selected ->
                             colors.putIfAbsent("scrollbarThumb", selected)
+                            colors.putIfAbsent("searchMatchBg", selected)
                         }
                     }
             require(FOREGROUND_COLOR_TOKENS.all(foreground::containsKey)) {
@@ -388,6 +395,7 @@ internal fun createThemeRegistry(
     agentDir: Path = defaultAgentDirectory(),
     projectTrusted: Boolean,
     themePaths: List<String> = emptyList(),
+    initialThemeSetting: String? = null,
     noThemes: Boolean = false,
     terminalTheme: TerminalTheme = detectTerminalTheme(),
     colorMode: ThemeColorMode = detectThemeColorMode(),
@@ -418,7 +426,7 @@ internal fun createThemeRegistry(
             )
         }
     val requested =
-        resolveThemeSetting(settings.mergedThemeSetting(), terminalTheme)
+        resolveThemeSetting(initialThemeSetting ?: settings.mergedThemeSetting(), terminalTheme)
             ?: terminalTheme.wireName
     return ThemeRegistry(loaded, builtins, settings, requested)
 }
@@ -579,6 +587,8 @@ private fun createTheme(
         }.toMutableMap()
     parsed.putIfAbsent("thinkingMax", parsed.getValue("thinkingXhigh"))
     parsed.putIfAbsent("scrollbarThumb", parsed.getValue("selectedBg"))
+    parsed.putIfAbsent("searchMatchBg", parsed.getValue("selectedBg"))
+    parsed.putIfAbsent("searchMatchText", parsed.getValue("text"))
     val resolved =
         parsed.mapValues { (_, color) ->
             resolveColor(color, vars)
@@ -857,6 +867,7 @@ private val BACKGROUND_COLOR_TOKENS =
     setOf(
         "selectedBg",
         "scrollbarThumb",
+        "searchMatchBg",
         "userMessageBg",
         "customMessageBg",
         "toolPendingBg",
@@ -876,6 +887,7 @@ private val FOREGROUND_COLOR_TOKENS =
         "dim",
         "text",
         "thinkingText",
+        "searchMatchText",
         "userMessageText",
         "customMessageText",
         "customMessageLabel",
@@ -913,7 +925,14 @@ private val FOREGROUND_COLOR_TOKENS =
         "bashMode",
     )
 private val ALL_COLOR_TOKENS = FOREGROUND_COLOR_TOKENS + BACKGROUND_COLOR_TOKENS
-private val REQUIRED_COLOR_TOKENS = ALL_COLOR_TOKENS - setOf("thinkingMax", "scrollbarThumb")
+private val REQUIRED_COLOR_TOKENS =
+    ALL_COLOR_TOKENS -
+        setOf(
+            "thinkingMax",
+            "scrollbarThumb",
+            "searchMatchBg",
+            "searchMatchText",
+        )
 private val EXPORT_COLOR_TOKENS = setOf("pageBg", "cardBg", "infoBg")
 private val HEX_COLOR = Regex("^#([0-9a-fA-F]{6})$")
 private val ANSI_RGB = Regex("^\\u001B\\[(?:38|48);2;(\\d+);(\\d+);(\\d+)m$")

@@ -188,7 +188,7 @@ class AzureOpenAIResponsesProviderTest {
 
                 val captured = request.get()
                 assertEquals("/proxy", captured.path)
-                assertEquals("api-version=2026-07-01-preview", captured.query)
+                assertEquals("tenant=one%2Fresponses&api-version=2026-07-01-preview", captured.query)
                 assertEquals("secret", captured.headers["api-key"])
                 assertFalse("authorization" in captured.headers)
                 val body = providerJson.parseToJsonElement(captured.body).jsonObject

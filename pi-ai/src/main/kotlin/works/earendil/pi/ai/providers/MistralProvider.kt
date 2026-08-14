@@ -51,6 +51,7 @@ import works.earendil.pi.ai.ToolResultMessage
 import works.earendil.pi.ai.Usage
 import works.earendil.pi.ai.contentText
 import works.earendil.pi.ai.createAssistantMessageEventStream
+import works.earendil.pi.ai.getJsonSchemaToolParameters
 import works.earendil.pi.ai.http.ProviderHttpException
 import works.earendil.pi.ai.http.postSse
 import works.earendil.pi.ai.resolveJsonSchemaStrictSampling
@@ -386,7 +387,7 @@ internal fun buildMistralRequestBody(
                                     buildJsonObject {
                                         put("name", tool.name)
                                         put("description", tool.description)
-                                        put("parameters", tool.parameters)
+                                        put("parameters", getJsonSchemaToolParameters(tool, strict))
                                         put("strict", strict ?: false)
                                     },
                                 )

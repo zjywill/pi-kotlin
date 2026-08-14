@@ -60,6 +60,8 @@ class SessionHtmlExporterTest {
                 ?.content,
         )
         assertTrue(html.contains("--accent: #8abeb7;"))
+        assertTrue(html.contains("--searchMatchBg: #3a3a4a;"))
+        assertTrue(html.contains("--searchMatchText: #d4d4d4;"))
         assertTrue(html.contains("--exportPageBg: #18181e;"))
         assertTrue(html.contains("function safeMarkedParse(text)"))
         assertTrue(html.contains("hljs.highlight(code"))

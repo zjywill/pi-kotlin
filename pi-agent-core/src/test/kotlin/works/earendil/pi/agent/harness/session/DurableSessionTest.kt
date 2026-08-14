@@ -64,6 +64,9 @@ class DurableSessionTest {
             )
             assertEquals("Example", session.getName())
             assertEquals("checkpoint", session.getLabel(root.id))
+
+            session.setName(null)
+            assertEquals(null, session.getName())
         }
 
     @Test

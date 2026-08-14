@@ -40,6 +40,7 @@ import works.earendil.pi.ai.ToolCallStart
 import works.earendil.pi.ai.Usage
 import works.earendil.pi.ai.contentText
 import works.earendil.pi.ai.createAssistantMessageEventStream
+import works.earendil.pi.ai.getJsonSchemaToolParameters
 import works.earendil.pi.ai.http.postSse
 import works.earendil.pi.ai.resolveJsonSchemaStrictSampling
 
@@ -169,11 +170,14 @@ class AnthropicProvider(
             url = "${model.baseUrl.trimEnd('/')}/v1/messages",
             body = providerJson.encodeToString(JsonObject.serializer(), body),
             headers =
-                mergedHeaders(
-                    anthropicRequestHeaders(model, context, options, apiKey, isOAuthToken) +
-                        bearerHeaders,
-                    model.headers,
-                    options.headers,
+                withPiUserAgentForKimi(
+                    model,
+                    mergedHeaders(
+                        anthropicRequestHeaders(model, context, options, apiKey, isOAuthToken) +
+                            bearerHeaders,
+                        model.headers,
+                        options.headers,
+                    ),
                 ),
             timeoutMs = options.timeoutMs,
             maxRetries = options.maxRetries,
@@ -788,16 +792,17 @@ private fun buildAnthropicRequestBodyFromMessages(
                 buildJsonArray {
                     context.tools.forEachIndexed { index, tool ->
                         val strict = resolveJsonSchemaStrictSampling(tool, supportsStrictTools)
+                        val parameters = getJsonSchemaToolParameters(tool, strict)
                         val legacyInputSchema =
                             buildJsonObject {
                                 put("type", "object")
                                 put(
                                     "properties",
-                                    tool.parameters["properties"] ?: JsonObject(emptyMap()),
+                                    parameters["properties"] ?: JsonObject(emptyMap()),
                                 )
                                 put(
                                     "required",
-                                    tool.parameters["required"] ?: JsonArray(emptyList()),
+                                    parameters["required"] ?: JsonArray(emptyList()),
                                 )
                             }
                         add(
@@ -811,7 +816,7 @@ private fun buildAnthropicRequestBodyFromMessages(
                                 put(
                                     "input_schema",
                                     if (strict == true) {
-                                        JsonObject(tool.parameters + legacyInputSchema)
+                                        JsonObject(parameters + legacyInputSchema)
                                     } else {
                                         legacyInputSchema
                                     },

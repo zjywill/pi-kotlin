@@ -88,6 +88,12 @@ class CliRuntime(
                 noBuiltinTools = args.noBuiltinTools,
                 allowedTools = args.tools,
                 excludedTools = args.excludeTools,
+                defaultTools =
+                    SettingsStore(
+                        cwd = runtimeCwd,
+                        agentDir = agentDir,
+                        projectTrusted = false,
+                    ).mergedDefaultTools(),
             )
         var agentRef: Agent? = null
         var selectedTools: List<AgentTool> = initialBuiltInTools
@@ -382,6 +388,12 @@ class CliRuntime(
                 noBuiltinTools = args.noBuiltinTools,
                 allowedTools = args.tools,
                 excludedTools = args.excludeTools,
+                defaultTools =
+                    SettingsStore(
+                        cwd = runtimeCwd,
+                        agentDir = agentDir,
+                        projectTrusted = projectTrusted,
+                    ).mergedDefaultTools(),
                 extensionTools = extensionTools,
             )
         baseSystemPrompt = buildCodingSystemPrompt(runtimeCwd, selectedTools, promptResources)
@@ -463,6 +475,12 @@ class CliRuntime(
                     noBuiltinTools = args.noBuiltinTools,
                     allowedTools = args.tools,
                     excludedTools = args.excludeTools,
+                    defaultTools =
+                        SettingsStore(
+                            cwd = runtimeCwd,
+                            agentDir = agentDir,
+                            projectTrusted = projectTrusted,
+                        ).mergedDefaultTools(),
                     extensionTools = refreshedExtensionTools,
                 )
             val newlyRegisteredNames =

@@ -156,13 +156,27 @@ internal fun appendAzureResponsesPath(
         URLEncoder
             .encode(apiVersion, StandardCharsets.UTF_8)
             .replace("+", "%20")
-    return URI(
-        combined.scheme,
-        combined.rawAuthority,
-        combined.rawPath,
-        "api-version=$encodedVersion",
-        combined.rawFragment,
-    ).toASCIIString()
+    val preservedQuery =
+        combined.rawQuery
+            ?.removeSuffix("/responses")
+            ?.plus("%2Fresponses")
+    val query =
+        listOfNotNull(
+            preservedQuery?.takeIf(String::isNotEmpty),
+            "api-version=$encodedVersion",
+        ).joinToString("&")
+    return buildString {
+        append(combined.scheme)
+        append("://")
+        append(combined.rawAuthority)
+        append(combined.rawPath.orEmpty())
+        append('?')
+        append(query)
+        combined.rawFragment?.let {
+            append('#')
+            append(it)
+        }
+    }
 }
 
 private fun providerEnvValue(

@@ -38,6 +38,19 @@ class OpenAIChatZaiCompatTest {
         cases.forEach(::assertMaxTokensPayload)
     }
 
+    @Test
+    fun `runtime fallback recognizes DeepSeek providers and base urls case insensitively`() {
+        val base = builtInModels("deepseek").first()
+        val cases =
+            listOf(
+                base.copy(provider = "deepseek", baseUrl = "https://custom.invalid/v1", compat = null),
+                base.copy(provider = "custom", baseUrl = "https://api.deepseek.com", compat = null),
+                base.copy(provider = "custom", baseUrl = "https://API.DEEPSEEK.COM/v1", compat = null),
+            )
+
+        cases.forEach(::assertMaxTokensPayload)
+    }
+
     private fun assertMaxTokensPayload(model: works.earendil.pi.ai.Model) {
         val payload =
             buildOpenAIChatRequestBody(

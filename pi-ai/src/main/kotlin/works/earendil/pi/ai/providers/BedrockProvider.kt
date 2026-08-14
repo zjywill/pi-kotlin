@@ -78,6 +78,7 @@ import works.earendil.pi.ai.Context
 import works.earendil.pi.ai.ContentBlock as PiContentBlock
 import works.earendil.pi.ai.CustomMessage
 import works.earendil.pi.ai.ImageContent
+import works.earendil.pi.ai.getJsonSchemaToolParameters
 import works.earendil.pi.ai.Message as PiMessage
 import works.earendil.pi.ai.MessageContent
 import works.earendil.pi.ai.Model
@@ -815,7 +816,7 @@ private fun bedrockAssistantContent(
                                 buildJsonObject {
                                     put("toolUseId", block.id)
                                     put("name", block.name)
-                                    put("input", block.arguments)
+                                    put("input", sanitizeBedrockDocument(block.arguments))
                                 },
                             )
                         },
@@ -957,6 +958,7 @@ private fun buildBedrockToolConfig(
                         ?: false
                 context.tools.forEach { tool ->
                     val strict = resolveJsonSchemaStrictSampling(tool, supportsStrictMode)
+                    val parameters = getJsonSchemaToolParameters(tool, strict)
                     add(
                         buildJsonObject {
                             put(
@@ -964,7 +966,7 @@ private fun buildBedrockToolConfig(
                                 buildJsonObject {
                                     put("name", tool.name)
                                     put("description", tool.description)
-                                    put("inputSchema", buildJsonObject { put("json", tool.parameters) })
+                                    put("inputSchema", buildJsonObject { put("json", parameters) })
                                     if (strict == true) {
                                         put("strict", true)
                                     }
@@ -1240,6 +1242,21 @@ private fun sanitizeBedrockSurrogates(value: String): String {
     }
     return output.toString()
 }
+
+private fun sanitizeBedrockDocument(value: kotlinx.serialization.json.JsonElement): kotlinx.serialization.json.JsonElement =
+    when (value) {
+        is kotlinx.serialization.json.JsonArray ->
+            kotlinx.serialization.json.JsonArray(value.map(::sanitizeBedrockDocument))
+
+        is kotlinx.serialization.json.JsonObject ->
+            kotlinx.serialization.json.JsonObject(
+                value
+                    .filterKeys(String::isNotEmpty)
+                    .mapValues { (_, nested) -> sanitizeBedrockDocument(nested) },
+            )
+
+        else -> value
+    }
 
 internal fun mapBedrockStopReason(reason: String?): Pair<StopReason, String?> =
     when (reason) {
