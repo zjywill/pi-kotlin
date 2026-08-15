@@ -3,9 +3,6 @@ package works.earendil.pi.ai.providers
 import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -224,22 +221,32 @@ internal class GitHubCopilotOAuth(
         enterpriseDomain: String?,
     ): List<String> {
         val baseUrl = githubCopilotBaseUrl(copilotToken, enterpriseDomain)
-        val response =
-            transport.execute(
-                OAuthHttpRequest(
-                    url = "$baseUrl/models",
-                    method = "GET",
-                    headers =
-                        COPILOT_HEADERS +
-                            mapOf(
-                                "Accept" to "application/json",
-                                "Authorization" to "Bearer $copilotToken",
-                                "X-GitHub-Api-Version" to COPILOT_API_VERSION,
-                            ),
-                    body = "",
-                    timeoutMs = COPILOT_MODELS_TIMEOUT_MS,
-                ),
+        val request =
+            OAuthHttpRequest(
+                url = "$baseUrl/models",
+                method = "GET",
+                headers =
+                    COPILOT_HEADERS +
+                        mapOf(
+                            "Accept" to "application/json",
+                            "Authorization" to "Bearer $copilotToken",
+                            "X-GitHub-Api-Version" to COPILOT_API_VERSION,
+                        ),
+                body = "",
+                timeoutMs = COPILOT_MODELS_TIMEOUT_MS,
             )
+        var response = transport.execute(request)
+        if (response.status == 429) {
+            val retryAfterSeconds = response.header("retry-after")?.toDoubleOrNull()
+            val waitMs =
+                if (retryAfterSeconds != null && retryAfterSeconds.isFinite() && retryAfterSeconds > 0) {
+                    minOf(retryAfterSeconds * 1_000.0, MAX_RETRY_AFTER_MS.toDouble()).toLong()
+                } else {
+                    DEFAULT_RETRY_AFTER_MS
+                }
+            sleep(waitMs)
+            response = transport.execute(request)
+        }
         return parseAvailableGitHubCopilotModelIds(
             fetchJson(response),
             allowPolicyFallback = baseUrl == "https://api.individual.githubcopilot.com",
@@ -250,12 +257,8 @@ internal class GitHubCopilotOAuth(
         copilotToken: String,
         enterpriseDomain: String?,
     ) {
-        coroutineScope {
-            knownModelIds.map { modelId ->
-                async {
-                    enableModel(copilotToken, modelId, enterpriseDomain)
-                }
-            }.awaitAll()
+        for (modelId in knownModelIds) {
+            enableModel(copilotToken, modelId, enterpriseDomain)
         }
     }
 
@@ -297,6 +300,9 @@ internal class GitHubCopilotOAuth(
         }
     }
 }
+
+private fun OAuthHttpResponse.header(name: String): String? =
+    headers.entries.firstOrNull { (key, _) -> key.equals(name, ignoreCase = true) }?.value
 
 internal fun normalizeGitHubDomain(input: String): String? {
     val trimmed = input.trim()
@@ -456,6 +462,8 @@ private const val GITHUB_DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:d
 private const val COPILOT_API_VERSION = "2026-06-01"
 private const val COPILOT_EXPIRY_SKEW_MS = 5 * 60 * 1_000L
 private const val COPILOT_MODELS_TIMEOUT_MS = 5_000L
+private const val MAX_RETRY_AFTER_MS = 10_000L
+private const val DEFAULT_RETRY_AFTER_MS = 1_000L
 private const val MINIMUM_DEVICE_POLL_INTERVAL_MS = 1_000L
 private const val DEFAULT_DEVICE_POLL_INTERVAL_SECONDS = 5.0
 private const val SLOW_DOWN_INTERVAL_INCREMENT_MS = 5_000L

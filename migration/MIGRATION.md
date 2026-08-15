@@ -14,7 +14,7 @@ The source commit is immutable for the first migration pass. Upstream changes
 land in a later synchronization pass so that parity failures have one cause.
 
 The latest reviewed synchronization pass reaches
-`b1efcf7d7c5d7394fbb12ede0174e04d39ee7004` (August 14, 2026). The original
+`086c32e74530564922d011ade23ff582c9d63116` (August 15, 2026). The original
 baseline remains recorded so regressions can be attributed either to the first
 translation or to a later upstream sync.
 
@@ -93,10 +93,10 @@ features outside that slice remain migration work.
 
 ## Verification snapshot
 
-Verified on August 14, 2026 against source commit
-`b1efcf7d7c5d7394fbb12ede0174e04d39ee7004`:
+Verified on August 15, 2026 against source commit
+`086c32e74530564922d011ade23ff582c9d63116`:
 
-- `./gradlew clean test installDist --max-workers=1 --no-daemon`: passed, 579
+- `./gradlew clean test installDist --max-workers=1 --no-daemon`: passed, 580
   tests, 0 failures, 0 errors, and 0 skipped.
 - The source checkout passed `npm ci --ignore-scripts`, `npm run build:offline`,
   and `./test.sh`: 221 test files passed with 6 skipped, covering 1,927
@@ -198,14 +198,16 @@ Verified on August 14, 2026 against source commit
   normalization, concurrent masked-input rendering, Google/Vertex
   `MAX_TOKENS` and provider-error preservation during tool calls, generic SGR
   mouse-release handling, host-clipboard copy failure reporting, and
-  collapsed/expanded extension-tool fallback output.
+  collapsed/expanded extension-tool fallback output. GitHub Copilot policy
+  updates are serialized during login, and a rate-limited model catalog request
+  honors `Retry-After` and retries once.
 - `./migration/oracle/compare-tool-fallback.sh`: passed with normalized
   collapsed and expanded fallback rendering, configured expansion binding,
   remaining-line counts, and transcript persistence.
 - All 32 deterministic migration oracles passed against the same source
-  baseline.
+  commit.
 - `./migration/audit-migration.sh sync` and
-  `./migration/audit-migration.sh full` both passed through `b1efcf7d7`.
+  `./migration/audit-migration.sh full` both passed through `086c32e74`.
 - Installed `pi --export` output was byte-identical to upstream with SHA-256
   `3613ceef433cc31040a5413427db35c4fd5b1d480aab0988b1613f634809bcb6`.
 - A Playwright browser smoke rendered the Markdown heading, two highlighted

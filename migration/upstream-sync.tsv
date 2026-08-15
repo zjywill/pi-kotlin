@@ -518,3 +518,5 @@ d10c974b940d7ce3c8439fcdf02d140f3a206458	not-applicable	Changelog audit only
 914cf1472e715297caa30db4b9535d534a9eb718	ported	Release-generated OpenRouter image catalog adds Seedream 5.0 and Grok Imagine Image 2.0 models
 0e0021fbbe83d67338b910aca8820bd99126793d	not-applicable	Post-release changelog scaffolding only
 e429d90b800f9a37c8a5812f4c9c10a8cdcc85a7	ported	Z.AI Coding Plan defaults resolve glm-5.3 from the refreshed generated catalog
+d5278eaac3446a65e41d5f1392b2c79571858393	ported	GitHub Copilot model policy updates are sent sequentially to avoid login-time rate limiting
+086c32e74530564922d011ade23ff582c9d63116	ported	GitHub Copilot GET /models honors Retry-After and retries once after a 429

@@ -2,6 +2,7 @@ package works.earendil.pi.ai.providers
 
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
+import kotlinx.coroutines.yield
 import kotlinx.coroutines.test.runTest
 import works.earendil.pi.ai.AuthEvent
 import works.earendil.pi.ai.AuthInteraction
@@ -23,6 +24,8 @@ class GitHubCopilotOAuthTest {
             val sleeps = mutableListOf<Long>()
             val requests = mutableListOf<OAuthHttpRequest>()
             var polls = 0
+            var activePolicyRequests = 0
+            var maxActivePolicyRequests = 0
             val token = "tid=test;proxy-ep=proxy.individual.githubcopilot.com;exp=9999999999"
             val transport =
                 OAuthHttpTransport { request ->
@@ -55,11 +58,19 @@ class GitHubCopilotOAuthTest {
                                 """{"token":"$token","expires_at":9999999999}""",
                             )
 
-                        request.url.endsWith("/policy") ->
-                            OAuthHttpResponse(
-                                if (request.url.contains("claude-opus-4.7")) 500 else 200,
-                                "",
-                            )
+                        request.url.endsWith("/policy") -> {
+                            activePolicyRequests++
+                            maxActivePolicyRequests = maxOf(maxActivePolicyRequests, activePolicyRequests)
+                            try {
+                                yield()
+                                OAuthHttpResponse(
+                                    if (request.url.contains("claude-opus-4.7")) 500 else 200,
+                                    "",
+                                )
+                            } finally {
+                                activePolicyRequests--
+                            }
+                        }
 
                         request.url == "https://api.individual.githubcopilot.com/models" ->
                             OAuthHttpResponse(
@@ -144,6 +155,7 @@ class GitHubCopilotOAuthTest {
                 2,
                 requests.count { it.url.endsWith("/policy") },
             )
+            assertEquals(1, maxActivePolicyRequests)
             assertTrue(
                 requests
                     .filter { it.url.endsWith("/policy") }
@@ -153,6 +165,76 @@ class GitHubCopilotOAuthTest {
             assertEquals("GET", modelsRequest.method)
             assertEquals(5_000L, modelsRequest.timeoutMs)
             assertEquals("Bearer $token", modelsRequest.headers["Authorization"])
+        }
+
+    @Test
+    fun `retries models once after rate limiting and honors retry after`() =
+        runTest {
+            var currentTime = 0L
+            val sleeps = mutableListOf<Long>()
+            var modelsRequestCount = 0
+            val token = "tid=test;proxy-ep=proxy.individual.githubcopilot.com;exp=9999999999"
+            val transport =
+                OAuthHttpTransport { request ->
+                    when {
+                        request.url.endsWith("/login/device/code") ->
+                            OAuthHttpResponse(
+                                200,
+                                """
+                                {
+                                  "device_code":"device-code",
+                                  "user_code":"ABCD-EFGH",
+                                  "verification_uri":"https://github.com/login/device",
+                                  "interval":1,
+                                  "expires_in":900
+                                }
+                                """.trimIndent(),
+                            )
+
+                        request.url.endsWith("/login/oauth/access_token") ->
+                            OAuthHttpResponse(200, """{"access_token":"ghu-refresh"}""")
+
+                        request.url.endsWith("/copilot_internal/v2/token") ->
+                            OAuthHttpResponse(
+                                200,
+                                """{"token":"$token","expires_at":9999999999}""",
+                            )
+
+                        request.url.endsWith("/models") -> {
+                            modelsRequestCount++
+                            if (modelsRequestCount == 1) {
+                                OAuthHttpResponse(
+                                    429,
+                                    "too many requests",
+                                    headers = mapOf("Retry-After" to "1"),
+                                )
+                            } else {
+                                OAuthHttpResponse(
+                                    200,
+                                    """{"data":[{"id":"gpt-5.4","model_picker_enabled":true}]}""",
+                                )
+                            }
+                        }
+
+                        else -> error("Unexpected URL: ${request.url}")
+                    }
+                }
+            val oauth =
+                GitHubCopilotOAuth(
+                    transport = transport,
+                    now = { currentTime },
+                    sleep = { milliseconds ->
+                        sleeps += milliseconds
+                        currentTime += milliseconds
+                    },
+                    knownModelIds = emptyList(),
+                )
+
+            val credential = oauth.login(RecordingInteraction(""))
+
+            assertEquals(2, modelsRequestCount)
+            assertEquals(listOf(1_000L, 1_000L), sleeps)
+            assertEquals(listOf("gpt-5.4"), credential.availableModelIds)
         }
 
     @Test

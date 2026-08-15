@@ -50,6 +50,7 @@ internal data class OAuthHttpRequest(
 internal data class OAuthHttpResponse(
     val status: Int,
     val body: String,
+    val headers: Map<String, String> = emptyMap(),
 )
 
 internal fun interface OAuthHttpTransport {
@@ -81,7 +82,15 @@ internal class JavaOAuthHttpTransport(
                     httpRequest,
                     HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8),
                 )
-            OAuthHttpResponse(response.statusCode(), response.body())
+            OAuthHttpResponse(
+                status = response.statusCode(),
+                body = response.body(),
+                headers =
+                    response
+                        .headers()
+                        .map()
+                        .mapValues { (_, values) -> values.firstOrNull().orEmpty() },
+            )
         }
 }
 
