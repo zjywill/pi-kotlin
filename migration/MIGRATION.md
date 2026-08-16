@@ -14,7 +14,7 @@ The source commit is immutable for the first migration pass. Upstream changes
 land in a later synchronization pass so that parity failures have one cause.
 
 The latest reviewed synchronization pass reaches
-`086c32e74530564922d011ade23ff582c9d63116` (August 15, 2026). The original
+`d3ab2af969d64997338253c9151190aa1bc33580` (August 16, 2026). The original
 baseline remains recorded so regressions can be attributed either to the first
 translation or to a later upstream sync.
 
@@ -74,8 +74,8 @@ features outside that slice remain migration work.
 | --- | --- | --- |
 | Gradle multi-module build | Functional slice | Six JVM 21 modules; `clean test installDist` passes with warnings as errors |
 | Core AI messages and stream protocol | Functional slice | Message, event-stream, provider-native raw stop reason, image-generation result, UUIDv7, generic sampling parameters, tool validation, and faux-provider tests |
-| Model catalog | Functional slice | Hydrated schema-v3 manifest and 39 chat-provider files verify by SHA-256; all 1,269 static chat model records plus the credential-backed dynamic Radius catalog are exposed through 40 executable chat providers, including Baseten GLM-5.2/Kimi-K2.6 reasoning controls, 33 credential-filtered GitHub Copilot models, and Qwen Token Plan metadata; a separate immutable catalog exposes all 45 OpenRouter image models with an independent checksum |
-| Provider HTTP implementations | Functional slice | All 10 upstream chat API families plus `openrouter-images` have executable Kotlin paths. Coverage includes Google Generative AI, Google Vertex AI, Anthropic Messages plus Claude Pro/Max OAuth, OpenRouter Chat Completions and Images plus shared browser OAuth, xAI Chat Completions/Responses plus device OAuth, Kimi Coding Anthropic Messages plus device OAuth, Radius `pi-messages` plus discovered browser/device OAuth and dynamic models, OpenAI Chat Completions including Baseten `chat_template_args`, generic sampling-parameter last-write merging, and function-payload precedence over malformed empty `custom` objects, OpenAI Responses and Azure OpenAI Responses with the same sampling merge, Mistral Conversations, Amazon Bedrock ConverseStream, OpenAI Codex Responses SSE/WebSocket plus browser/device OAuth, GitHub Copilot device OAuth and Anthropic/OpenAI Chat/OpenAI Responses delegates, Cloudflare Workers AI, and Cloudflare AI Gateway with independent payload/event/auth/image parity |
+| Model catalog | Functional slice | Hydrated schema-v3 manifest and 39 chat-provider files verify by SHA-256; all 1,281 static chat model records plus the credential-backed dynamic Radius catalog are exposed through 40 executable chat providers, including xAI Grok 4.6/xhigh Responses metadata, Baseten GLM-5.2/Kimi-K2.6 reasoning controls, 33 credential-filtered GitHub Copilot models, and Qwen Token Plan metadata; a separate immutable catalog exposes all 45 OpenRouter image models with an independent checksum |
+| Provider HTTP implementations | Functional slice | All 10 upstream chat API families plus `openrouter-images` have executable Kotlin paths. Coverage includes Google Generative AI, Google Vertex AI, Anthropic Messages plus Claude Pro/Max OAuth, OpenRouter Chat Completions and Images plus shared browser OAuth, xAI Responses plus device OAuth, encrypted reasoning replay, and mandatory pi request identity, Kimi Coding Anthropic Messages plus device OAuth, Radius `pi-messages` plus discovered browser/device OAuth and dynamic models, OpenAI Chat Completions including Kimi top-level cache-read usage, Baseten `chat_template_args`, generic sampling-parameter last-write merging, and function-payload precedence over malformed empty `custom` objects, OpenAI Responses and Azure OpenAI Responses with the same sampling merge, Mistral Conversations, Amazon Bedrock ConverseStream, OpenAI Codex Responses SSE/WebSocket plus browser/device OAuth, GitHub Copilot device OAuth and Anthropic/OpenAI Chat/OpenAI Responses delegates, Cloudflare Workers AI, and Cloudflare AI Gateway with independent payload/event/auth/image parity |
 | Agent loop | Functional slice | Streaming, tool calls, parallel execution, steering, follow-up, abort, and session tests using the faux provider; coding-message projection has independent parity for bash/custom/branch/compaction messages |
 | CLI argument contract | Complete | Parser tests, byte-for-byte top-level/auth/package help, installed package/model-update error contracts, provider-prefixed and slash-containing model IDs, authenticated-provider ambiguity resolution, thinking suffixes, text/linear-JSON/RPC/print modes, session selection/forking, resource/tool flags, offline behavior, quiet/verbose startup, credential print, bounded interactive OAuth/API-key login/logout, and child-process agent markers are covered by independent CLI/package and RPC runtime oracles plus installed PTYs |
 | Context, skill, and prompt resources | Functional slice | Global and ancestor `AGENTS.md`/`CLAUDE.md`, nested linked-worktree context deduplication, `SYSTEM.md`/`APPEND_SYSTEM.md` content and source paths, recursive `.pi`/`.agents` skills, prompt templates, YAML frontmatter, collisions, manual skill commands, template arguments, trusted project precedence, persisted trust inheritance, CLI/RPC commands, startup Context display, and interactive reload have an independent resource-loading oracle |
@@ -93,17 +93,17 @@ features outside that slice remain migration work.
 
 ## Verification snapshot
 
-Verified on August 15, 2026 against source commit
-`086c32e74530564922d011ade23ff582c9d63116`:
+Verified on August 16, 2026 against source commit
+`d3ab2af969d64997338253c9151190aa1bc33580`:
 
-- `./gradlew clean test installDist --max-workers=1 --no-daemon`: passed, 580
+- `./gradlew clean test installDist --max-workers=1 --no-daemon`: passed, 584
   tests, 0 failures, 0 errors, and 0 skipped.
 - The source checkout passed `npm ci --ignore-scripts`, `npm run build:offline`,
-  and `./test.sh`: 221 test files passed with 6 skipped, covering 1,927
+  and `./test.sh`: 221 test files passed with 6 skipped, covering 1,928
   passing tests with 49 skipped; the tracked source worktree remained clean.
-- The hydrated schema-v3 catalog contains 39 provider files and 1,269 model
+- The hydrated schema-v3 catalog contains 39 provider files and 1,281 model
   records. Its manifest structure hash is
-  `cb7d0bd4a172d03605b6a03fa548921ea130cbafb452f126ae4c9ba673194859`.
+  `5afa7db49f850bf1636a16119baf08ec9b751398b1a6da6f04e438f95be85f3a`.
 - The immutable OpenRouter image catalog contains 45 models and its independent
   catalog hash is
   `dece50d8a3c27ec0ffe2ac81ef0ef12f88db00f00015d5bfec69b98f99dc9181`.
@@ -200,14 +200,16 @@ Verified on August 15, 2026 against source commit
   mouse-release handling, host-clipboard copy failure reporting, and
   collapsed/expanded extension-tool fallback output. GitHub Copilot policy
   updates are serialized during login, and a rate-limited model catalog request
-  honors `Retry-After` and retries once.
+  honors `Retry-After` and retries once. All built-in xAI models route through
+  Responses with Grok 4.6 as the default, and Kimi top-level `cached_tokens`
+  contributes to cache-read usage.
 - `./migration/oracle/compare-tool-fallback.sh`: passed with normalized
   collapsed and expanded fallback rendering, configured expansion binding,
   remaining-line counts, and transcript persistence.
 - All 32 deterministic migration oracles passed against the same source
   commit.
 - `./migration/audit-migration.sh sync` and
-  `./migration/audit-migration.sh full` both passed through `086c32e74`.
+  `./migration/audit-migration.sh full` both passed through `d3ab2af96`.
 - Installed `pi --export` output was byte-identical to upstream with SHA-256
   `3613ceef433cc31040a5413427db35c4fd5b1d480aab0988b1613f634809bcb6`.
 - A Playwright browser smoke rendered the Markdown heading, two highlighted
@@ -274,8 +276,9 @@ Verified on August 15, 2026 against source commit
 - `./migration/oracle/compare-xai-oauth.sh`: passed with independent device
   authorization, wait-before-first-poll, pending and server-directed slow-down
   timing, five-minute expiry skew, refresh-token preservation, default
-  one-hour lifetime, request-auth derivation, and real local Chat Completions
-  and Responses SSE requests consuming the stored OAuth credential.
+  one-hour lifetime, request-auth derivation, and real local Grok 4.3/Grok 4.6
+  Responses requests covering low/xhigh effort, encrypted reasoning, and the
+  mandatory pi User-Agent while consuming the stored OAuth credential.
 - `./migration/oracle/compare-provider-payloads.sh`: passed with exact normalized
   JSON parity for OpenAI Chat Completions, OpenAI Responses, Azure OpenAI
   Responses, Anthropic Messages, Google Generative AI, Google Vertex AI,

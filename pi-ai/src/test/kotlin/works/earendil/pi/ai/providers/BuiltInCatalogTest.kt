@@ -7,6 +7,7 @@ import java.time.Instant
 import java.util.Collections
 import kotlinx.coroutines.test.runTest
 import works.earendil.pi.ai.Context
+import works.earendil.pi.ai.ModelThinkingLevel
 import works.earendil.pi.ai.StreamOptions
 import works.earendil.pi.ai.TextContent
 import works.earendil.pi.ai.UserMessage
@@ -35,15 +36,19 @@ class BuiltInCatalogTest {
         val qwenDeepSeek = qwenTokenPlan.single { it.id == "deepseek-v4-flash" }
         val qwen38 = qwenTokenPlan.single { it.id == "qwen3.8-max" }
         val qwenUnsupported = qwenTokenPlan.single { it.id == "qwen3.7-plus" }
+        val xai = catalog.modelsByProvider.getValue("xai")
+        val grok43 = xai.single { it.id == "grok-4.3" }
+        val grok46 = xai.single { it.id == "grok-4.6" }
+        val grokBuild = xai.single { it.id == "grok-build-0.1" }
 
         assertEquals(3, catalog.schemaVersion)
         Instant.parse(assertNotNull(catalog.generatedAt))
         assertEquals(
-            "cb7d0bd4a172d03605b6a03fa548921ea130cbafb452f126ae4c9ba673194859",
+            "5afa7db49f850bf1636a16119baf08ec9b751398b1a6da6f04e438f95be85f3a",
             catalog.structureHash,
         )
         assertEquals(39, catalog.modelsByProvider.size)
-        assertEquals(1_269, catalog.modelsByProvider.values.sumOf(List<works.earendil.pi.ai.Model>::size))
+        assertEquals(1_281, catalog.modelsByProvider.values.sumOf(List<works.earendil.pi.ai.Model>::size))
         assertEquals("openai-responses", sol.api)
         assertEquals(272_000, sol.contextWindow)
         assertEquals(128_000, sol.maxTokens)
@@ -113,6 +118,13 @@ class BuiltInCatalogTest {
                 ?: false,
         )
         assertTrue(qwenUnsupported.thinkingLevelMap.isEmpty())
+        assertTrue(xai.all { it.api == "openai-responses" })
+        assertEquals("none", grok43.thinkingLevelMap[ModelThinkingLevel.OFF])
+        assertEquals(null, grok43.thinkingLevelMap[ModelThinkingLevel.MINIMAL])
+        assertEquals("xhigh", grok46.thinkingLevelMap[ModelThinkingLevel.XHIGH])
+        assertEquals(null, grok46.thinkingLevelMap[ModelThinkingLevel.OFF])
+        assertEquals(null, grokBuild.thinkingLevelMap[ModelThinkingLevel.OFF])
+        assertEquals(null, grokBuild.thinkingLevelMap[ModelThinkingLevel.MINIMAL])
         assertTrue(catalog.unsupportedApis.isEmpty())
     }
 
@@ -122,7 +134,7 @@ class BuiltInCatalogTest {
         val ids = providers.map { it.id }.toSet()
 
         assertEquals(40, providers.size)
-        assertEquals(1_269, providers.sumOf { it.getModels().size })
+        assertEquals(1_281, providers.sumOf { it.getModels().size })
         assertTrue(
             ids.containsAll(
                 setOf(
@@ -151,8 +163,8 @@ class BuiltInCatalogTest {
         assertEquals(
             mapOf(
                 "anthropic-messages" to 10,
-                "openai-completions" to 9,
-                "openai-responses" to 14,
+                "openai-completions" to 8,
+                "openai-responses" to 15,
             ),
             copilot.getModels().groupingBy { it.api }.eachCount(),
         )
@@ -168,13 +180,13 @@ class BuiltInCatalogTest {
         assertEquals(57, cloudflareGateway.getModels().size)
         val cloudflareWorkers = providers.single { it.id == "cloudflare-workers-ai" }
         assertEquals("Cloudflare Workers AI", cloudflareWorkers.name)
-        assertEquals(13, cloudflareWorkers.getModels().size)
+        assertEquals(15, cloudflareWorkers.getModels().size)
         val vertex = providers.single { it.id == "google-vertex" }
         assertEquals("Google Vertex AI", vertex.name)
         assertEquals(13, vertex.getModels().size)
         val bedrock = providers.single { it.id == "amazon-bedrock" }
         assertEquals("Amazon Bedrock", bedrock.name)
-        assertEquals(114, bedrock.getModels().size)
+        assertEquals(117, bedrock.getModels().size)
         assertNotNull(bedrock.getModels().singleOrNull { it.id == "global.anthropic.claude-opus-5" })
         assertFalse(bedrock.getModels().any { it.id == "anthropic.claude-opus-5" })
         val codex = providers.single { it.id == "openai-codex" }
@@ -197,12 +209,11 @@ class BuiltInCatalogTest {
     }
 
     @Test
-    fun `multi protocol providers retain every supported model without duplicate ids`() {
+    fun `catalog providers retain every supported model without duplicate ids`() {
         val xai = builtInProviders().single { it.id == "xai" }
         val opencode = builtInProviders().single { it.id == "opencode" }
 
-        assertTrue(xai.getModels().any { it.api == "openai-completions" })
-        assertTrue(xai.getModels().any { it.api == "openai-responses" })
+        assertTrue(xai.getModels().all { it.api == "openai-responses" })
         assertTrue(opencode.getModels().any { it.api == "anthropic-messages" })
         assertTrue(opencode.getModels().any { it.api == "google-generative-ai" })
         assertTrue(opencode.getModels().any { it.api == "openai-completions" })
@@ -224,7 +235,7 @@ class BuiltInCatalogTest {
         }
 
     @Test
-    fun `multi protocol provider dispatches each model to its catalog api`() =
+    fun `xai provider dispatches every built-in model to responses`() =
         runTest {
             val paths = Collections.synchronizedList(mutableListOf<String>())
             val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
@@ -232,23 +243,14 @@ class BuiltInCatalogTest {
                 paths += exchange.requestURI.path
                 exchange.requestBody.readAllBytes()
                 val response =
-                    if (exchange.requestURI.path.endsWith("/chat/completions")) {
-                        """
-                        data: {"choices":[{"delta":{"content":"chat"},"finish_reason":"stop"}]}
+                    """
+                    data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg-1","content":[]}}
 
-                        data: [DONE]
+                    data: {"type":"response.output_text.delta","output_index":0,"delta":"responses"}
 
-                        """.trimIndent()
-                    } else {
-                        """
-                        data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg-1","content":[]}}
+                    data: {"type":"response.completed","response":{"id":"resp-1","status":"completed","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"output":[]}}
 
-                        data: {"type":"response.output_text.delta","output_index":0,"delta":"responses"}
-
-                        data: {"type":"response.completed","response":{"id":"resp-1","status":"completed","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"output":[]}}
-
-                        """.trimIndent()
-                    }
+                    """.trimIndent()
                 val bytes = response.toByteArray(StandardCharsets.UTF_8)
                 exchange.responseHeaders.add("content-type", "text/event-stream")
                 exchange.sendResponseHeaders(200, bytes.size.toLong())
@@ -258,25 +260,25 @@ class BuiltInCatalogTest {
             try {
                 val provider = builtInProviders().single { it.id == "xai" }
                 val baseUrl = "http://127.0.0.1:${server.address.port}"
-                val chatModel = provider.getModels().single { it.id == "grok-4.3" }.copy(baseUrl = baseUrl)
-                val responsesModel = provider.getModels().single { it.id == "grok-4.5" }.copy(baseUrl = baseUrl)
+                val grok43 = provider.getModels().single { it.id == "grok-4.3" }.copy(baseUrl = baseUrl)
+                val grok46 = provider.getModels().single { it.id == "grok-4.6" }.copy(baseUrl = baseUrl)
 
-                val chat =
+                val first =
                     provider.stream(
-                        chatModel,
+                        grok43,
                         Context(messages = mutableListOf(UserMessage("hello"))),
                         StreamOptions(apiKey = "test"),
                     ).result()
-                val responses =
+                val second =
                     provider.stream(
-                        responsesModel,
+                        grok46,
                         Context(messages = mutableListOf(UserMessage("hello"))),
                         StreamOptions(apiKey = "test"),
                     ).result()
 
-                assertEquals("chat", (chat.content.single() as TextContent).text)
-                assertEquals("responses", (responses.content.single() as TextContent).text)
-                assertEquals(listOf("/chat/completions", "/responses"), paths)
+                assertEquals("responses", (first.content.single() as TextContent).text)
+                assertEquals("responses", (second.content.single() as TextContent).text)
+                assertEquals(listOf("/responses", "/responses"), paths)
             } finally {
                 server.stop(0)
             }

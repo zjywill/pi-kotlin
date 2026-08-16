@@ -28,7 +28,7 @@ private val DEFAULT_MODEL_IDS =
         "radius" to "auto",
         "together" to "moonshotai/Kimi-K2.6",
         "vercel-ai-gateway" to "zai/glm-5.1",
-        "xai" to "grok-4.5",
+        "xai" to "grok-4.6",
         "xiaomi" to "mimo-v2.5-pro",
         "xiaomi-token-plan-ams" to "mimo-v2.5-pro",
         "xiaomi-token-plan-cn" to "mimo-v2.5-pro",

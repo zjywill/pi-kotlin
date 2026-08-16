@@ -151,14 +151,18 @@ class OpenAIResponsesProvider(
                 request.url,
                 request.encodeBody?.invoke(bodyJson)
                     ?: bodyJson.toByteArray(StandardCharsets.UTF_8),
-                if (request.headersAreFinal) {
-                    request.headers
-                } else {
-                    mergedHeaders(
-                        request.headers,
-                        model.headers,
-                        options.headers,
-                    )
+                run {
+                    val headers =
+                        if (request.headersAreFinal) {
+                            request.headers
+                        } else {
+                            mergedHeaders(
+                                request.headers,
+                                model.headers,
+                                options.headers,
+                            )
+                        }
+                    if (model.provider == "xai") forcePiUserAgent(headers) else headers
                 },
                 options.timeoutMs,
                 options.maxRetries,

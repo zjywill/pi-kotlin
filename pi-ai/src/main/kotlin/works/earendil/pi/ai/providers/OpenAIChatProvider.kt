@@ -118,16 +118,20 @@ class OpenAIChatProvider(
             url = "${model.baseUrl.trimEnd('/')}/chat/completions",
             body = providerJson.encodeToString(JsonObject.serializer(), body),
             headers =
-                mergedHeaders(
-                    openAIChatBaseHeaders(model, options, apiKey) +
-                        if (model.provider == "github-copilot") {
-                            githubCopilotDynamicHeaders(context)
-                        } else {
-                            emptyMap()
-                        },
-                    model.headers,
-                    options.headers,
-                ),
+                run {
+                    val headers =
+                        mergedHeaders(
+                            openAIChatBaseHeaders(model, options, apiKey) +
+                                if (model.provider == "github-copilot") {
+                                    githubCopilotDynamicHeaders(context)
+                                } else {
+                                    emptyMap()
+                                },
+                            model.headers,
+                            options.headers,
+                        )
+                    if (model.provider == "xai") forcePiUserAgent(headers) else headers
+                },
             timeoutMs = options.timeoutMs,
             maxRetries = options.maxRetries,
             maxRetryDelayMs = options.maxRetryDelayMs,
@@ -143,6 +147,7 @@ class OpenAIChatProvider(
                 val cacheRead =
                     promptDetails?.int("cached_tokens")
                         ?: rawUsage.int("prompt_cache_hit_tokens")
+                        ?: rawUsage.int("cached_tokens")
                         ?: 0
                 val cacheWrite = promptDetails?.int("cache_write_tokens") ?: 0
                 usage =

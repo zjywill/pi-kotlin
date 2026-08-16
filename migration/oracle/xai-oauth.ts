@@ -129,9 +129,8 @@ const fixture = createServer(async (request, response) => {
 		headers: request.headers,
 		body: JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>,
 	});
-	const sse = request.url?.endsWith("/chat/completions") ? chatSse() : responsesSse();
 	response.writeHead(200, { "content-type": "text/event-stream" });
-	response.end(sse);
+	response.end(responsesSse());
 });
 
 try {
@@ -144,12 +143,12 @@ try {
 	const models = createModels({ credentials });
 	const provider = xaiProvider();
 	models.setProvider(provider);
-	const chatModel = {
+	const grok43Model = {
 		...requiredModel(provider.getModels(), "grok-4.3"),
 		baseUrl,
 	};
-	const responsesModel = {
-		...requiredModel(provider.getModels(), "grok-4.5"),
+	const grok46Model = {
+		...requiredModel(provider.getModels(), "grok-4.6"),
 		baseUrl,
 	};
 	const context = {
@@ -167,8 +166,11 @@ try {
 		maxRetries: 0,
 		maxTokens: 64,
 	};
-	const chatResult = await models.complete(chatModel, context, streamOptions);
-	const responsesResult = await models.complete(responsesModel, context, streamOptions);
+	const providerModels = [grok43Model, grok46Model];
+	const results = [
+		await models.complete(grok43Model, context, { ...streamOptions, reasoningEffort: "low" }),
+		await models.complete(grok46Model, context, { ...streamOptions, reasoningEffort: "xhigh" }),
+	];
 	const deviceRequest = oauthRequests.find((request) => request.url.endsWith("/device/code"));
 	const pollRequests = oauthRequests.filter(
 		(request) => form(request.body).grant_type === "urn:ietf:params:oauth:grant-type:device_code",
@@ -202,11 +204,12 @@ try {
 					auth,
 				},
 				provider: providerRequests.map((request, index) => ({
-					api: index === 0 ? "openai-completions" : "openai-responses",
+					api: providerModels[index].api,
 					path: request.path,
 					authorization: request.headers.authorization,
+					userAgent: request.headers["user-agent"],
 					body: request.body,
-					result: resultProjection(index === 0 ? chatResult : responsesResult),
+					result: resultProjection(results[index]),
 				})),
 			},
 			null,
@@ -255,17 +258,6 @@ function resultProjection(message: any): Record<string, unknown> {
 			.join(""),
 		toolName: content.find((block: any) => block.type === "toolCall")?.name,
 	};
-}
-
-function chatSse(): string {
-	return [
-		'data: {"choices":[{"delta":{"content":"hello "}}]}',
-		'data: {"choices":[{"delta":{"content":"world"}}]}',
-		'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"echo","arguments":"{\\"value\\":\\"ok\\"}"}}]},"finish_reason":"tool_calls"}]}',
-		'data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":4,"prompt_tokens_details":{"cached_tokens":2}}}',
-		"data: [DONE]",
-		"",
-	].join("\n\n");
 }
 
 function responsesSse(): string {

@@ -5,7 +5,7 @@ Kotlin/JVM migration of the [Pi Agent Harness](https://github.com/earendil-works
 The first migration pass is pinned to upstream commit
 `9b3a2059171bcc74ad9d2cadeea6d186776cf2db` (July 22, 2026), and the reviewed
 incremental sync currently reaches
-`b1efcf7d7c5d7394fbb12ede0174e04d39ee7004` (August 14, 2026). The target is
+`d3ab2af969d64997338253c9151190aa1bc33580` (August 16, 2026). The target is
 behavioral compatibility at the CLI, session, provider, agent-loop, tool, and
 terminal boundaries. JVM-native implementations replace Node/Bun-specific
 packaging and process internals.

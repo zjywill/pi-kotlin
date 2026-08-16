@@ -520,3 +520,5 @@ d10c974b940d7ce3c8439fcdf02d140f3a206458	not-applicable	Changelog audit only
 e429d90b800f9a37c8a5812f4c9c10a8cdcc85a7	ported	Z.AI Coding Plan defaults resolve glm-5.3 from the refreshed generated catalog
 d5278eaac3446a65e41d5f1392b2c79571858393	ported	GitHub Copilot model policy updates are sent sequentially to avoid login-time rate limiting
 086c32e74530564922d011ade23ff582c9d63116	ported	GitHub Copilot GET /models honors Retry-After and retries once after a 429
+70e878d4cf8f643067c8fc73ea27b74133dca0ab	ported	xAI built-in models use Responses with encrypted reasoning, pi request identity, Grok 4.6 defaults, and catalog-derived effort levels
+d3ab2af969d64997338253c9151190aa1bc33580	ported	OpenAI-compatible usage reads Kimi top-level cached_tokens as cache-read tokens

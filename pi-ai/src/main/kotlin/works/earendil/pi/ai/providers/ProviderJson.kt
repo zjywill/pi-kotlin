@@ -97,6 +97,10 @@ internal fun withPiUserAgentForKimi(
     headers: Map<String, String>,
 ): Map<String, String> {
     if (model.provider != "kimi-coding") return headers
+    return forcePiUserAgent(headers)
+}
+
+internal fun forcePiUserAgent(headers: Map<String, String>): Map<String, String> {
     val result =
         headers
             .filterKeys { !it.equals("user-agent", ignoreCase = true) }

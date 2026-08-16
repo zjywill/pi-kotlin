@@ -99,6 +99,53 @@ class ProviderFixtureTest {
         }
 
     @Test
+    fun `openai chat provider reads Kimi top-level cached tokens`() =
+        runTest {
+            val fixture =
+                fixtureServer(
+                    """
+                    data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}
+
+                    data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":4,"cached_tokens":2}}
+
+                    data: [DONE]
+
+                    """.trimIndent(),
+                )
+            try {
+                val model =
+                    model(
+                        id = "kimi-fixture",
+                        api = "openai-completions",
+                        provider = "moonshotai",
+                        baseUrl = fixture.baseUrl,
+                    )
+                val provider =
+                    OpenAIChatProvider(
+                        "moonshotai",
+                        "Moonshot AI",
+                        fixture.baseUrl,
+                        listOf(model),
+                        listOf("UNUSED"),
+                    )
+
+                val result =
+                    provider.stream(
+                        model,
+                        Context(messages = mutableListOf(UserMessage("hi"))),
+                        StreamOptions(apiKey = "test"),
+                    ).result()
+
+                assertEquals(8, result.usage.input)
+                assertEquals(2, result.usage.cacheRead)
+                assertEquals(4, result.usage.output)
+                assertEquals(14, result.usage.totalTokens)
+            } finally {
+                fixture.close()
+            }
+        }
+
+    @Test
     fun `openai chat provider rejects streams without a finish reason`() =
         runTest {
             val fixture =

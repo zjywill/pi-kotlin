@@ -1,11 +1,11 @@
 # Migration TODO
 
-Last reviewed: August 15, 2026
+Last reviewed: August 16, 2026
 
 ## Completion gate
 
 - Source repository: `/Users/junyizhang/Git/pi`
-- Reviewed source commit: `086c32e74530564922d011ade23ff582c9d63116`
+- Reviewed source commit: `d3ab2af969d64997338253c9151190aa1bc33580`
 - Target repository: `/Users/junyizhang/Git/pi-kotlin`
 - The migration is complete only when:
 
@@ -209,6 +209,15 @@ The Kotlin OAuth transport now preserves response headers for this provider
 contract, with focused tests for serialized policy requests and bounded retry
 waiting.
 
+The August 16 synchronization pass advances the reviewed source through
+`d3ab2af96`. It routes all built-in xAI models through Responses, selects
+Grok 4.6 by default, preserves catalog-derived reasoning levels including
+`xhigh`, rejects unsupported off/minimal efforts, requests encrypted reasoning,
+and forces pi's runtime User-Agent. OpenAI-compatible usage parsing also maps
+Kimi's top-level `cached_tokens` field to cache-read usage. The hydrated catalog
+now contains 1,281 static models, and all 523 audited source commits are
+classified.
+
 ## Completion checklist
 
 ### 1. Upstream synchronization
@@ -338,32 +347,32 @@ waiting.
 
 ## Follow-up
 
-No migration gaps remain against source commit `086c32e74`. Future work starts
+No migration gaps remain against source commit `d3ab2af96`. Future work starts
 only when the TypeScript source advances and a new synchronization range is
 recorded.
 
-Evidence for the latest August 15 upstream synchronization:
+Evidence for the latest August 16 upstream synchronization:
 
-- [x] Source fast-forwarded from `b1efcf7d7` through `086c32e74` with a clean
+- [x] Source fast-forwarded from `086c32e74` through `d3ab2af96` with a clean
       tracked TypeScript worktree; `git pull --ff-only` completed successfully
 - [x] Every commit in the synchronization range is classified in
       `migration/upstream-sync.tsv`
-- [x] Hydrated schema-v3 catalog contains 39 provider files and 1,269 model
+- [x] Hydrated schema-v3 catalog contains 39 provider files and 1,281 model
       records with manifest structure hash
-      `cb7d0bd4a172d03605b6a03fa548921ea130cbafb452f126ae4c9ba673194859`
+      `5afa7db49f850bf1636a16119baf08ec9b751398b1a6da6f04e438f95be85f3a`
 - [x] OpenRouter image catalog contains 45 models with independent catalog
       hash `dece50d8a3c27ec0ffe2ac81ef0ef12f88db00f00015d5bfec69b98f99dc9181`
-- [x] `./gradlew clean test installDist --max-workers=1 --no-daemon` with 580
+- [x] `./gradlew clean test installDist --max-workers=1 --no-daemon` with 584
       tests and no failures, errors, or skips
-- [x] Source `./test.sh` with 221 passing test files, 6 skipped, 1,927 passing
+- [x] Source `./test.sh` with 221 passing test files, 6 skipped, 1,928 passing
       tests, and 49 skipped tests
-- [x] All 32 deterministic migration oracles against `086c32e74`
+- [x] All 32 deterministic migration oracles against `d3ab2af96`
 - [x] Installed TypeScript/Kotlin TUI matrix at 40, 80, and 120 columns in
       regular and fullscreen modes
 - [x] Installed `pi` version/help; `pi-server` Unix socket integration tests and
       installed `pi --mode rpc` spawn/status/state/stop/empty-list smoke passed
 - [x] `./migration/audit-migration.sh sync` and
-      `./migration/audit-migration.sh full` through `086c32e74`
+      `./migration/audit-migration.sh full` through `d3ab2af96`
 - [x] Kotlin API-key input remains masked and stable during concurrent renders;
       the pinned TypeScript clear-text secret-prompt regression is documented
 - [x] Zero unchecked migration TODOs, incomplete inventory rows, port markers,

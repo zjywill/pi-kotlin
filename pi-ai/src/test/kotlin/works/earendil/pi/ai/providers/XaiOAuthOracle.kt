@@ -126,15 +126,15 @@ fun main() =
         try {
             val provider = builtInProviders().single { it.id == "xai" }
             val baseUrl = "http://127.0.0.1:${fixture.address.port}"
-            val chatModel =
+            val grok43Model =
                 provider
                     .getModels()
                     .single { it.id == "grok-4.3" }
                     .copy(baseUrl = baseUrl)
-            val responsesModel =
+            val grok46Model =
                 provider
                     .getModels()
-                    .single { it.id == "grok-4.5" }
+                    .single { it.id == "grok-4.6" }
                     .copy(baseUrl = baseUrl)
             val models =
                 Models(
@@ -161,8 +161,12 @@ fun main() =
                     maxRetries = 0,
                     maxTokens = 64,
                 )
-            val chatResult = models.complete(chatModel, context, options)
-            val responsesResult = models.complete(responsesModel, context, options)
+            val providerModels = listOf(grok43Model, grok46Model)
+            val results =
+                listOf(
+                    models.complete(grok43Model, context, options.copy(reasoningEffort = "low")),
+                    models.complete(grok46Model, context, options.copy(reasoningEffort = "xhigh")),
+                )
             val deviceRequest = oauthRequests.first { it.url.endsWith("/device/code") }
             val pollRequests =
                 oauthRequests.filter {
@@ -173,7 +177,6 @@ fun main() =
                 oauthRequests.first {
                     parseOracleForm(it.body)["grant_type"] == "refresh_token"
                 }
-            val results = listOf(chatResult, responsesResult)
             val output =
                 buildJsonObject {
                     put(
@@ -219,17 +222,13 @@ fun main() =
                             providerRequests.forEachIndexed { index, request ->
                                 add(
                                     buildJsonObject {
-                                        put(
-                                            "api",
-                                            if (index == 0) {
-                                                "openai-completions"
-                                            } else {
-                                                "openai-responses"
-                                            },
-                                        )
+                                        put("api", providerModels[index].api)
                                         put("path", request.path)
                                         request.headers["authorization"]?.let {
                                             put("authorization", it)
+                                        }
+                                        request.headers["user-agent"]?.let {
+                                            put("userAgent", it)
                                         }
                                         put("body", request.body)
                                         put("result", resultProjection(results[index]))
@@ -268,12 +267,7 @@ private fun startXaiProviderFixture(requests: MutableList<XaiProviderRequest>): 
                     },
                 body = body,
             )
-        val response =
-            if (exchange.requestURI.path.endsWith("/chat/completions")) {
-                chatSse()
-            } else {
-                responsesSse()
-            }
+        val response = responsesSse()
         val bytes = response.toByteArray(StandardCharsets.UTF_8)
         exchange.responseHeaders.add("content-type", "text/event-stream")
         exchange.sendResponseHeaders(200, bytes.size.toLong())
@@ -360,16 +354,6 @@ private fun parseOracleForm(value: String): Map<String, String> =
 
 private fun decode(value: String): String =
     URLDecoder.decode(value, StandardCharsets.UTF_8)
-
-private fun chatSse(): String =
-    listOf(
-        """data: {"choices":[{"delta":{"content":"hello "}}]}""",
-        """data: {"choices":[{"delta":{"content":"world"}}]}""",
-        """data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"echo","arguments":"{\"value\":\"ok\"}"}}]},"finish_reason":"tool_calls"}]}""",
-        """data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":4,"prompt_tokens_details":{"cached_tokens":2}}}""",
-        "data: [DONE]",
-        "",
-    ).joinToString("\n\n")
 
 private fun responsesSse(): String =
     listOf(

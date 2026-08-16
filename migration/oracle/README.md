@@ -73,8 +73,10 @@ missing-key errors, stored OAuth consumption, and explicit API-key precedence.
 
 The xAI OAuth comparison covers device authorization, wait-before-first-poll,
 pending and server-directed slow-down timing, refresh-token preservation,
-default token lifetime, request-auth derivation, and real local Chat
-Completions and Responses SSE requests using the stored OAuth credential.
+default token lifetime, request-auth derivation, and real local Grok 4.3/Grok
+4.6 Responses requests using the stored OAuth credential. It also compares
+low/xhigh reasoning effort, encrypted reasoning inclusion, and the mandatory
+pi User-Agent.
 
 The Kimi Code OAuth comparison covers device authorization,
 wait-before-first-poll, pending and server-directed slow-down timing,
